@@ -1,5 +1,4 @@
 package dji.sampleV5.aircraft.pages
-import android.util.DisplayMetrics
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -400,6 +399,18 @@ class VirtualStickFragment : DJIFragment() {
                         mainHandler.post { ToastUtils.showToast("End mission requested") }
                         "Mission stop requested"
                     }
+                    "/send/setRTHAltitude" -> {
+                        val altitude = postData.toIntOrNull()
+                        if (altitude != null) {
+                            DroneController.setRTHAltitude(altitude)
+                            mainHandler.post {
+                                ToastUtils.showToast("Setting RTH altitude to $altitude m")
+                            }
+                            "RTH altitude set to $altitude m"
+                        } else {
+                            "Invalid altitude value"
+                        }
+                    }
                     else -> "Not Found"
                 }
             } catch (e: Exception) {
@@ -445,6 +456,13 @@ class VirtualStickFragment : DJIFragment() {
                     "/aircraft/lowBatteryRTHInfo/remainingFlightTime" -> getLowBatteryRTHInfo().remainingFlightTime.toString()
                     "/aircraft/lowBatteryRTHInfo/timeNeededToGoHome" -> getLowBatteryRTHInfo().timeNeededToGoHome.toString()
                     "/aircraft/lowBatteryRTHInfo/maxRadiusCanFlyAndGoHome" -> getLowBatteryRTHInfo().maxRadiusCanFlyAndGoHome.toString()
+                    "/aircraft/distanceToHome" -> {
+                        val current = getLocation3D()
+                        val home = getLocationHome()
+                        val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
+                        distance.toString()
+                    }
+                    "/status/homeSet" -> isHomeSet().toString()
                     else -> "Not Found"
                 }
             } catch (e: Exception) {
@@ -476,6 +494,21 @@ class VirtualStickFragment : DJIFragment() {
 
         // Add battery level TextView
         addBatteryLevelDisplay()
+
+        // Add low battery RTH info TextViews
+        addLowBatteryRTHInfoDisplay()
+
+        // Update distance to home display
+        updateDistanceToHomeDisplay()
+
+        // Set up a periodic update for distance to home
+        val distanceUpdateRunnable = object : Runnable {
+            override fun run() {
+                updateDistanceToHomeDisplay()
+                mainHandler.postDelayed(this, 1000) // Update every second
+            }
+        }
+        mainHandler.post(distanceUpdateRunnable)
 
         initBtnClickListener()
         setupAndStartRtspStream()
@@ -808,12 +841,76 @@ class VirtualStickFragment : DJIFragment() {
                 mainHandler.post {
                     batteryLevelTextView.text = "Battery Level: $currentBatteryLevel%"
                 }
-                mainHandler.postDelayed(this, 5000) // Update every 5 seconds
+                mainHandler.postDelayed(this, 1000) // Update every 5 seconds
             }
         }
 
         // Start the periodic updates
         mainHandler.post(batteryUpdateRunnable)
+    }
+
+    private fun addLowBatteryRTHInfoDisplay() {
+        // Set up a periodic update for low battery RTH info
+        val lowBatteryRTHInfoUpdateRunnable = object : Runnable {
+            override fun run() {
+                updateLowBatteryRTHInfoDisplay()
+                mainHandler.postDelayed(this, 1000) // Update every 5 seconds
+            }
+        }
+
+        // Start the periodic updates
+        mainHandler.post(lowBatteryRTHInfoUpdateRunnable)
+    }
+
+    private fun updateLowBatteryRTHInfoDisplay() {
+        val lowBatteryRTHInfo = getLowBatteryRTHInfo()
+
+        mainHandler.post {
+            binding?.remainingFlightTimeTv?.text =
+                "Remaining Flight Time: ${lowBatteryRTHInfo.remainingFlightTime} min"
+            binding?.timeNeededToGoHomeTv?.text =
+                "Time Needed to Go Home: ${lowBatteryRTHInfo.timeNeededToGoHome} min"
+        }
+    }
+
+    private fun addDistanceToHomeDisplay() {
+        // Create a TextView programmatically
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+
+        val distanceToHomeTextView = TextView(requireContext()).apply {
+            id = View.generateViewId()
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(16, 16, 16, 16)  // Position on the left side
+        }
+
+        // Add the TextView to the fragment's view
+        binding?.root?.addView(distanceToHomeTextView)
+
+        // Update the distance to home initially
+        updateDistanceToHomeDisplay()
+
+        // Set up a periodic update for distance to home
+        val distanceUpdateRunnable = object : Runnable {
+            override fun run() {
+                updateDistanceToHomeDisplay()
+                mainHandler.postDelayed(this, 1000) // Update every second
+            }
+        }
+
+        // Start the periodic updates
+        mainHandler.post(distanceUpdateRunnable)
+    }
+
+    private fun updateDistanceToHomeDisplay() {
+        val current = getLocation3D()
+        val home = getLocationHome()
+        val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
+
+        mainHandler.post {
+            binding?.distanceToHomeTv?.text = "Distance to Home: ${String.format("%.2f", distance)} m"
+        }
     }
 
     private fun initCameraStream() {
@@ -870,4 +967,10 @@ class VirtualStickFragment : DJIFragment() {
         httpServer?.stop()
         stopCameraStream()
     }
+
+    private fun isHomeSet(): Boolean {
+        val home = getLocationHome()
+        return home.latitude != 0.0 && home.longitude != 0.0
+    }
 }
+
