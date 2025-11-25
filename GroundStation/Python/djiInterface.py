@@ -423,7 +423,7 @@ if __name__ == '__main__':
     import time
     import sys
     
-    IP_RC = "192.168.50.27"  # REPLACE WITH YOUR RC IP
+    IP_RC = "10.102.252.30"  # REPLACE WITH YOUR RC IP
     
     if len(sys.argv) > 1:
         IP_RC = sys.argv[1]
@@ -466,6 +466,8 @@ if __name__ == '__main__':
                 print(f"  Yaw Reached: {dji.isYawReached()}")
                 print(f"  Alt Reached: {dji.isAltitudeReached()}")
                 print(f"  Flight Time: {dji.getRemainingFlightTime()} min remaining")
+                print(f"  Time to RTH: {dji.getTimeNeededToGoHome()} min")
+                print(f"  Max Radius:  {dji.getMaxRadiusCanFlyAndGoHome()} m")
             else:
                 print("Waiting for telemetry data...")
             
