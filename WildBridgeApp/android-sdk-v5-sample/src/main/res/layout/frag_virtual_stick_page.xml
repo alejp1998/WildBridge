@@ -142,6 +142,42 @@
     </TextView>
 
     <TextView
+        android:id="@+id/remaining_flight_time_tv"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Remaining Flight Time: --"
+        android:textSize="14sp"
+        android:textColor="@color/green"
+        android:layout_marginTop="8dp"
+        app:layout_constraintStart_toEndOf="@id/stick_button_list"
+        app:layout_constraintTop_toBottomOf="@id/device_ip_tv">
+    </TextView>
+
+    <TextView
+        android:id="@+id/time_needed_to_go_home_tv"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Time Needed to Go Home: --"
+        android:textSize="14sp"
+        android:textColor="@color/green"
+        android:layout_marginTop="8dp"
+        app:layout_constraintStart_toEndOf="@id/stick_button_list"
+        app:layout_constraintTop_toBottomOf="@id/remaining_flight_time_tv">
+    </TextView>
+
+    <TextView
+        android:id="@+id/distance_to_home_tv"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Distance to Home: --"
+        android:textSize="14sp"
+        android:textColor="@color/green"
+        android:layout_marginTop="8dp"
+        app:layout_constraintStart_toEndOf="@id/stick_button_list"
+        app:layout_constraintTop_toBottomOf="@id/time_needed_to_go_home_tv">
+    </TextView>
+
+    <TextView
         android:id="@+id/simulator_state_info_tv"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

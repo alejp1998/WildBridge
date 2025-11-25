@@ -23,12 +23,14 @@ import dji.sampleV5.aircraft.utils.wpml.WaypointInfoModel
 import dji.v5.manager.aircraft.waypoint3.WaypointMissionManager
 import dji.v5.utils.common.ContextUtil
 import dji.sdk.wpmz.value.mission.*
+import dji.v5.et.set
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+
 
 object DroneController {
 
@@ -839,5 +841,10 @@ object DroneController {
         return isIntermediaryWaypointReached
     }
 
+    private val goHomeHeightKey: DJIKey<Int> = FlightControllerKey.KeyGoHomeHeight.create()
 
+    fun setRTHAltitude(altitude: Int) {
+        goHomeHeightKey.set(altitude)
+        ToastUtils.showToast("RTH altitude set to $altitude m")
+    }
 }
