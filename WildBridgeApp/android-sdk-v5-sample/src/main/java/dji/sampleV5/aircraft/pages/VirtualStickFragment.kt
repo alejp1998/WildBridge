@@ -48,7 +48,8 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.util.Collections
-
+import dji.v5.ux.core.util.DataProcessor
+import dji.sdk.keyvalue.key.KeyTools
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.server.TelemetryServer
 
@@ -60,6 +61,7 @@ import java.io.PrintWriter
 import java.net.Socket
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
+import dji.v5.manager.KeyManager
 
 /**
  * Class Description
@@ -90,6 +92,57 @@ class VirtualStickFragment : DJIFragment() {
     // Simple HTTP Server instance
     private var httpServer: SimpleHttpServer? = null
     private var telemetryServer: TelemetryServer? = null
+    private var isHomePointSetLatch = false
+
+    // --- Remaining flight time style data (similar to RemainingFlightTimeWidgetModel) ---
+    private val chargeRemainingProcessor: DataProcessor<Int> = DataProcessor.create(0)
+    private val goHomeAssessmentProcessor: DataProcessor<LowBatteryRTHInfo> = DataProcessor.create(LowBatteryRTHInfo())
+    private val seriousLowBatteryThresholdProcessor: DataProcessor<Int> = DataProcessor.create(0)
+    private val lowBatteryThresholdProcessor: DataProcessor<Int> = DataProcessor.create(0)
+
+    private val chargeRemainingKey = KeyTools.createKey(BatteryKey.KeyChargeRemainingInPercent)
+    private val goHomeAssessmentKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryRTHInfo)
+    private val seriousLowBatteryKey = KeyTools.createKey(FlightControllerKey.KeySeriousLowBatteryWarningThreshold)
+    private val lowBatteryKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryWarningThreshold)
+
+    data class RemainingFlightTimeData(
+        val remainingCharge: Int,
+        val batteryNeededToLand: Int,
+        val batteryNeededToGoHome: Int,
+        val seriousLowBatteryThreshold: Int,
+        val lowBatteryThreshold: Int,
+        val flightTime: Int
+    )
+
+    private fun getRemainingFlightTimeData(): RemainingFlightTimeData {
+        val goHomeInfo = goHomeAssessmentProcessor.value
+        return RemainingFlightTimeData(
+            chargeRemainingProcessor.value,
+            goHomeInfo.batteryPercentNeededToLand,
+            goHomeInfo.batteryPercentNeededToGoHome,
+            seriousLowBatteryThresholdProcessor.value,
+            lowBatteryThresholdProcessor.value,
+            goHomeInfo.remainingFlightTime
+        )
+    }
+
+    private fun setupBatteryKeyListeners() {
+        KeyManager.getInstance().listen(chargeRemainingKey, this) { _, newValue ->
+            chargeRemainingProcessor.onNext(newValue ?: 0)
+        }
+
+        KeyManager.getInstance().listen(goHomeAssessmentKey, this) { _, newValue ->
+            goHomeAssessmentProcessor.onNext(newValue ?: LowBatteryRTHInfo())
+        }
+
+        KeyManager.getInstance().listen(seriousLowBatteryKey, this) { _, newValue ->
+            seriousLowBatteryThresholdProcessor.onNext(newValue ?: 0)
+        }
+
+        KeyManager.getInstance().listen(lowBatteryKey, this) { _, newValue ->
+            lowBatteryThresholdProcessor.onNext(newValue ?: 0)
+        }
+    }
 
     // Simple HTTP server implementation
     private inner class SimpleHttpServer(private val port: Int) {
@@ -446,6 +499,9 @@ class VirtualStickFragment : DJIFragment() {
         // Add battery level TextView
         addBatteryLevelDisplay()
 
+        // Set up key listeners
+        setupBatteryKeyListeners()
+
         // Add low battery RTH info TextViews
         addLowBatteryRTHInfoDisplay()
 
@@ -696,7 +752,6 @@ class VirtualStickFragment : DJIFragment() {
     private fun getBatteryLevel(): Int = batteryKey.get(-1)
 
     private val lowBatteryRTHInfoKey: DJIKey<LowBatteryRTHInfo> = FlightControllerKey.KeyLowBatteryRTHInfo.create()
-    private fun getLowBatteryRTHInfo(): LowBatteryRTHInfo = lowBatteryRTHInfoKey.get(LowBatteryRTHInfo())
 
     // Get device IP address
     private val deviceIp: String? by lazy {
@@ -776,34 +831,14 @@ class VirtualStickFragment : DJIFragment() {
 
     @SuppressLint("SetTextI18n")
     private fun addBatteryLevelDisplay() {
-        // Create a TextView programmatically
-
-        val displayMetrics = resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-        val leftPadding = screenWidth / 2
-
-        val batteryLevelTextView = TextView(requireContext()).apply {
-            id = View.generateViewId()
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            setPadding(leftPadding, 16, 16, 16)
-        }
-
-        // Add the TextView to the fragment's view
-        binding?.root?.addView(batteryLevelTextView)
-
-        // Update the battery level initially
-        val batteryPercentage = getBatteryLevel()
-        batteryLevelTextView.text = "Battery Level: $batteryPercentage%"
-
         // Set up a periodic update for battery level
         val batteryUpdateRunnable = object : Runnable {
             override fun run() {
-                val currentBatteryLevel = batteryKey.get(-1)
+                val currentBatteryLevel = getBatteryLevel()
                 mainHandler.post {
-                    batteryLevelTextView.text = "Battery Level: $currentBatteryLevel%"
+                    binding?.batteryLevelTv?.text = "Battery Level: $currentBatteryLevel%"
                 }
-                mainHandler.postDelayed(this, 1000) // Update every 5 seconds
+                mainHandler.postDelayed(this, 1000) // Update every second
             }
         }
 
@@ -816,7 +851,7 @@ class VirtualStickFragment : DJIFragment() {
         val lowBatteryRTHInfoUpdateRunnable = object : Runnable {
             override fun run() {
                 updateLowBatteryRTHInfoDisplay()
-                mainHandler.postDelayed(this, 1000) // Update every 5 seconds
+                mainHandler.postDelayed(this, 1000) // Update every second
             }
         }
 
@@ -826,13 +861,12 @@ class VirtualStickFragment : DJIFragment() {
 
     @SuppressLint("SetTextI18n")
     private fun updateLowBatteryRTHInfoDisplay() {
-        val lowBatteryRTHInfo = getLowBatteryRTHInfo()
-
+        val rftData = getRemainingFlightTimeData()
         mainHandler.post {
             binding?.remainingFlightTimeTv?.text =
-                "Remaining Flight Time: ${lowBatteryRTHInfo.remainingFlightTime} min"
+                "Remaining Flight Time: ${rftData.flightTime} sec"
             binding?.timeNeededToGoHomeTv?.text =
-                "Time Needed to Go Home: ${lowBatteryRTHInfo.timeNeededToGoHome} min"
+                "Time Needed to Go Home: ${goHomeAssessmentProcessor.value.timeNeededToGoHome} sec"
         }
     }
 
@@ -931,20 +965,36 @@ class VirtualStickFragment : DJIFragment() {
         httpServer?.stop()
         telemetryServer?.stop()
         stopCameraStream()
+        KeyManager.getInstance().cancelListen(this)
     }
 
     private fun isHomeSet(): Boolean {
-        val home = getLocationHome()
-        if (home.latitude == 0.0 && home.longitude == 0.0) {
-            return false
+        if (isHomePointSetLatch) {
+            return true
         }
-        val current = getLocation3D()
-        val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
-        return distance < 0.5
+
+        val isFlyingKey: DJIKey<Boolean> = FlightControllerKey.KeyIsFlying.create()
+        val isFlying = isFlyingKey.get(false)
+
+        if (!isFlying) {
+            val home = getLocationHome()
+            if (home.latitude != 0.0 && home.longitude != 0.0) {
+                val current = getLocation3D()
+                val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
+                if (distance < 0.5) {
+                    isHomePointSetLatch = true
+                    return true
+                }
+            }
+        }
+        return isHomePointSetLatch
     }
 
     //region --- Telemetry JSON ---
     private fun getTelemetryJson(): String {
+        val rftData = getRemainingFlightTimeData()
+        val timeNeededToGoHome = goHomeAssessmentProcessor.value.timeNeededToGoHome.toString()
+        val maxRadiusCanFlyAndGoHome = goHomeAssessmentProcessor.value.maxRadiusCanFlyAndGoHome.toString()
         val speed = getSpeed().toString()
         val heading = getHeading().toString()
         val attitude = getAttitude().toString()
@@ -965,9 +1015,7 @@ class VirtualStickFragment : DJIFragment() {
         val altitudeReached = DroneController.isAltitudeReached()
         val isRecording = isRecording.get().toString()
         val homeSet = isHomeSet().toString()
-        val remainingFlightTime = getLowBatteryRTHInfo().remainingFlightTime.toString()
-        val timeNeededToGoHome = getLowBatteryRTHInfo().timeNeededToGoHome.toString()
-        val maxRadiusCanFlyAndGoHome = getLowBatteryRTHInfo().maxRadiusCanFlyAndGoHome.toString()
+        val remainingFlightTime = rftData.flightTime.toString()
 
 
         return "{\"speed\":$speed,\"heading\":$heading,\"attitude\":$attitude,\"location\":$location," +
