@@ -1,4 +1,5 @@
 package dji.sampleV5.aircraft.pages
+import android.annotation.SuppressLint
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -49,6 +50,7 @@ import java.net.ServerSocket
 import java.util.Collections
 
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.server.TelemetryServer
 
 // Import for custom HTTP server implementation
 import java.io.BufferedReader
@@ -87,6 +89,7 @@ class VirtualStickFragment : DJIFragment() {
 
     // Simple HTTP Server instance
     private var httpServer: SimpleHttpServer? = null
+    private var telemetryServer: TelemetryServer? = null
 
     // Simple HTTP server implementation
     private inner class SimpleHttpServer(private val port: Int) {
@@ -188,7 +191,7 @@ class VirtualStickFragment : DJIFragment() {
         private fun handleHttpRequest(method: String, uri: String, postData: String): String {
             return when (method) {
                 "POST" -> handlePostRequest(uri, postData)
-                "GET" -> handleGetRequest(uri)
+                "GET" -> "GET requests are no longer supported. Use TCP socket on port 8081 for telemetry."
                 else -> "Method Not Allowed"
             }
         }
@@ -418,58 +421,6 @@ class VirtualStickFragment : DJIFragment() {
                 "Error processing request: ${e.message}"
             }
         }
-
-        private fun handleGetRequest(uri: String): String {
-            return try {
-                when (uri) {
-                    "/" -> "Hello!\nYou are connected to WildBridge."
-                    "/aircraft/allStates" -> {
-                        val speed = getSpeed().toString()
-                        val heading = getHeading().toString()
-                        val attitude = getAttitude().toString()
-                        val gimbalJointAttitude = getJointAttitude().toString()
-                        val gimbalAttitude = getGimbalAttitudeKey().toString()
-                        val location = getLocation3D().toString()
-                        val zoomFl = getCameraZoomFocalLength().toString()
-                        val hybridFl = getCameraHybridFocalLength().toString()
-                        val opticalFl = getCameraOpticalFocalLength().toString()
-                        val zoomRatio = zoomKey.get().toString()
-                        val batteryLevel = getBatteryLevel().toString()
-                        val satelliteCount = getSatelliteCount().toString()
-
-                        "{\"speed\":$speed,\"heading\":$heading,\"attitude\":$attitude,\"location\":$location," +
-                                "\"gimbalAttitude\":$gimbalAttitude,\"gimbalJointAttitude\":$gimbalJointAttitude," +
-                                "\"zoomFl\":$zoomFl,\"hybridFl\":$hybridFl,\"opticalFl\":$opticalFl," +
-                                "\"zoomRatio\":$zoomRatio,\"batteryLevel\":$batteryLevel,\"satelliteCount\":$satelliteCount}"
-                    }
-                    "/aircraft/speed" -> getSpeed().toString()
-                    "/home/location" -> getLocationHome().toString()
-                    "/aircraft/heading" -> getHeading().toString()
-                    "/aircraft/attitude" -> getAttitude().toString()
-                    "/aircraft/location" -> getLocation3D().toString()
-                    "/aircraft/gimbalAttitude" -> getGimbalAttitudeKey().toString()
-                    "/status/waypointReached" -> if (DroneController.isWaypointReached()) "true" else "false"
-                    "/status/intermediaryWaypointReached" -> if (DroneController.isIntermediaryWaypointReached()) "true" else "false"
-                    "/status/yawReached" -> if (DroneController.isYawReached()) "true" else "false"
-                    "/status/altitudeReached" -> if (DroneController.isAltitudeReached()) "true" else "false"
-                    "/status/camera/isRecording" -> isRecording.get().toString()
-                    "/aircraft/lowBatteryRTHInfo/remainingFlightTime" -> getLowBatteryRTHInfo().remainingFlightTime.toString()
-                    "/aircraft/lowBatteryRTHInfo/timeNeededToGoHome" -> getLowBatteryRTHInfo().timeNeededToGoHome.toString()
-                    "/aircraft/lowBatteryRTHInfo/maxRadiusCanFlyAndGoHome" -> getLowBatteryRTHInfo().maxRadiusCanFlyAndGoHome.toString()
-                    "/aircraft/distanceToHome" -> {
-                        val current = getLocation3D()
-                        val home = getLocationHome()
-                        val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
-                        distance.toString()
-                    }
-                    "/status/homeSet" -> isHomeSet().toString()
-                    else -> "Not Found"
-                }
-            } catch (e: Exception) {
-                Log.e("DroneServer", "Error processing GET request: ${e.message}", e)
-                "Error processing request: ${e.message}"
-            }
-        }
     }
 
     override fun onCreateView(
@@ -535,7 +486,7 @@ class VirtualStickFragment : DJIFragment() {
             binding?.streamQualityInfoTv?.text = it.toString()
         }
 
-        startServerIfNeeded()
+        startServers()
 
         // Initialize camera stream
         initCameraStream()
@@ -800,19 +751,30 @@ class VirtualStickFragment : DJIFragment() {
         ToastUtils.showToast("Device IP: $ipAddress")
     }
 
-    private fun startServerIfNeeded() {
+    private fun startServers() {
         if (!isPortInUse(8080)) {
             try {
                 httpServer = SimpleHttpServer(8080)
                 httpServer?.start()
-                Log.i("VirtualStickFragment", "NanoHTTPD server started on $deviceIp:8080")
+                Log.i("VirtualStickFragment", "HTTP server started on $deviceIp:8080")
             } catch (e: Exception) {
-                Log.e("VirtualStickFragment", "Error starting NanoHTTPD server: ${e.message}")
+                Log.e("VirtualStickFragment", "Error starting HTTP server: ${e.message}")
                 ToastUtils.showToast("Failed to start HTTP server: ${e.message}")
+            }
+        }
+        if (!isPortInUse(8081)) {
+            try {
+                telemetryServer = TelemetryServer(8081, ::getTelemetryJson)
+                telemetryServer?.start()
+                Log.i("VirtualStickFragment", "Telemetry server started on $deviceIp:8081")
+            } catch (e: Exception) {
+                Log.e("VirtualStickFragment", "Error starting telemetry server: ${e.message}")
+                ToastUtils.showToast("Failed to start telemetry server: ${e.message}")
             }
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private fun addBatteryLevelDisplay() {
         // Create a TextView programmatically
 
@@ -862,6 +824,7 @@ class VirtualStickFragment : DJIFragment() {
         mainHandler.post(lowBatteryRTHInfoUpdateRunnable)
     }
 
+    @SuppressLint("SetTextI18n")
     private fun updateLowBatteryRTHInfoDisplay() {
         val lowBatteryRTHInfo = getLowBatteryRTHInfo()
 
@@ -903,6 +866,7 @@ class VirtualStickFragment : DJIFragment() {
         mainHandler.post(distanceUpdateRunnable)
     }
 
+    @SuppressLint("SetTextI18n", "DefaultLocale")
     private fun updateDistanceToHomeDisplay() {
         val current = getLocation3D()
         val home = getLocationHome()
@@ -965,12 +929,56 @@ class VirtualStickFragment : DJIFragment() {
         super.onDestroyView()
         stopRtspStream()
         httpServer?.stop()
+        telemetryServer?.stop()
         stopCameraStream()
     }
 
     private fun isHomeSet(): Boolean {
         val home = getLocationHome()
-        return home.latitude != 0.0 && home.longitude != 0.0
+        if (home.latitude == 0.0 && home.longitude == 0.0) {
+            return false
+        }
+        val current = getLocation3D()
+        val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
+        return distance < 0.5
     }
-}
 
+    //region --- Telemetry JSON ---
+    private fun getTelemetryJson(): String {
+        val speed = getSpeed().toString()
+        val heading = getHeading().toString()
+        val attitude = getAttitude().toString()
+        val gimbalJointAttitude = getJointAttitude().toString()
+        val gimbalAttitude = getGimbalAttitudeKey().toString()
+        val location = getLocation3D().toString()
+        val zoomFl = getCameraZoomFocalLength().toString()
+        val hybridFl = getCameraHybridFocalLength().toString()
+        val opticalFl = getCameraOpticalFocalLength().toString()
+        val zoomRatio = zoomKey.get().toString()
+        val batteryLevel = getBatteryLevel().toString()
+        val satelliteCount = getSatelliteCount().toString()
+        val homeLocation = getLocationHome().toString()
+        val distanceToHome = DroneController.calculateDistance(getLocation3D().latitude, getLocation3D().longitude, getLocationHome().latitude, getLocationHome().longitude).toString()
+        val waypointReached = DroneController.isWaypointReached()
+        val intermediaryWaypointReached = DroneController.isIntermediaryWaypointReached()
+        val yawReached = DroneController.isYawReached()
+        val altitudeReached = DroneController.isAltitudeReached()
+        val isRecording = isRecording.get().toString()
+        val homeSet = isHomeSet().toString()
+        val remainingFlightTime = getLowBatteryRTHInfo().remainingFlightTime.toString()
+        val timeNeededToGoHome = getLowBatteryRTHInfo().timeNeededToGoHome.toString()
+        val maxRadiusCanFlyAndGoHome = getLowBatteryRTHInfo().maxRadiusCanFlyAndGoHome.toString()
+
+
+        return "{\"speed\":$speed,\"heading\":$heading,\"attitude\":$attitude,\"location\":$location," +
+                "\"gimbalAttitude\":$gimbalAttitude,\"gimbalJointAttitude\":$gimbalJointAttitude," +
+                "\"zoomFl\":$zoomFl,\"hybridFl\":$hybridFl,\"opticalFl\":$opticalFl," +
+                "\"zoomRatio\":$zoomRatio,\"batteryLevel\":$batteryLevel,\"satelliteCount\":$satelliteCount," +
+                "\"homeLocation\":$homeLocation,\"distanceToHome\":$distanceToHome," +
+                "\"waypointReached\":$waypointReached,\"intermediaryWaypointReached\":$intermediaryWaypointReached," +
+                "\"yawReached\":$yawReached,\"altitudeReached\":$altitudeReached,\"isRecording\":$isRecording," +
+                "\"homeSet\":$homeSet,\"remainingFlightTime\":$remainingFlightTime," +
+                "\"timeNeededToGoHome\":$timeNeededToGoHome,\"maxRadiusCanFlyAndGoHome\":$maxRadiusCanFlyAndGoHome}"
+    }
+    //endregion
+}
