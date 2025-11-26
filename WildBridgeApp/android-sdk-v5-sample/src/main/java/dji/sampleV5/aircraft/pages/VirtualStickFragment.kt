@@ -99,11 +99,13 @@ class VirtualStickFragment : DJIFragment() {
     private val goHomeAssessmentProcessor: DataProcessor<LowBatteryRTHInfo> = DataProcessor.create(LowBatteryRTHInfo())
     private val seriousLowBatteryThresholdProcessor: DataProcessor<Int> = DataProcessor.create(0)
     private val lowBatteryThresholdProcessor: DataProcessor<Int> = DataProcessor.create(0)
+    private val timeNeededToLandProcessor: DataProcessor<Int> = DataProcessor.create(0)
 
     private val chargeRemainingKey = KeyTools.createKey(BatteryKey.KeyChargeRemainingInPercent)
     private val goHomeAssessmentKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryRTHInfo)
     private val seriousLowBatteryKey = KeyTools.createKey(FlightControllerKey.KeySeriousLowBatteryWarningThreshold)
     private val lowBatteryKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryWarningThreshold)
+    private val timeNeededToLandKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryRTHInfo)
 
     data class RemainingFlightTimeData(
         val remainingCharge: Int,
@@ -141,6 +143,10 @@ class VirtualStickFragment : DJIFragment() {
 
         KeyManager.getInstance().listen(lowBatteryKey, this) { _, newValue ->
             lowBatteryThresholdProcessor.onNext(newValue ?: 0)
+        }
+
+        KeyManager.getInstance().listen(timeNeededToLandKey, this) { _, newValue ->
+            timeNeededToLandProcessor.onNext(newValue?.timeNeededToLand ?: 0)
         }
     }
 
@@ -753,6 +759,9 @@ class VirtualStickFragment : DJIFragment() {
 
     private val lowBatteryRTHInfoKey: DJIKey<LowBatteryRTHInfo> = FlightControllerKey.KeyLowBatteryRTHInfo.create()
 
+    private fun getTimeNeededToGoHome(): Int = goHomeAssessmentProcessor.value.timeNeededToGoHome
+    private fun getTimeNeededToLand(): Int = timeNeededToLandProcessor.value
+
     // Get device IP address
     private val deviceIp: String? by lazy {
         getDeviceIpAddress()
@@ -866,7 +875,7 @@ class VirtualStickFragment : DJIFragment() {
             binding?.remainingFlightTimeTv?.text =
                 "Remaining Flight Time: ${rftData.flightTime} sec"
             binding?.timeNeededToGoHomeTv?.text =
-                "Time Needed to Go Home: ${goHomeAssessmentProcessor.value.timeNeededToGoHome} sec"
+                "Time Needed to Land: ${getTimeNeededToGoHome() + getTimeNeededToLand()} sec"
         }
     }
 
@@ -993,7 +1002,9 @@ class VirtualStickFragment : DJIFragment() {
     //region --- Telemetry JSON ---
     private fun getTelemetryJson(): String {
         val rftData = getRemainingFlightTimeData()
-        val timeNeededToGoHome = goHomeAssessmentProcessor.value.timeNeededToGoHome.toString()
+        val timeNeededToGoHome = getTimeNeededToGoHome().toString()
+        val timeNeededToLand = getTimeNeededToLand().toString()
+        val totalTime = (getTimeNeededToGoHome() + getTimeNeededToLand()).toString()
         val maxRadiusCanFlyAndGoHome = goHomeAssessmentProcessor.value.maxRadiusCanFlyAndGoHome.toString()
         val speed = getSpeed().toString()
         val heading = getHeading().toString()
@@ -1026,7 +1037,7 @@ class VirtualStickFragment : DJIFragment() {
                 "\"waypointReached\":$waypointReached,\"intermediaryWaypointReached\":$intermediaryWaypointReached," +
                 "\"yawReached\":$yawReached,\"altitudeReached\":$altitudeReached,\"isRecording\":$isRecording," +
                 "\"homeSet\":$homeSet,\"remainingFlightTime\":$remainingFlightTime," +
-                "\"timeNeededToGoHome\":$timeNeededToGoHome,\"maxRadiusCanFlyAndGoHome\":$maxRadiusCanFlyAndGoHome}"
+                "\"timeNeededToGoHome\":$timeNeededToGoHome,\"timeNeededToLand\":$timeNeededToLand,\"totalTime\":$totalTime,\"maxRadiusCanFlyAndGoHome\":$maxRadiusCanFlyAndGoHome}"
     }
     //endregion
 }
