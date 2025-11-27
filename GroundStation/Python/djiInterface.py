@@ -242,8 +242,16 @@ class DJIInterface:
         return self.getTelemetry().get("remainingFlightTime", 0)
     
     def getTimeNeededToGoHome(self):
-        """Get time needed to return home in minutes."""
+        """Get time needed to return home in seconds."""
         return self.getTelemetry().get("timeNeededToGoHome", 0)
+    
+    def getTimeNeededToLand(self):
+        """Get time needed to land in seconds."""
+        return self.getTelemetry().get("timeNeededToLand", 0)
+    
+    def getTotalTime(self):
+        """Get total flight time in seconds."""
+        return self.getTelemetry().get("totalTime", 0)
     
     def getMaxRadiusCanFlyAndGoHome(self):
         """Get maximum radius the drone can fly and still return home."""
@@ -423,7 +431,7 @@ if __name__ == '__main__':
     import time
     import sys
     
-    IP_RC = "10.102.252.30"  # REPLACE WITH YOUR RC IP
+    IP_RC = "192.168.50.27"  # REPLACE WITH YOUR RC IP
     
     if len(sys.argv) > 1:
         IP_RC = sys.argv[1]
@@ -465,8 +473,10 @@ if __name__ == '__main__':
                 print(f"  WP Reached:  {dji.isWaypointReached()}")
                 print(f"  Yaw Reached: {dji.isYawReached()}")
                 print(f"  Alt Reached: {dji.isAltitudeReached()}")
-                print(f"  Flight Time: {dji.getRemainingFlightTime()} min remaining")
-                print(f"  Time to RTH: {dji.getTimeNeededToGoHome()} min")
+                print(f"  Flight Time: {dji.getRemainingFlightTime()} s remaining")
+                print(f"  Total Time:  {dji.getTotalTime()} s")
+                print(f"  Time to RTH: {dji.getTimeNeededToGoHome()} s")
+                print(f"  Time to Land:{dji.getTimeNeededToLand()} s")
                 print(f"  Max Radius:  {dji.getMaxRadiusCanFlyAndGoHome()} m")
             else:
                 print("Waiting for telemetry data...")

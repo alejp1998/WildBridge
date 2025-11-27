@@ -706,7 +706,10 @@ object DroneController {
         return info
     }
 
-    private fun createTemplate(waypointInfoModels: List<WaypointInfoModel>): Template {
+    private fun createTemplate(
+        waypointInfoModels: List<WaypointInfoModel>,
+        trajectorySpeed: Double
+    ): Template {
         val t = Template()
         t.waypointInfo = createTemplateWaypointInfo(waypointInfoModels)
 
@@ -718,7 +721,7 @@ object DroneController {
         }
         t.coordinateParam = cp
         t.useGlobalTransitionalSpeed = true
-        t.autoFlightSpeed = 12.0
+        t.autoFlightSpeed = trajectorySpeed
         t.payloadParam = ArrayList()
         return t
     }
@@ -740,7 +743,10 @@ object DroneController {
         return result
     }
 
-    fun navigateTrajectoryNative(userWaypoints: List<Triple<Double, Double, Double>>) {
+    fun navigateTrajectoryNative(
+        userWaypoints: List<Triple<Double, Double, Double>>,
+        trajectorySpeed: Double
+    ) {
         if (userWaypoints.size < 2) {
             ToastUtils.showToast("Need at least 2 waypoints")
             return
@@ -766,7 +772,7 @@ object DroneController {
         // Build mission components
         val mission = createWaylineMission()
         val config = createMissionConfig()
-        val template = createTemplate(wpModels)
+        val template = createTemplate(wpModels, trajectorySpeed)
 
         // Generate KMZ
         val missionName = generateTrajectoryName()
