@@ -440,21 +440,31 @@ class VirtualStickFragment : DJIFragment() {
                     }
                     // --- New endpoints ---
                     "/send/navigateTrajectoryDJINative" -> {
-                        // Expect: "lat,lon,alt; lat,lon,alt; ..."
+                        // Expect: "speed;lat,lon,alt;lat,lon,alt;..."
                         val segments = postData.split(";").map { it.trim() }.filter { it.isNotEmpty() }
-                        if (segments.size < 2) return "Invalid input. Need at least 2 waypoints: lat,lon,alt;..."
+                        if (segments.size < 3) return "Invalid input. Need speed and at least 2 waypoints: speed;lat,lon,alt;..."
+
+                        val trajectorySpeed = segments[0].toDoubleOrNull()
+                            ?: return "Invalid input. Speed must be a number."
+
                         val waypoints = mutableListOf<Triple<Double, Double, Double>>()
-                        for ((i, s) in segments.withIndex()) {
+                        for (i in 1 until segments.size) {
+                            val s = segments[i]
                             val parts = s.split(",").map { it.trim() }
-                            if (parts.size < 3) return "Invalid input at segment ${i}: expected lat,lon,alt"
+                            if (parts.size < 3) return "Invalid input at segment ${i - 1}: expected lat,lon,alt"
                             val lat = parts[0].toDouble()
                             val lon = parts[1].toDouble()
                             val alt = parts[2].toDouble()
                             waypoints.add(Triple(lat, lon, alt))
                         }
-                        DroneController.navigateTrajectoryNative(waypoints)
-                        mainHandler.post { ToastUtils.showToast("DJI native mission started (${waypoints.size} wps)") }
-                        "DJI native mission requested with ${waypoints.size} waypoints"
+
+                        if (waypoints.size < 2) {
+                            return "Invalid input. Need at least 2 waypoints."
+                        }
+
+                        DroneController.navigateTrajectoryNative(waypoints, trajectorySpeed)
+                        mainHandler.post { ToastUtils.showToast("DJI native mission started (${waypoints.size} wps at ${trajectorySpeed}m/s)") }
+                        "DJI native mission requested with ${waypoints.size} waypoints at ${trajectorySpeed}m/s"
                     }
                     "/send/abort/DJIMission" -> {
                         DroneController.endMission()
