@@ -63,6 +63,8 @@ import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 import dji.v5.manager.KeyManager
 
+import dji.sdk.keyvalue.value.flightcontroller.FlightMode
+
 /**
  * Class Description
  *
@@ -106,6 +108,9 @@ class VirtualStickFragment : DJIFragment() {
     private val seriousLowBatteryKey = KeyTools.createKey(FlightControllerKey.KeySeriousLowBatteryWarningThreshold)
     private val lowBatteryKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryWarningThreshold)
     private val timeNeededToLandKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryRTHInfo)
+
+    private val flightModeKey: DJIKey<FlightMode> = FlightControllerKey.KeyFlightMode.create()
+    private fun getFlightMode(): FlightMode = flightModeKey.get(FlightMode.UNKNOWN)
 
     data class RemainingFlightTimeData(
         val remainingCharge: Int,
@@ -768,8 +773,6 @@ class VirtualStickFragment : DJIFragment() {
     private val batteryKey: DJIKey<Int> = BatteryKey.KeyChargeRemainingInPercent.create()
     private fun getBatteryLevel(): Int = batteryKey.get(-1)
 
-    private val lowBatteryRTHInfoKey: DJIKey<LowBatteryRTHInfo> = FlightControllerKey.KeyLowBatteryRTHInfo.create()
-
     private fun getTimeNeededToGoHome(): Int = goHomeAssessmentProcessor.value.timeNeededToGoHome
     private fun getTimeNeededToLand(): Int = timeNeededToLandProcessor.value
 
@@ -890,36 +893,6 @@ class VirtualStickFragment : DJIFragment() {
         }
     }
 
-    private fun addDistanceToHomeDisplay() {
-        // Create a TextView programmatically
-        val displayMetrics = resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-
-        val distanceToHomeTextView = TextView(requireContext()).apply {
-            id = View.generateViewId()
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            setPadding(16, 16, 16, 16)  // Position on the left side
-        }
-
-        // Add the TextView to the fragment's view
-        binding?.root?.addView(distanceToHomeTextView)
-
-        // Update the distance to home initially
-        updateDistanceToHomeDisplay()
-
-        // Set up a periodic update for distance to home
-        val distanceUpdateRunnable = object : Runnable {
-            override fun run() {
-                updateDistanceToHomeDisplay()
-                mainHandler.postDelayed(this, 1000) // Update every second
-            }
-        }
-
-        // Start the periodic updates
-        mainHandler.post(distanceUpdateRunnable)
-    }
-
     @SuppressLint("SetTextI18n", "DefaultLocale")
     private fun updateDistanceToHomeDisplay() {
         val current = getLocation3D()
@@ -1037,8 +1010,15 @@ class VirtualStickFragment : DJIFragment() {
         val altitudeReached = DroneController.isAltitudeReached()
         val isRecording = isRecording.get().toString()
         val homeSet = isHomeSet().toString()
-        val remainingFlightTime = rftData.flightTime.toString()
+        val flightMode = "\"${getFlightMode().name}\""
 
+        // Extract values from rftData
+        val remainingCharge = rftData.remainingCharge.toString()
+        val batteryNeededToLand = rftData.batteryNeededToLand.toString()
+        val batteryNeededToGoHome = rftData.batteryNeededToGoHome.toString()
+        val seriousLowBatteryThreshold = rftData.seriousLowBatteryThreshold.toString()
+        val lowBatteryThreshold = rftData.lowBatteryThreshold.toString()
+        val remainingFlightTime = rftData.flightTime.toString()
 
         return "{\"speed\":$speed,\"heading\":$heading,\"attitude\":$attitude,\"location\":$location," +
                 "\"gimbalAttitude\":$gimbalAttitude,\"gimbalJointAttitude\":$gimbalJointAttitude," +
@@ -1048,7 +1028,11 @@ class VirtualStickFragment : DJIFragment() {
                 "\"waypointReached\":$waypointReached,\"intermediaryWaypointReached\":$intermediaryWaypointReached," +
                 "\"yawReached\":$yawReached,\"altitudeReached\":$altitudeReached,\"isRecording\":$isRecording," +
                 "\"homeSet\":$homeSet,\"remainingFlightTime\":$remainingFlightTime," +
-                "\"timeNeededToGoHome\":$timeNeededToGoHome,\"timeNeededToLand\":$timeNeededToLand,\"totalTime\":$totalTime,\"maxRadiusCanFlyAndGoHome\":$maxRadiusCanFlyAndGoHome}"
+                "\"timeNeededToGoHome\":$timeNeededToGoHome,\"timeNeededToLand\":$timeNeededToLand," +
+                "\"totalTime\":$totalTime,\"maxRadiusCanFlyAndGoHome\":$maxRadiusCanFlyAndGoHome," +
+                "\"remainingCharge\":$remainingCharge,\"batteryNeededToLand\":$batteryNeededToLand," +
+                "\"batteryNeededToGoHome\":$batteryNeededToGoHome,\"seriousLowBatteryThreshold\":$seriousLowBatteryThreshold," +
+                "\"lowBatteryThreshold\":$lowBatteryThreshold,\"flightMode\":$flightMode}"
     }
     //endregion
 }

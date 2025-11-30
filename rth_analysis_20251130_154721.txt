@@ -1,0 +1,99 @@
+======================================================================
+RTH ANALYSIS REPORT - 20251130_154721
+======================================================================
+
+FLIGHT SUMMARY
+----------------------------------------
+  Duration:              285.1 seconds (4.8 min)
+  Data points collected: 284
+  Start battery:         39%
+  End battery:           5%
+  Max distance from home:295.1 m
+  Max altitude:          114.6 m
+
+RTH EVENTS
+----------------------------------------
+
+Event 1:
+  Time:                  93.7s
+  Battery:               26%
+  Battery needed RTH:    24%
+  Battery needed Land:   10%
+  Distance to home:      294.2m
+  Altitude:              114.5m
+  Mode change:           GPS_NORMAL -> GO_HOME
+
+BATTERY ANALYSIS
+----------------------------------------
+  Battery hit 50% at:
+    Time:                0.3s
+    Distance to home:    294.2m
+    Altitude:            114.3m
+    Battery needed RTH:  20%
+    Battery needed Land: 9%
+    Flight mode:         GPS_NORMAL
+
+  Battery hit 40% at:
+    Time:                0.3s
+    Distance to home:    294.2m
+    Altitude:            114.3m
+    Battery needed RTH:  20%
+    Battery needed Land: 9%
+    Flight mode:         GPS_NORMAL
+
+  Battery hit 30% at:
+    Time:                65.6s
+    Distance to home:    294.2m
+    Altitude:            114.5m
+    Battery needed RTH:  23%
+    Battery needed Land: 10%
+    Flight mode:         GPS_NORMAL
+
+  Battery hit 25% at:
+    Time:                104.7s
+    Distance to home:    274.6m
+    Altitude:            114.5m
+    Battery needed RTH:  25%
+    Battery needed Land: 7%
+    Flight mode:         GO_HOME
+
+  Battery hit 20% at:
+    Time:                136.5s
+    Distance to home:    202.5m
+    Altitude:            114.2m
+    Battery needed RTH:  24%
+    Battery needed Land: 7%
+    Flight mode:         GO_HOME
+
+  Battery hit 15% at:
+    Time:                174.7s
+    Distance to home:    215.2m
+    Altitude:            114.5m
+    Battery needed RTH:  25%
+    Battery needed Land: 8%
+    Flight mode:         GO_HOME
+
+  Battery hit 10% at:
+    Time:                220.8s
+    Distance to home:    210.7m
+    Altitude:            5.2m
+    Battery needed RTH:  27%
+    Battery needed Land: 10%
+    Flight mode:         AUTO_LANDING
+
+FLIGHT MODE CHANGES
+----------------------------------------
+  0.3s: START -> GPS_NORMAL
+    Battery: 39%, Distance: 294.2m
+  93.7s: GPS_NORMAL -> GO_HOME
+    Battery: 26%, Distance: 294.2m
+  187.7s: GO_HOME -> GPS_SPORT
+    Battery: 13%, Distance: 206.9m
+  202.8s: GPS_SPORT -> AUTO_LANDING
+    Battery: 12%, Distance: 210.5m
+  284.1s: AUTO_LANDING -> GPS_SPORT
+    Battery: 5%, Distance: 16.1m
+
+======================================================================
+END OF REPORT
+======================================================================
