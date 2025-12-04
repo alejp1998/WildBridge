@@ -4,8 +4,8 @@ WildBridge - DJI Interface Module
 A Python interface for controlling DJI drones through HTTP requests and TCP sockets,
 providing seamless integration for drone operations, telemetry retrieval, and video streaming.
 
-Authors: Kilian Meier, Edouard G.A. Rolland
-Project: WildDrone - Autonomous Search and Rescue Operations
+Authors: Edouard G.A. Rolland, Kilian Meier 
+Project: WildDrone
 Institution: University of Bristol, University of Southern Denmark (SDU)
 License: MIT
 
@@ -337,9 +337,17 @@ class DJIInterface:
         """Navigate to a waypoint."""
         return self.requestSend(EP_GOTO_WP, f"{latitude},{longitude},{altitude}")
 
-    def requestSendGoToWPwithPID(self, latitude, longitude, altitude, yaw):
-        """Navigate to a waypoint with PID control."""
-        return self.requestSend(EP_GOTO_WP_PID, f"{latitude},{longitude},{altitude},{yaw}")
+    def requestSendGoToWPwithPID(self, latitude, longitude, altitude, yaw, speed: float = 5.0):
+        """Navigate to a waypoint with PID control.
+        
+        Args:
+            latitude: Target latitude
+            longitude: Target longitude
+            altitude: Target altitude
+            yaw: Target yaw angle
+            speed: Max speed in m/s (default 5.0)
+        """
+        return self.requestSend(EP_GOTO_WP_PID, f"{latitude},{longitude},{altitude},{yaw},{speed}")
     
     def requestSendGoToWPwithPIDtuning(self, latitude, longitude, altitude, yaw, kp_pos, ki_pos, kd_pos, kp_yaw, ki_yaw, kd_yaw):
         """Navigate to a waypoint with custom PID tuning parameters."""
@@ -371,17 +379,20 @@ class DJIInterface:
         message = ";".join(segments)
         return self.requestSend(EP_GOTO_TRAJECTORY, message)
     
-    def requestSendNavigateTrajectoryDJINative(self, waypoints):
+    def requestSendNavigateTrajectoryDJINative(self, waypoints, speed: float = 10.0):
         """
         Send waypoints to be executed using DJI's native waypoint mission system.
         :param waypoints: A list of triples (latitude, longitude, altitude) for each waypoint.
+        :param speed: Flight speed in m/s (default 10.0)
         :return: The response from the server.
         """
         if not waypoints:
             raise ValueError("No waypoints provided")
+        if len(waypoints) < 2:
+            raise ValueError("Need at least 2 waypoints for DJI native mission")
 
-        # Build the message format: "lat,lon,alt; lat,lon,alt; ..."
-        segments = []
+        # Build the message format: "speed;lat,lon,alt;lat,lon,alt;..."
+        segments = [str(speed)]
         for lat, lon, alt in waypoints:
             segments.append(f"{lat},{lon},{alt}")
 
@@ -402,10 +413,12 @@ class DJIInterface:
 
     def requestSendGotoYaw(self, yaw):
         """Rotate to a specific yaw angle."""
+        self.requestSendEnableVirtualStick()
         return self.requestSend(EP_GOTO_YAW, f"{yaw}")
 
     def requestSendGotoAltitude(self, altitude):
         """Navigate to a specific altitude."""
+        self.requestSendEnableVirtualStick()
         return self.requestSend(EP_GOTO_ALTITUDE, f"{altitude}")
 
     def requestCameraStartRecording(self):
@@ -455,7 +468,7 @@ if __name__ == '__main__':
     import time
     import sys
     
-    IP_RC = "10.184.11.117"  # REPLACE WITH YOUR RC IP
+    IP_RC = "10.102.252.30"  # REPLACE WITH YOUR RC IP
     
     if len(sys.argv) > 1:
         IP_RC = sys.argv[1]
