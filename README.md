@@ -286,16 +286,146 @@ These endpoints are available for backward compatibility. For continuous telemet
 WildBridge/
 ├── GroundStation/                      # Ground Control System (GS)
 │   ├── Python/                         # Python GS
-│   │   └── djiInterface.py             # Full DJI communication API
+│   │   ├── djiInterface.py             # Full DJI communication API
+│   │   └── mavlink_proxy.py            # QGroundControl MAVLink bridge
 │   └── ROS/                            # ROS 2 integration
 │       ├── dji_controller/             # Main drone control package
 │       ├── drone_videofeed/            # RTSP video streaming package
+│       ├── wildbridge_mavros/          # MAVROS-compatible interface
 │       └── wildview_bringup/           # Launch configuration
 └── WildBridgeApp/                      # Android application
     ├── android-sdk-v5-as/              # Main app project
     ├── android-sdk-v5-sample/          # Sample implementations
     └── android-sdk-v5-uxsdk/           # UI components
 ```
+
+### QGroundControl Integration
+
+WildBridge can be visualized and controlled through **QGroundControl** using the MAVLink proxy. This allows you to see your DJI drone on QGC's map, monitor telemetry, and send basic commands.
+
+#### How It Works
+
+```
+DJI Drone ←→ WildBridge App ←→ TCP/HTTP ←→ mavlink_proxy.py ←→ MAVLink UDP ←→ QGroundControl
+```
+
+The proxy translates:
+- **WildBridge telemetry** → MAVLink messages (HEARTBEAT, GLOBAL_POSITION_INT, ATTITUDE, etc.)
+- **QGC commands** → WildBridge HTTP requests (takeoff, land, RTL, waypoints)
+
+#### Installation
+
+```bash
+# Install pymavlink
+pip install pymavlink
+
+# Run the proxy
+cd GroundStation/Python
+python mavlink_proxy.py --drone-ip 192.168.1.100
+```
+
+#### QGroundControl Setup
+
+1. Open QGroundControl
+2. Go to **Application Settings → Comm Links**
+3. Click **Add** and select **UDP**
+4. Set **Listening Port** to `14550`
+5. Click **Connect**
+
+#### Supported Features in QGC
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Map position | ✅ | Real-time GPS tracking |
+| Attitude indicator | ✅ | Roll, pitch, yaw |
+| Battery level | ✅ | Percentage display |
+| GPS status | ✅ | Satellite count, fix type |
+| Home position | ✅ | Displayed on map |
+| Heading | ✅ | Compass heading |
+| Ground speed | ✅ | Velocity display |
+| Takeoff command | ✅ | Via QGC toolbar |
+| Land command | ✅ | Via QGC toolbar |
+| RTL command | ✅ | Return to launch |
+| Waypoint navigation | ✅ | Single waypoint or trajectory |
+| Mission planning | ✅ | Full mission upload/download |
+| Mission execution | ✅ | Start, pause, resume missions |
+| Video stream | ❌ | Use VLC/OpenCV instead |
+
+#### Mission/Trajectory Support
+
+The MAVLink proxy supports **full MAVLink mission protocol**, allowing you to plan and execute trajectories directly from QGroundControl:
+
+**Supported Mission Operations:**
+- **Mission Upload**: Plan waypoints in QGC and upload to WildBridge
+- **Mission Download**: Retrieve current mission from WildBridge
+- **Mission Start**: Begin autonomous waypoint navigation
+- **Pause/Resume**: Pause mission mid-flight and resume later
+- **Clear Mission**: Remove all waypoints
+
+**Mission Execution Modes:**
+
+1. **DJI Native Waypoint Mission** (default for 2+ waypoints)
+   - Uses DJI's built-in waypoint system
+   - Smoother flight path with optimized transitions
+   - Better performance and reliability
+
+2. **Virtual Stick PID Navigation** (fallback)
+   - Uses WildBridge's PID controller
+   - Works with single waypoints
+   - Pure pursuit algorithm for trajectory following
+
+**Using Missions in QGC:**
+
+```bash
+# Start the proxy with DJI native mission enabled (default)
+python mavlink_proxy.py --drone-ip 192.168.1.100
+
+# Or use Virtual Stick PID navigation only
+python mavlink_proxy.py --drone-ip 192.168.1.100 --no-native-mission
+```
+
+1. Connect QGC to the proxy (UDP port 14550)
+2. Use QGC's **Plan** view to create waypoints
+3. Click **Upload** to send mission to WildBridge
+4. Arm the drone and click **Start Mission**
+5. Monitor progress on the map with waypoint indicators
+
+**Mission Protocol Messages:**
+
+| Message | Direction | Description |
+|---------|-----------|-------------|
+| `MISSION_COUNT` | QGC → WB | Number of waypoints to upload |
+| `MISSION_ITEM` | QGC → WB | Individual waypoint data |
+| `MISSION_ITEM_INT` | QGC → WB | High-precision waypoint (MAVLink v2) |
+| `MISSION_ACK` | WB → QGC | Upload confirmation |
+| `MISSION_CURRENT` | WB → QGC | Active waypoint indicator |
+| `MISSION_ITEM_REACHED` | WB → QGC | Waypoint reached notification |
+| `MISSION_REQUEST_LIST` | QGC → WB | Request mission download |
+| `MISSION_CLEAR_ALL` | QGC → WB | Clear all waypoints |
+
+#### MAVLink Message Mapping
+
+| MAVLink Message | WildBridge Source |
+|-----------------|-------------------|
+| `HEARTBEAT` | Flight mode, armed state |
+| `GLOBAL_POSITION_INT` | GPS location, velocity |
+| `GPS_RAW_INT` | Satellite count, fix type |
+| `ATTITUDE` | Roll, pitch, yaw |
+| `SYS_STATUS` | Battery level |
+| `VFR_HUD` | Speed, altitude, heading |
+| `BATTERY_STATUS` | Battery %, remaining time |
+| `HOME_POSITION` | Home coordinates |
+
+#### Flight Mode Mapping
+
+| DJI Mode | QGC Display |
+|----------|-------------|
+| GPS | Position Control |
+| ATTI | Altitude Control |
+| VIRTUAL_STICK | Offboard |
+| GO_HOME | Return to Launch |
+| AUTO_LANDING | Land |
+| WAYPOINT | Mission |
 
 ### ROS 2 Integration
 

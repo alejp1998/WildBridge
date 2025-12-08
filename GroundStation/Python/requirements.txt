@@ -1,1 +1,6 @@
 requests
+pymavlink
+numpy
+opencv-python
+matplotlib
+pandas
