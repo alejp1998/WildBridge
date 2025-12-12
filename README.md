@@ -36,8 +36,10 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 
 - **Real-time Telemetry**: TCP socket streaming (port 8081) for continuous flight data at 20Hz
 - **HTTP Command Interface**: RESTful API (port 8080) for drone control commands
-- **Live Video Streaming**: RTSP video feed compatible with OpenCV, FFmpeg, and VLC
+- **Live Video Streaming**: WebRTC and RTSP video feeds with switchable streaming modes
+- **Camera Control**: Zoom ratio display and dynamic zoom control
 - **DJI Native Waypoint Missions**: Support for KMZ-based wayline missions via DJI's native system
+- **MAVLink Integration**: Compatible with QGroundControl via MAVLink proxy for mission planning
 - **PID-based Navigation**: Custom trajectory following with pure pursuit algorithm
 - **Multi-drone Coordination**: Support for up to 10 concurrent drones with sub-100ms latency
 - **Wildlife Monitoring**: Integrated YOLO-based object detection and geolocation
@@ -173,14 +175,19 @@ while True:
             print(f"Location: {telemetry['location']}")
 ```
 
-**Video Streaming** (OpenCV):
+**Video Streaming** (WebRTC and RTSP):
 ```python
 import cv2
 
 rc_ip = "192.168.1.100"  # Your RC IP
+
+# Option 1: RTSP (traditional approach)
 rtsp_url = f"rtsp://aaa:aaa@{rc_ip}:8554/streaming/live/1"
 cap = cv2.VideoCapture(rtsp_url)
 ret, frame = cap.read()
+
+# Option 2: WebRTC (lower latency via browser or WebSocket)
+# WebRTC endpoint: ws://{rc_ip}:8082 (available via web interface)
 ```
 
 **Control Commands** (HTTP POST):
@@ -276,9 +283,40 @@ These endpoints are available for backward compatibility. For continuous telemet
 | `/home/location` | Home point coordinates |
 
 ### Video Streaming
-- **RTSP URL**: `rtsp://aaa:aaa@{RC_IP}:8554/streaming/live/1`
+
+WildBridge supports two video streaming modes that can be toggled in the Virtual Stick interface:
+
+#### WebRTC Streaming (Default)
+- **Port**: 8082
+- **Protocol**: WebSocket (ws://{RC_IP}:8082)
+- **Latency**: <1 second (lower latency streaming)
+- **Features**: Real-time video, client connection management
+- **Use Case**: Live monitoring, low-latency applications
+
+#### RTSP Streaming
+- **URL**: `rtsp://aaa:aaa@{RC_IP}:8554/streaming/live/1`
 - **Format**: H.264, Standard Definition
-- **Latency**: 1.4-1.9 seconds (depending on network)
+- **Latency**: 1.4-1.9 seconds
+- **Compatibility**: FFmpeg, OpenCV, VLC
+- **Use Case**: Traditional streaming compatibility, longer range
+
+**Switching Streaming Modes**:
+- In the VirtualStick interface, click "Switch to RTSP" or "Switch to WebRTC" to toggle between modes
+- The current streaming info is displayed on the interface
+
+### Camera Features
+
+#### Camera Zoom Control
+- **Endpoint**: `/send/camera/zoom` (HTTP POST)
+- **Parameter**: `zoom_ratio` (floating point)
+- **Display**: Available zoom ratios shown in real-time in the Virtual Stick interface
+- **Updates**: Dynamically displayed as zoom ratio range changes
+
+#### Zoom Ratio Display
+The Virtual Stick interface now displays:
+- Current available zoom ratios for the connected camera
+- Real-time updates when zoom capabilities change
+- Helps determine valid zoom range for commands
 
 ## Project Structure
 
@@ -295,7 +333,7 @@ WildBridge/
 │       └── wildview_bringup/           # Launch configuration
 └── WildBridgeApp/                      # Android application
     ├── android-sdk-v5-as/              # Main app project
-    ├── android-sdk-v5-sample/          # Sample implementations
+    ├── android-sdk-v5-sample/          # Sample implementations (with WebRTC/RTSP streaming)
     └── android-sdk-v5-uxsdk/           # UI components
 ```
 
