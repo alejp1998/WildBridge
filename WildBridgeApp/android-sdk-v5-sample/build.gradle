@@ -141,4 +141,7 @@ dependencies {
 
     // WebSocket library for formation control
     implementation 'org.java-websocket:Java-WebSocket:1.5.3'
+
+    // WebRTC for drone video streaming (Stream's maintained fork)
+    implementation 'io.getstream:stream-webrtc-android:1.1.1'
 }

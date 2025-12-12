@@ -115,6 +115,15 @@
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toBottomOf="@id/btn_set_virtual_stick_advanced_param" />
+
+            <Button
+                android:id="@+id/btn_toggle_stream_mode"
+                style="@style/main_fragment_btn"
+                android:text="Switch to RTSP"
+                android:textSize="10sp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/btn_send_virtual_stick_advanced_param" />
         </androidx.constraintlayout.widget.ConstraintLayout>
     </androidx.core.widget.NestedScrollView>
 
