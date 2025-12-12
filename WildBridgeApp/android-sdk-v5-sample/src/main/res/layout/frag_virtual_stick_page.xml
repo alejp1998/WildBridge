@@ -224,6 +224,19 @@
         app:layout_constraintTop_toBottomOf="@+id/simulator_state_info_tv"
         tools:ignore="HardcodedText,SpUsage,TextSizeCheck" />
 
+    <TextView
+        android:id="@+id/camera_zoom_ratios_tv"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Camera Zoom Ratios: Loading..."
+        android:textColor="@color/green"
+        android:textSize="12dp"
+        android:maxLines="5"
+        android:scrollbars="vertical"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/stream_quality_info_tv"
+        tools:ignore="HardcodedText,SpUsage,TextSizeCheck" />
+
 
     <dji.v5.ux.core.widget.hsi.HorizontalSituationIndicatorWidget
         android:id="@+id/widget_horizontal_situation_indicator"

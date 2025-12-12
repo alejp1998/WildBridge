@@ -78,6 +78,10 @@ import dji.sampleV5.aircraft.webrtc.WebRTCMediaOptions
 
 class VirtualStickFragment : DJIFragment() {
 
+    companion object {
+        private const val TAG = "VirtualStickFragment"
+    }
+
     private val basicAircraftControlVM: BasicAircraftControlVM by activityViewModels()
     private val virtualStickVM: VirtualStickVM by activityViewModels()
     private val simulatorVM: SimulatorVM by activityViewModels()
@@ -581,6 +585,14 @@ class VirtualStickFragment : DJIFragment() {
 
         // Initialize camera stream
         initCameraStream()
+        
+        // Display available zoom ratios
+        displayCameraZoomRatios()
+        
+        // Listen for zoom ratios changes
+        KeyManager.getInstance().listen(zoomRatiosRangeKey, this) { _, _ ->
+            displayCameraZoomRatios()
+        }
     }
 
     private fun initBtnClickListener() {
@@ -827,11 +839,43 @@ class VirtualStickFragment : DJIFragment() {
             }
         }
     }
+    
+    private fun displayCameraZoomRatios() {
+        try {
+            val zoomRatiosRange = zoomRatiosRangeKey.get()
+            
+            if (zoomRatiosRange != null) {
+                // Build a display string of available zoom ratios
+                val zoomRatiosText = StringBuilder("Camera Zoom Ratios:\n")
+                
+                // ZoomRatiosRange contains the zoom range information
+                val itemStr = zoomRatiosRange.toString()
+                zoomRatiosText.append(itemStr)
+                
+                Log.d(TAG, "Zoom ratio range: $itemStr")
+                
+                mainHandler.post {
+                    binding?.cameraZoomRatiosTv?.text = zoomRatiosText.toString()
+                }
+            } else {
+                mainHandler.post {
+                    binding?.cameraZoomRatiosTv?.text = "Camera Zoom Ratios: Not available"
+                }
+                Log.w(TAG, "Zoom ratios range is null")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting zoom ratios: ${e.message}", e)
+            mainHandler.post {
+                binding?.cameraZoomRatiosTv?.text = "Camera Zoom Ratios: Error - ${e.message}"
+            }
+        }
+    }
 
 
     private val gimbalKey: DJIKey.ActionKey<GimbalAngleRotation, EmptyMsg> =
         GimbalKey.KeyRotateByAngle.create()
     private val zoomKey: DJIKey<Double> = CameraKey.KeyCameraZoomRatios.create()
+    private val zoomRatiosRangeKey = CameraKey.KeyCameraZoomRatiosRange.create()
     private val startRecording: DJIKey.ActionKey<EmptyMsg, EmptyMsg> = CameraKey.KeyStartRecord.create()
     private val stopRecording: DJIKey.ActionKey<EmptyMsg, EmptyMsg> = CameraKey.KeyStopRecord.create()
     private val isRecording: DJIKey<Boolean> = CameraKey.KeyIsRecording.create()
