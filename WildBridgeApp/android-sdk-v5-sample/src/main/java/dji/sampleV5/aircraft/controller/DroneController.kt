@@ -23,6 +23,16 @@ import dji.sampleV5.aircraft.utils.wpml.WaypointInfoModel
 import dji.v5.manager.aircraft.waypoint3.WaypointMissionManager
 import dji.v5.utils.common.ContextUtil
 import dji.sdk.wpmz.value.mission.*
+import dji.sdk.wpmz.value.mission.WaylineActionInfo
+import dji.sdk.wpmz.value.mission.WaylineActionType
+import dji.sdk.wpmz.value.mission.ActionGimbalRotateParam
+import dji.sdk.wpmz.value.mission.WaylineGimbalActuatorRotateMode
+import dji.sdk.wpmz.value.mission.WaylineActionGroup
+import dji.sdk.wpmz.value.mission.WaylineActionTrigger
+import dji.sdk.wpmz.value.mission.WaylineActionTriggerType
+import dji.sdk.wpmz.value.mission.WaylineActionNodeList
+import dji.sdk.wpmz.value.mission.WaylineActionTreeNode
+import dji.sdk.wpmz.value.mission.WaylineActionsRelationType
 import dji.v5.et.set
 import java.io.File
 import java.text.SimpleDateFormat
@@ -595,12 +605,21 @@ object DroneController {
     }
 
     // === DJI Native Wayline (KMZ) flow ===
-    private fun generateTrajectoryName(): String {
+    fun generateTrajectoryName(): String {
         val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
         return "trajectory_${dateFormat.format(Date())}"
     }
 
-    private fun createWaypointFromLatLon(
+    fun getKmzDirectory(): String = kmzDir
+
+    fun getLastMissionNameNoExt(): String = lastMissionNameNoExt
+    
+    fun getLastMissionKmzPath(): String = lastMissionKmzPath
+
+    /**
+     * Create a waypoint model from lat/lon/height with gimbal pitch set to -90 (looking down)
+     */
+    fun createWaypointFromLatLon(
         lat: Double,
         lon: Double,
         heightMeters: Double,
@@ -631,20 +650,30 @@ object DroneController {
         waypoint.useGlobalYawParam = false
         waypoint.isWaylineWaypointYawParamSet = true
 
-        val gimbalParam = WaylineWaypointGimbalHeadingParam().apply {
-            headingMode = WaylineWaypointGimbalHeadingMode.find(0)
-            pitchAngle = 30.0
-        }
-        waypoint.gimbalHeadingParam = gimbalParam
-        waypoint.isWaylineWaypointGimbalHeadingParamSet = true
-        waypoint.useGlobalGimbalHeadingParam = false
+        // Set gimbal pitch angle directly on the waypoint
+        waypoint.gimbalPitchAngle = -90.0  // Gimbal looking straight down during trajectory following
+
+        // Use global gimbal heading param (set at template level)
+        waypoint.useGlobalGimbalHeadingParam = true
 
         waypointInfo.waylineWaypoint = waypoint
-        waypointInfo.actionInfos = ArrayList()
+
+        // Create gimbal rotate action to set pitch to -90 degrees (looking straight down)
+        val gimbalRotateParam = ActionGimbalRotateParam()
+        gimbalRotateParam.enablePitch = true
+        gimbalRotateParam.pitch = -90.0  // Look straight down
+        gimbalRotateParam.rotateMode = WaylineGimbalActuatorRotateMode.ABSOLUTE_ANGLE
+        gimbalRotateParam.payloadPositionIndex = 0
+        
+        val gimbalAction = WaylineActionInfo()
+        gimbalAction.actionType = WaylineActionType.GIMBAL_ROTATE
+        gimbalAction.gimbalRotateParam = gimbalRotateParam
+        
+        waypointInfo.actionInfos = arrayListOf(gimbalAction)
         return waypointInfo
     }
 
-    private fun createWaylineMission(): WaylineMission {
+    fun createWaylineMission(): WaylineMission {
         val m = WaylineMission()
         val now = System.currentTimeMillis().toDouble()
         m.createTime = now
@@ -652,16 +681,18 @@ object DroneController {
         return m
     }
 
-    private fun createMissionConfig(): WaylineMissionConfig {
+    fun createMissionConfig(
+        finishAction: WaylineFinishedAction = WaylineFinishedAction.NO_ACTION,
+        lostAction: WaylineExitOnRCLostAction = WaylineExitOnRCLostAction.GO_BACK
+    ): WaylineMissionConfig {
         val c = WaylineMissionConfig()
         c.flyToWaylineMode = WaylineFlyToWaylineMode.SAFELY
-        // Use KMZ's settings; we set defaults commonly used
-        c.finishAction = WaylineFinishedAction.NO_ACTION
+        c.finishAction = finishAction
         c.droneInfo = WaylineDroneInfo()
         c.securityTakeOffHeight = 20.0
         c.isSecurityTakeOffHeightSet = true
         c.exitOnRCLostBehavior = WaylineExitOnRCLostBehavior.EXCUTE_RC_LOST_ACTION
-        c.exitOnRCLostType = WaylineExitOnRCLostAction.GO_BACK
+        c.exitOnRCLostType = lostAction
         c.globalTransitionalSpeed = 10.0
         c.payloadInfo = ArrayList()
         return c
@@ -673,11 +704,11 @@ object DroneController {
         val waypoints = waypointInfoModels.map { it.waylineWaypoint }
         val info = WaylineTemplateWaypointInfo()
         info.waypoints = waypoints
-        info.actionGroups = ArrayList()
+        info.actionGroups = transformActionsToGroups(waypointInfoModels)  // Build proper action groups
         info.globalFlightHeight = 100.0
         info.isGlobalFlightHeightSet = true
-        info.globalTurnMode = WaylineWaypointTurnMode.TO_POINT_AND_PASS_WITH_CONTINUITY_CURVATURE
-        info.useStraightLine = false
+        info.globalTurnMode = WaylineWaypointTurnMode.TO_POINT_AND_STOP_WITH_DISCONTINUITY_CURVATURE
+        info.useStraightLine = true
         info.isTemplateGlobalTurnModeSet = true
 
         val poi = if (waypoints.isNotEmpty()) {
@@ -692,13 +723,73 @@ object DroneController {
         }
         info.globalYawParam = yawParam
         info.isTemplateGlobalYawParamSet = true
-        info.pitchMode = WaylineWaypointPitchMode.USE_POINT_SETTING
+        
+        // Set global gimbal heading param to look straight down (-90 degrees pitch)
+        val globalGimbalParam = WaylineWaypointGimbalHeadingParam()
+        globalGimbalParam.headingMode = WaylineWaypointGimbalHeadingMode.find(0)
+        globalGimbalParam.pitchAngle = -90.0  // Look straight down
+        info.globalGimbalHeadingParam = globalGimbalParam
+        info.isTemplateGlobalGimbalHeadingParamSet = true
+        
+        info.pitchMode = WaylineWaypointPitchMode.USE_POINT_SETTING  // Use point setting to apply gimbal pitch
         return info
     }
 
-    private fun createTemplate(
+    // Transform waypoint actions into proper action groups for KMZ
+    private fun transformActionsToGroups(waypointInfoModels: List<WaypointInfoModel>): ArrayList<WaylineActionGroup> {
+        val actionGroups = ArrayList<WaylineActionGroup>()
+        
+        for (i in waypointInfoModels.indices) {
+            val actionInfos = waypointInfoModels[i].actionInfos
+            if (actionInfos.isNotEmpty()) {
+                val actionGroup = WaylineActionGroup()
+                
+                // Set trigger to execute when reaching waypoint
+                val trigger = WaylineActionTrigger()
+                trigger.setTriggerType(WaylineActionTriggerType.REACH_POINT)
+                actionGroup.setTrigger(trigger)
+                
+                actionGroup.setGroupId(actionGroups.size)
+                actionGroup.setStartIndex(i)
+                actionGroup.setEndIndex(i)
+                actionGroup.setActions(actionInfos)
+                
+                // Build action tree structure
+                val nodeLists = ArrayList<WaylineActionNodeList>()
+                
+                // Root node
+                val root = WaylineActionNodeList()
+                val treeNodes = ArrayList<WaylineActionTreeNode>()
+                val rootNode = WaylineActionTreeNode()
+                rootNode.setNodeType(WaylineActionsRelationType.SEQUENCE)
+                rootNode.setChildrenNum(actionInfos.size)
+                treeNodes.add(rootNode)
+                root.setNodes(treeNodes)
+                nodeLists.add(root)
+                
+                // Children nodes (one for each action)
+                val children = WaylineActionNodeList()
+                val childrenNodeList = ArrayList<WaylineActionTreeNode>()
+                for (j in actionInfos.indices) {
+                    val child = WaylineActionTreeNode()
+                    child.setNodeType(WaylineActionsRelationType.LEAF)
+                    child.setActionIndex(j)
+                    childrenNodeList.add(child)
+                }
+                children.setNodes(childrenNodeList)
+                nodeLists.add(children)
+                
+                actionGroup.setNodeLists(nodeLists)
+                actionGroups.add(actionGroup)
+            }
+        }
+        
+        return actionGroups
+    }
+
+    fun createTemplate(
         waypointInfoModels: List<WaypointInfoModel>,
-        trajectorySpeed: Double
+        trajectorySpeed: Double = 5.0
     ): Template {
         val t = Template()
         t.waypointInfo = createTemplateWaypointInfo(waypointInfoModels)
@@ -716,7 +807,7 @@ object DroneController {
         return t
     }
 
-    private fun extractWaylineIdsFromKmz(kmzPath: String): ArrayList<Int> {
+    fun extractWaylineIdsFromKmz(kmzPath: String): ArrayList<Int> {
         val result = arrayListOf<Int>()
         runCatching {
             ZipFile(File(kmzPath)).use { zip ->
@@ -731,6 +822,137 @@ object DroneController {
             }
         }
         return result
+    }
+
+    /**
+     * Generate and save a KMZ file from waypoint models
+     * Returns the path to the saved KMZ file
+     */
+    fun generateAndSaveKmz(
+        waypointInfoModels: List<WaypointInfoModel>,
+        missionName: String = generateTrajectoryName(),
+        trajectorySpeed: Double = 5.0,
+        finishAction: WaylineFinishedAction = WaylineFinishedAction.GO_HOME,
+        lostAction: WaylineExitOnRCLostAction = WaylineExitOnRCLostAction.GO_BACK
+    ): String {
+        WPMZManager.getInstance().init(ContextUtil.getContext())
+        
+        val waylineMission = createWaylineMission()
+        val missionConfig = createMissionConfig(finishAction, lostAction)
+        val template = createTemplate(waypointInfoModels, trajectorySpeed)
+        
+        val kmzOutPath = kmzDir + missionName + ".kmz"
+        WPMZManager.getInstance().generateKMZFile(kmzOutPath, waylineMission, missionConfig, template)
+        
+        lastMissionNameNoExt = missionName
+        lastMissionKmzPath = kmzOutPath
+        
+        return kmzOutPath
+    }
+
+    /**
+     * Push a KMZ file to the aircraft
+     */
+    fun pushKmzToAircraft(
+        kmzPath: String,
+        onProgress: ((Double) -> Unit)? = null,
+        onSuccess: () -> Unit,
+        onFailure: (IDJIError) -> Unit
+    ) {
+        lastMissionKmzPath = kmzPath
+        lastMissionNameNoExt = File(kmzPath).nameWithoutExtension
+        
+        WaypointMissionManager.getInstance().pushKMZFileToAircraft(kmzPath, object :
+            CommonCallbacks.CompletionCallbackWithProgress<Double> {
+            override fun onProgressUpdate(progress: Double) {
+                onProgress?.invoke(progress)
+            }
+            override fun onSuccess() {
+                onSuccess()
+            }
+            override fun onFailure(error: IDJIError) {
+                onFailure(error)
+            }
+        })
+    }
+
+    /**
+     * Start a mission that has been pushed to the aircraft
+     */
+    fun startMission(
+        missionNameNoExt: String = lastMissionNameNoExt,
+        kmzPath: String = lastMissionKmzPath,
+        onSuccess: () -> Unit,
+        onFailure: (IDJIError) -> Unit
+    ) {
+        if (missionNameNoExt.isEmpty()) {
+            // Create a simple error without using ErrorType enum
+            val noMissionError = object : IDJIError {
+                override fun errorType() = null
+                override fun errorCode() = "NO_MISSION"
+                override fun description() = "No mission loaded"
+                override fun isError(p0: String?) = true
+                override fun innerCode() = "NO_MISSION"
+                override fun hint() = "Load a mission first"
+            }
+            onFailure(noMissionError)
+            return
+        }
+        
+        val ids = extractWaylineIdsFromKmz(kmzPath).ifEmpty { arrayListOf(0) }
+        WaypointMissionManager.getInstance().startMission(
+            missionNameNoExt,
+            ids,
+            object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    onSuccess()
+                }
+                override fun onFailure(error: IDJIError) {
+                    onFailure(error)
+                }
+            }
+        )
+    }
+
+    /**
+     * Pause the current mission
+     */
+    fun pauseMission(
+        onSuccess: () -> Unit,
+        onFailure: (IDJIError) -> Unit
+    ) {
+        WaypointMissionManager.getInstance().pauseMission(object :
+            CommonCallbacks.CompletionCallback {
+            override fun onSuccess() {
+                onSuccess()
+            }
+            override fun onFailure(error: IDJIError) {
+                onFailure(error)
+            }
+        })
+    }
+
+    /**
+     * Stop the current mission
+     */
+    fun stopMission(
+        missionNameNoExt: String = lastMissionNameNoExt,
+        onSuccess: () -> Unit,
+        onFailure: (IDJIError) -> Unit
+    ) {
+        if (missionNameNoExt.isEmpty()) {
+            pauseMission(onSuccess, onFailure)
+            return
+        }
+        WaypointMissionManager.getInstance().stopMission(missionNameNoExt, object :
+            CommonCallbacks.CompletionCallback {
+            override fun onSuccess() {
+                onSuccess()
+            }
+            override fun onFailure(error: IDJIError) {
+                onFailure(error)
+            }
+        })
     }
 
     fun navigateTrajectoryNative(

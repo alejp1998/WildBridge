@@ -58,6 +58,10 @@ class DroneVideoReceiver:
         self.latest_metadata = None
         self.metadata_lock = asyncio.Lock()
         
+        # Track for keeping connection alive
+        self.video_track_task = None
+        self.running = True
+        
         # Create frames directory if saving frames
         if self.save_frames and not os.path.exists(self.save_frames):
             os.makedirs(self.save_frames)
@@ -70,21 +74,63 @@ class DroneVideoReceiver:
             self.websocket = await websockets.connect(self.server_url)
             logger.info("WebSocket connected")
             
-            # Wait for welcome message
-            welcome = await self.websocket.recv()
-            welcome_data = json.loads(welcome)
-            if welcome_data.get('type') == 'welcome':
-                self.client_id = welcome_data.get('clientId')
-                logger.info(f"Assigned client ID: {self.client_id}")
+            # Wait for welcome message with timeout
+            try:
+                welcome = await asyncio.wait_for(self.websocket.recv(), timeout=5.0)
+                welcome_data = json.loads(welcome)
+                if welcome_data.get('type') == 'welcome':
+                    self.client_id = welcome_data.get('clientId')
+                    logger.info(f"Assigned client ID: {self.client_id}")
+            except asyncio.TimeoutError:
+                logger.error("Timeout waiting for welcome message")
+                raise
             
             # Register as viewer
             await self.websocket.send(json.dumps({
                 'type': 'register',
                 'role': 'viewer'
             }))
+            logger.info("Registered as viewer")
             
             # Create peer connection
             self.pc = RTCPeerConnection()
+            logger.info("RTCPeerConnection created")
+            
+            # Setup event handlers BEFORE sending register message
+            # Handle incoming tracks
+            @self.pc.on("track")
+            def on_track(track):
+                logger.info(f"Received track: {track.kind}")
+                if track.kind == "video":
+                    logger.info("Starting video track handler...")
+                    # Store the task so it stays alive
+                    self.video_track_task = asyncio.ensure_future(self._handle_video_track(track))
+                elif track.kind == "audio":
+                    logger.info("Received audio track (ignoring)")
+            
+            # Handle connection state changes
+            @self.pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                logger.info(f"Connection state: {self.pc.connectionState}")
+                if self.pc.connectionState == "connected":
+                    self.connected = True
+                    self.start_time = time.time()
+                    logger.info("WebRTC connection established!")
+                elif self.pc.connectionState in ["failed", "closed", "disconnected"]:
+                    self.connected = False
+                    logger.warning(f"WebRTC connection {self.pc.connectionState}")
+            
+            # Handle ICE connection state
+            @self.pc.on("iceconnectionstatechange")
+            async def on_iceconnectionstatechange():
+                logger.info(f"ICE connection state: {self.pc.iceConnectionState}")
+            
+            # Handle ICE candidates
+            @self.pc.on("icecandidate")
+            async def on_icecandidate(candidate):
+                if candidate:
+                    logger.debug(f"Sending ICE candidate: {candidate.candidate[:50]}...")
+                    await self._send_ice_candidate(candidate)
             
             # Create data channel for metadata with same settings as Android side
             try:
@@ -100,51 +146,67 @@ class DroneVideoReceiver:
                 @self.metadata_channel.on("message")
                 def on_metadata_message(message):
                     try:
+                        if not message:
+                            logger.debug("Received empty metadata message")
+                            return
                         self.latest_metadata = json.loads(message)
                         logger.debug(f"Received metadata: frame {self.latest_metadata.get('frameNumber', 'N/A')}")
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse metadata: {e}")
+                    except Exception as e:
+                        logger.error(f"Error handling metadata message: {e}")
+                        
+                @self.metadata_channel.on("close")
+                def on_metadata_channel_close():
+                    logger.warning("Metadata channel closed")
+                    self.metadata_channel = None
+                    
+                @self.metadata_channel.on("error")
+                def on_metadata_channel_error(error):
+                    logger.error(f"Metadata channel error: {error}")
+                    self.metadata_channel = None
+                    
             except Exception as e:
                 logger.error(f"Error creating metadata channel: {e}")
+                self.metadata_channel = None
             
             # Handle incoming data channel for metadata (if Android creates it differently)
             @self.pc.on("datachannel")
             def on_datachannel(channel):
-                logger.info(f"Received data channel: {channel.label}")
-                if channel.label == "telemetry":
-                    logger.info("Metadata data channel received from peer")
-                    @channel.on("message")
-                    def on_message(message):
-                        try:
-                            self.latest_metadata = json.loads(message)
-                            logger.debug(f"Received metadata from peer: frame {self.latest_metadata.get('frameNumber', 'N/A')}")
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse metadata: {e}")
-            
-            # Handle incoming tracks
-            @self.pc.on("track")
-            def on_track(track):
-                logger.info(f"Received track: {track.kind}")
-                if track.kind == "video":
-                    asyncio.ensure_future(self._handle_video_track(track))
-            
-            # Handle connection state changes
-            @self.pc.on("connectionstatechange")
-            async def on_connectionstatechange():
-                logger.info(f"Connection state: {self.pc.connectionState}")
-                if self.pc.connectionState == "connected":
-                    self.connected = True
-                    self.start_time = time.time()
-                elif self.pc.connectionState in ["failed", "closed", "disconnected"]:
-                    self.connected = False
-            
-            # Handle ICE candidates
-            @self.pc.on("icecandidate")
-            async def on_icecandidate(candidate):
-                if candidate:
-                    await self._send_ice_candidate(candidate)
+                try:
+                    if not channel:
+                        logger.warning("Received null data channel")
+                        return
+                    logger.info(f"Received data channel: {channel.label}")
+                    if channel.label == "telemetry":
+                        logger.info("Metadata data channel received from peer")
+                        self.metadata_channel = channel
+                        
+                        @channel.on("message")
+                        def on_message(message):
+                            try:
+                                if not message:
+                                    logger.debug("Received empty message from peer channel")
+                                    return
+                                self.latest_metadata = json.loads(message)
+                                logger.debug(f"Received metadata from peer: frame {self.latest_metadata.get('frameNumber', 'N/A')}")
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Failed to parse metadata from peer: {e}")
+                            except Exception as e:
+                                logger.error(f"Error handling peer metadata message: {e}")
+                        
+                        @channel.on("close")
+                        def on_peer_channel_close():
+                            logger.warning("Peer metadata channel closed")
+                            
+                        @channel.on("error")
+                        def on_peer_channel_error(error):
+                            logger.error(f"Peer metadata channel error: {error}")
+                except Exception as e:
+                    logger.error(f"Error handling incoming data channel: {e}")
             
             # Start listening for signaling messages
+            logger.info("Waiting for SDP offer from server...")
             await self._handle_signaling()
             
         except Exception as e:
@@ -152,22 +214,52 @@ class DroneVideoReceiver:
             raise
     
     async def _handle_signaling(self):
-        """Handle incoming signaling messages."""
+        """Handle incoming signaling messages and keep connection alive."""
         try:
-            async for message in self.websocket:
-                data = json.loads(message)
-                msg_type = data.get('type')
-                
-                logger.debug(f"Received signaling message: {msg_type}")
-                
-                if msg_type == 'offer':
-                    await self._handle_offer(data)
-                elif msg_type == 'answer':
-                    await self._handle_answer(data)
-                elif msg_type == 'candidate':
-                    await self._handle_ice_candidate(data)
-                else:
-                    logger.warning(f"Unknown message type: {msg_type}")
+            # Create a task for receiving messages
+            async def receive_messages():
+                async for message in self.websocket:
+                    try:
+                        data = json.loads(message)
+                        msg_type = data.get('type')
+                        
+                        logger.debug(f"Received signaling message: {msg_type}")
+                        
+                        if msg_type == 'offer':
+                            logger.info("Received offer from server")
+                            await self._handle_offer(data)
+                        elif msg_type == 'answer':
+                            logger.warning("Received unexpected answer (viewer should receive offers)")
+                            await self._handle_answer(data)
+                        elif msg_type == 'candidate':
+                            await self._handle_ice_candidate(data)
+                        elif msg_type == 'ping':
+                            # Respond to keep-alive pings
+                            await self.websocket.send(json.dumps({'type': 'pong'}))
+                    except Exception as e:
+                        logger.error(f"Error processing signaling message: {e}")
+            
+            # Run message handler and keep connection alive
+            receive_task = asyncio.ensure_future(receive_messages())
+            
+            # Keep the connection alive while running
+            while self.running:
+                try:
+                    # Just check periodically if we're still supposed to be running
+                    await asyncio.sleep(1.0)
+                except asyncio.CancelledError:
+                    logger.info("Signaling handler cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in signaling loop: {e}")
+                    break
+            
+            # Clean up
+            receive_task.cancel()
+            try:
+                await receive_task
+            except asyncio.CancelledError:
+                pass
                     
         except websockets.exceptions.ConnectionClosed:
             logger.info("WebSocket connection closed")
@@ -226,27 +318,37 @@ class DroneVideoReceiver:
         """Process incoming video frames."""
         logger.info("Starting video track processing...")
         
+        # Log track info safely (RemoteStreamTrack doesn't have codec attribute)
+        track_info = f"kind={track.kind}"
+        if hasattr(track, 'width') and track.width:
+            track_info += f", dimensions={track.width}x{getattr(track, 'height', 'unknown')}"
+        logger.info(f"Track info: {track_info}")
+        
         # Setup video recorder if saving video
-        if self.save_video:
+        if self.save_video and self.save_video.strip():
             self.recorder = MediaRecorder(self.save_video)
             self.recorder.addTrack(track)
             await self.recorder.start()
             logger.info(f"Recording video to: {self.save_video}")
         
-        while True:
+        frame_warnings = 0
+        while self.running:
             try:
-                frame = await track.recv()
+                frame = await asyncio.wait_for(track.recv(), timeout=5.0)
                 self.frame_count += 1
                 
                 # Convert to numpy array for OpenCV
                 img = frame.to_ndarray(format="bgr24")
                 self.latest_frame = img
                 
+                # Reset frame warning counter on successful frame
+                frame_warnings = 0
+                
                 # Calculate FPS
                 if self.start_time and self.frame_count % 30 == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frame_count / elapsed
-                    logger.info(f"Frames: {self.frame_count}, FPS: {fps:.2f}")
+                    logger.info(f"Frames: {self.frame_count}, FPS: {fps:.2f}, Resolution: {img.shape[1]}x{img.shape[0]}")
                 
                 # Save individual frames if requested
                 if self.save_frames and self.frame_count % 10 == 0:  # Save every 10th frame
@@ -366,6 +468,13 @@ class DroneVideoReceiver:
                         cv2.imwrite(filename, img)
                         logger.info(f"Saved snapshot: {filename}")
                         
+            except asyncio.TimeoutError:
+                frame_warnings += 1
+                if frame_warnings % 5 == 0:  # Log every 5 timeouts
+                    logger.warning(f"No frames received for 5 seconds (timeouts: {frame_warnings})")
+                if frame_warnings > 12:  # More than 60 seconds
+                    logger.error("No frames received for over 60 seconds, closing")
+                    break
             except Exception as e:
                 logger.error(f"Error processing frame: {e}")
                 break
@@ -375,24 +484,67 @@ class DroneVideoReceiver:
             await self.recorder.stop()
         if not self.headless:
             cv2.destroyAllWindows()
+        logger.info(f"Video track handler finished after {self.frame_count} frames")
     
     async def close(self):
-        """Close all connections."""
-        if self.recorder:
-            await self.recorder.stop()
-        if self.pc:
-            await self.pc.close()
-        if self.websocket:
-            await self.websocket.close()
-        if not self.headless:
-            cv2.destroyAllWindows()
-        logger.info("Connections closed")
+        """Close all connections with proper null checks."""
+        self.running = False
+        try:
+            if self.video_track_task and not self.video_track_task.done():
+                try:
+                    self.video_track_task.cancel()
+                    await self.video_track_task
+                except (asyncio.CancelledError, Exception) as e:
+                    if not isinstance(e, asyncio.CancelledError):
+                        logger.error(f"Error cancelling video task: {e}")
+            
+            if self.recorder:
+                try:
+                    await self.recorder.stop()
+                except Exception as e:
+                    logger.error(f"Error stopping recorder: {e}")
+            
+            if self.metadata_channel:
+                try:
+                    # Close data channel if still open
+                    if hasattr(self.metadata_channel, 'close'):
+                        self.metadata_channel.close()
+                except Exception as e:
+                    logger.error(f"Error closing metadata channel: {e}")
+                finally:
+                    self.metadata_channel = None
+            
+            if self.pc:
+                try:
+                    await self.pc.close()
+                except Exception as e:
+                    logger.error(f"Error closing peer connection: {e}")
+                finally:
+                    self.pc = None
+            
+            if self.websocket:
+                try:
+                    await self.websocket.close()
+                except Exception as e:
+                    logger.error(f"Error closing websocket: {e}")
+                finally:
+                    self.websocket = None
+            
+            if not self.headless:
+                try:
+                    cv2.destroyAllWindows()
+                except Exception as e:
+                    logger.error(f"Error destroying windows: {e}")
+            
+            logger.info("Connections closed successfully")
+        except Exception as e:
+            logger.error(f"Error in close(): {e}")
 
 
 async def main():
     parser = argparse.ArgumentParser(description='WebRTC Drone Video Viewer')
     parser.add_argument('--server', '-s', required=True,
-                       help='WebSocket server URL (e.g., ws://192.168.1.100:8081)')
+                       help='WebSocket server URL (e.g., ws://192.168.1.100:8082)')
     parser.add_argument('--headless', action='store_true',
                        help='Run without displaying video (for servers)')
     parser.add_argument('--save-video', '-v', type=str,
@@ -406,6 +558,14 @@ async def main():
     
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
+    
+    logger.info(f"Connecting to: {args.server}")
+    logger.info(f"Headless mode: {args.headless}")
+    if args.save_video:
+        logger.info(f"Saving video to: {args.save_video}")
+    if args.save_frames:
+        logger.info(f"Saving frames to: {args.save_frames}")
     
     receiver = DroneVideoReceiver(
         server_url=args.server,
@@ -418,9 +578,11 @@ async def main():
         await receiver.connect()
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
+        receiver.running = False
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error: {e}", exc_info=True)
     finally:
+        receiver.running = False
         await receiver.close()
 
 
