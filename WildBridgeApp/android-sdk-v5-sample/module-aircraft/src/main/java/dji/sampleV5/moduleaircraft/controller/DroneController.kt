@@ -23,6 +23,16 @@ import dji.sampleV5.aircraft.utils.wpml.WaypointInfoModel
 import dji.v5.manager.aircraft.waypoint3.WaypointMissionManager
 import dji.v5.utils.common.ContextUtil
 import dji.sdk.wpmz.value.mission.*
+import dji.sdk.wpmz.value.mission.WaylineActionInfo
+import dji.sdk.wpmz.value.mission.WaylineActionType
+import dji.sdk.wpmz.value.mission.ActionGimbalRotateParam
+import dji.sdk.wpmz.value.mission.WaylineGimbalActuatorRotateMode
+import dji.sdk.wpmz.value.mission.WaylineActionGroup
+import dji.sdk.wpmz.value.mission.WaylineActionTrigger
+import dji.sdk.wpmz.value.mission.WaylineActionTriggerType
+import dji.sdk.wpmz.value.mission.WaylineActionNodeList
+import dji.sdk.wpmz.value.mission.WaylineActionTreeNode
+import dji.sdk.wpmz.value.mission.WaylineActionsRelationType
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -639,16 +649,26 @@ object DroneController {
         waypoint.useGlobalYawParam = false
         waypoint.isWaylineWaypointYawParamSet = true
 
-        val gimbalParam = WaylineWaypointGimbalHeadingParam().apply {
-            headingMode = WaylineWaypointGimbalHeadingMode.find(0)
-            pitchAngle = 30.0
-        }
-        waypoint.gimbalHeadingParam = gimbalParam
-        waypoint.isWaylineWaypointGimbalHeadingParamSet = true
-        waypoint.useGlobalGimbalHeadingParam = false
+        // Set gimbal pitch angle directly on the waypoint
+        waypoint.gimbalPitchAngle = -90.0  // Gimbal looking straight down during trajectory following
+
+        // Use global gimbal heading param (set at template level)
+        waypoint.useGlobalGimbalHeadingParam = true
 
         waypointInfo.waylineWaypoint = waypoint
-        waypointInfo.actionInfos = ArrayList()
+
+        // Create gimbal rotate action to set pitch to -90 degrees (looking straight down)
+        val gimbalRotateParam = ActionGimbalRotateParam()
+        gimbalRotateParam.setEnablePitch(true)
+        gimbalRotateParam.setPitch(-90.0)  // Look straight down
+        gimbalRotateParam.setRotateMode(WaylineGimbalActuatorRotateMode.ABSOLUTE_ANGLE)
+        gimbalRotateParam.setPayloadPositionIndex(0)
+        
+        val gimbalAction = WaylineActionInfo()
+        gimbalAction.setActionType(WaylineActionType.GIMBAL_ROTATE)
+        gimbalAction.setGimbalRotateParam(gimbalRotateParam)
+        
+        waypointInfo.actionInfos = arrayListOf(gimbalAction)
         return waypointInfo
     }
 
@@ -681,11 +701,11 @@ object DroneController {
         val waypoints = waypointInfoModels.map { it.waylineWaypoint }
         val info = WaylineTemplateWaypointInfo()
         info.waypoints = waypoints
-        info.actionGroups = ArrayList()
+        info.actionGroups = transformActionsToGroups(waypointInfoModels)  // Build proper action groups
         info.globalFlightHeight = 100.0
         info.isGlobalFlightHeightSet = true
-        info.globalTurnMode = WaylineWaypointTurnMode.TO_POINT_AND_PASS_WITH_CONTINUITY_CURVATURE
-        info.useStraightLine = false
+        info.globalTurnMode = WaylineWaypointTurnMode.TO_POINT_AND_STOP_WITH_DISCONTINUITY_CURVATURE
+        info.useStraightLine = true
         info.isTemplateGlobalTurnModeSet = true
 
         val poi = if (waypoints.isNotEmpty()) {
@@ -700,8 +720,68 @@ object DroneController {
         }
         info.globalYawParam = yawParam
         info.isTemplateGlobalYawParamSet = true
-        info.pitchMode = WaylineWaypointPitchMode.USE_POINT_SETTING
+        
+        // Set global gimbal heading param to look straight down (-90 degrees pitch)
+        val globalGimbalParam = WaylineWaypointGimbalHeadingParam()
+        globalGimbalParam.headingMode = WaylineWaypointGimbalHeadingMode.find(0)
+        globalGimbalParam.pitchAngle = -90.0  // Look straight down
+        info.globalGimbalHeadingParam = globalGimbalParam
+        info.isTemplateGlobalGimbalHeadingParamSet = true
+        
+        info.pitchMode = WaylineWaypointPitchMode.USE_POINT_SETTING  // Use point setting to apply gimbal pitch
         return info
+    }
+
+    // Transform waypoint actions into proper action groups for KMZ
+    private fun transformActionsToGroups(waypointInfoModels: List<WaypointInfoModel>): ArrayList<WaylineActionGroup> {
+        val actionGroups = ArrayList<WaylineActionGroup>()
+        
+        for (i in waypointInfoModels.indices) {
+            val actionInfos = waypointInfoModels[i].actionInfos
+            if (actionInfos.isNotEmpty()) {
+                val actionGroup = WaylineActionGroup()
+                
+                // Set trigger to execute when reaching waypoint
+                val trigger = WaylineActionTrigger()
+                trigger.setTriggerType(WaylineActionTriggerType.REACH_POINT)
+                actionGroup.setTrigger(trigger)
+                
+                actionGroup.setGroupId(actionGroups.size)
+                actionGroup.setStartIndex(i)
+                actionGroup.setEndIndex(i)
+                actionGroup.setActions(actionInfos)
+                
+                // Build action tree structure
+                val nodeLists = ArrayList<WaylineActionNodeList>()
+                
+                // Root node
+                val root = WaylineActionNodeList()
+                val treeNodes = ArrayList<WaylineActionTreeNode>()
+                val rootNode = WaylineActionTreeNode()
+                rootNode.setNodeType(WaylineActionsRelationType.SEQUENCE)
+                rootNode.setChildrenNum(actionInfos.size)
+                treeNodes.add(rootNode)
+                root.setNodes(treeNodes)
+                nodeLists.add(root)
+                
+                // Children nodes (one for each action)
+                val children = WaylineActionNodeList()
+                val childrenNodeList = ArrayList<WaylineActionTreeNode>()
+                for (j in actionInfos.indices) {
+                    val child = WaylineActionTreeNode()
+                    child.setNodeType(WaylineActionsRelationType.LEAF)
+                    child.setActionIndex(j)
+                    childrenNodeList.add(child)
+                }
+                children.setNodes(childrenNodeList)
+                nodeLists.add(children)
+                
+                actionGroup.setNodeLists(nodeLists)
+                actionGroups.add(actionGroup)
+            }
+        }
+        
+        return actionGroups
     }
 
     private fun createTemplate(waypointInfoModels: List<WaypointInfoModel>): Template {

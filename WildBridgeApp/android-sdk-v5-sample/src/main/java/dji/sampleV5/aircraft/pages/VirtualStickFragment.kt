@@ -1,6 +1,5 @@
 package dji.sampleV5.aircraft.pages
 import android.annotation.SuppressLint
-import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -8,7 +7,6 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewGroup
-import android.widget.TextView
 import androidx.fragment.app.activityViewModels
 import dji.sampleV5.aircraft.databinding.FragVirtualStickPageBinding
 import dji.sampleV5.aircraft.keyvalue.KeyValueDialogUtil
@@ -105,7 +103,7 @@ class VirtualStickFragment : DJIFragment() {
     // WebRTC streaming
     private var webRTCStreamer: WebRTCStreamer? = null
     private var isWebRTCMode = true  // Start with WebRTC by default
-    private val WEBRTC_PORT = 8082  // Use different port than telemetry server
+    private val wEBRTCPORT = 8082  // Use different port than telemetry server
 
     // --- Remaining flight time style data (similar to RemainingFlightTimeWidgetModel) ---
     private val chargeRemainingProcessor: DataProcessor<Int> = DataProcessor.create(0)
@@ -518,6 +516,7 @@ class VirtualStickFragment : DJIFragment() {
         return binding?.root
     }
 
+    @SuppressLint("SetTextI18n")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
@@ -574,10 +573,10 @@ class VirtualStickFragment : DJIFragment() {
         simulatorVM.simulatorStateSb.observe(viewLifecycleOwner) {
             binding?.simulatorStateInfoTv?.text = it
         }
-        liveStreamVM.streamQuality.observe(viewLifecycleOwner) {
+        liveStreamVM.streamQuality.observe(viewLifecycleOwner) { it ->
             // Only update if in RTSP mode
             if (!isWebRTCMode) {
-                binding?.streamQualityInfoTv?.text = "RTSP: $it"
+                "RTSP: $it".also { binding?.streamQualityInfoTv?.text = it }
             }
         }
 
@@ -723,11 +722,12 @@ class VirtualStickFragment : DJIFragment() {
         webRTCStreamer = WebRTCStreamer(
             context = requireContext(),
             cameraIndex = cameraIndex,
-            signalingPort = WEBRTC_PORT,
+            signalingPort = wEBRTCPORT,
             options = WebRTCMediaOptions()
         )
         
         webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
+            @SuppressLint("SetTextI18n")
             override fun onServerStarted(ip: String, port: Int) {
                 mainHandler.post {
                     ToastUtils.showToast("WebRTC server started at ws://$ip:$port")
@@ -735,12 +735,14 @@ class VirtualStickFragment : DJIFragment() {
                 }
             }
 
+            @SuppressLint("SetTextI18n")
             override fun onServerStopped() {
                 mainHandler.post {
                     binding?.streamQualityInfoTv?.text = "WebRTC: Stopped"
                 }
             }
 
+            @SuppressLint("SetTextI18n")
             override fun onServerError(error: String) {
                 mainHandler.post {
                     ToastUtils.showToast("WebRTC error: $error")
@@ -748,12 +750,14 @@ class VirtualStickFragment : DJIFragment() {
                 }
             }
 
+            @SuppressLint("SetTextI18n")
             override fun onClientConnected(clientId: String, totalClients: Int) {
                 mainHandler.post {
                     binding?.streamQualityInfoTv?.text = "WebRTC: $totalClients client(s)"
                 }
             }
 
+            @SuppressLint("SetTextI18n")
             override fun onClientDisconnected(clientId: String, totalClients: Int) {
                 mainHandler.post {
                     binding?.streamQualityInfoTv?.text = "WebRTC: $totalClients client(s)"
@@ -762,7 +766,7 @@ class VirtualStickFragment : DJIFragment() {
         }
         
         webRTCStreamer?.start()
-        Log.i("VirtualStickFragment", "WebRTC streamer started on port $WEBRTC_PORT")
+        Log.i("VirtualStickFragment", "WebRTC streamer started on port $wEBRTCPORT")
     }
     
     private fun stopWebRTCStream() {
@@ -789,6 +793,7 @@ class VirtualStickFragment : DJIFragment() {
 
         // Start the stream
         liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
+            @SuppressLint("SetTextI18n")
             override fun onSuccess() {
                 mainHandler.post {
                     ToastUtils.showToast("RTSP stream started successfully")
@@ -840,6 +845,7 @@ class VirtualStickFragment : DJIFragment() {
         }
     }
     
+    @SuppressLint("SetTextI18n")
     private fun displayCameraZoomRatios() {
         try {
             val zoomRatiosRange = zoomRatiosRangeKey.get()
@@ -1010,7 +1016,7 @@ class VirtualStickFragment : DJIFragment() {
             override fun run() {
                 val currentBatteryLevel = getBatteryLevel()
                 mainHandler.post {
-                    binding?.batteryLevelTv?.text = "Battery Level: $currentBatteryLevel%"
+                    "Battery Level: $currentBatteryLevel%".also { binding?.batteryLevelTv?.text = it }
                 }
                 mainHandler.postDelayed(this, 1000) // Update every second
             }
