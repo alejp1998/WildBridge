@@ -86,6 +86,12 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false"/>
 
+        <activity android:name=".WildBridgeDefaultLayoutActivity"
+            android:theme="@style/full_screen_theme"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"/>
+
         <activity android:name="dji.v5.ux.sample.showcase.widgetlist.WidgetsActivity"
             android:theme="@style/full_screen_theme"
             android:screenOrientation="landscape"
