@@ -175,10 +175,18 @@ class DjiNode(Node):
 
         def connection_attempt():
             try:
-                # Try to send a simple request to verify connection
-                response = self.dji_interface.requestSend("/", "", verbose=True)
-                self.get_logger().info(f"Connection attempt response: {response}")
-                return True
+                # Try to get config to verify connection (cleaner than probing /)
+                config = get_config(self.ip_rc)
+                if config:
+                    self.get_logger().info(f"Connection verified. Drone config: {config}")
+                    return True
+                
+                # Fallback to old method if config fails but maybe server is up
+                response = self.dji_interface.requestSend("/", "", verbose=False)
+                if response:
+                    self.get_logger().info("Connection verified (via fallback probe).")
+                    return True
+                return False
             except RequestException as e:
                 self.get_logger().error(f"Connection failed: {e}")
                 return False
