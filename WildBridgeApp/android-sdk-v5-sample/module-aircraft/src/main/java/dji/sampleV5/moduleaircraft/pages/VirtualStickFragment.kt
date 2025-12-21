@@ -859,6 +859,7 @@ class VirtualStickFragment : DJIFragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        mainHandler.removeCallbacksAndMessages(null)
         stopRtspStream()
         httpServer?.stop()
         stopCameraStream()

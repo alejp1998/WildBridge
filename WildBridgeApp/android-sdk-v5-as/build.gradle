@@ -12,7 +12,7 @@ buildscript {
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.4.2'
+        classpath 'com.android.tools.build:gradle:8.6.1'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$KOTLIN_VERSION"
     }
 }
@@ -34,6 +34,14 @@ allprojects {
             flatDir {
                 dirs new File(rootProject.projectDir.getAbsolutePath() + '/libs')
             }
+        }
+    }
+
+    // Fix for duplicate class errors between kotlin-stdlib and kotlin-stdlib-jdk8
+    configurations.all {
+        resolutionStrategy.dependencySubstitution {
+            substitute module("org.jetbrains.kotlin:kotlin-stdlib-jdk7") using module("org.jetbrains.kotlin:kotlin-stdlib:$KOTLIN_VERSION")
+            substitute module("org.jetbrains.kotlin:kotlin-stdlib-jdk8") using module("org.jetbrains.kotlin:kotlin-stdlib:$KOTLIN_VERSION")
         }
     }
 }

@@ -21,9 +21,12 @@ setup(
     maintainer_email='edr@mmmi.sdu.dk',
     description='MAVROS-compatible ROS 2 interface for WildBridge DJI drone control',
     license='MIT',
+    scripts=['scripts/auto_discover_launch.sh'],
     entry_points={
         'console_scripts': [
-            'mavros_bridge = wildbridge_mavros.mavros_bridge:main'
+            'mavros_bridge = wildbridge_mavros.mavros_bridge:main',
+            'auto_launch = wildbridge_mavros.auto_launch:main',
+            'auto_mavros_bridge = wildbridge_mavros.auto_mavros_bridge:main',
         ],
     },
 )
