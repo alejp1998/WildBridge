@@ -7,7 +7,7 @@ Discovers drone, queries configuration, then launches node with proper namespace
 import sys
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
-from wildbridge_mavros.dji_interface import discover_drone, get_config
+from wildbridge_mavros.dji_interface import discover_all_drones, get_config
 from wildbridge_mavros.mavros_bridge import WildBridgeMavrosNode
 
 
@@ -18,12 +18,19 @@ def main(args=None):
     print("=" * 60)
     
     # Discover drone
-    print("Discovering drone...")
-    discovered_ip, drone_name = discover_drone(timeout=5.0, verbose=True)
+    print("Discovering drones...")
+    drones = discover_all_drones(timeout=5.0, verbose=True)
     
-    if not discovered_ip:
-        print("ERROR: Failed to discover drone!")
+    if not drones:
+        print("ERROR: Failed to discover any drones!")
         return 1
+    
+    if len(drones) > 1:
+        print(f"⚠ Found {len(drones)} drones! Using the first one.")
+        for i, (ip, name) in enumerate(drones):
+            print(f"  {i+1}. {name} at {ip}")
+    
+    discovered_ip, drone_name = drones[0]
     
     print(f"✓ Discovered drone at {discovered_ip}")
     

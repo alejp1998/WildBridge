@@ -50,14 +50,14 @@ def get_local_ips():
     
     return ip_list
 
-def scan_subnet_for_drone(local_ips, timeout=0.1, verbose=True):
+def scan_subnet_for_drones(local_ips, timeout=0.1, verbose=True):
     """
-    Scan subnet for WildBridge drone using direct UDP probing.
-    This is a fallback when broadcast discovery fails.
-    Returns tuple of (drone_ip, drone_name) or (None, None)
+    Scan subnet for WildBridge drones using direct UDP probing.
+    Returns list of tuples [(drone_ip, drone_name), ...]
     """
+    found_drones = {}
     if verbose:
-        print("Scanning subnet for WildBridge drone...")
+        print("Scanning subnet for WildBridge drones...")
     
     for local_ip in local_ips:
         parts = local_ip.split('.')
@@ -80,14 +80,12 @@ def scan_subnet_for_drone(local_ips, timeout=0.1, verbose=True):
                     data, addr = sock.recvfrom(1024)
                     message = data.decode('utf-8')
                     if message.startswith(DISCOVERY_RESPONSE_PREFIX):
-                        # Parse: WILDBRIDGE_HERE:192.168.0.17:alpha
                         parts = message.split(':')
                         drone_ip = parts[1] if len(parts) > 1 else addr[0]
                         drone_name = parts[2] if len(parts) > 2 else "UNKNOWN"
                         if verbose:
                             print(f"Found WildBridge drone at {drone_ip} (Name: {drone_name})")
-                        sock.close()
-                        return drone_ip, drone_name
+                        found_drones[drone_ip] = drone_name
                 except socket.timeout:
                     pass
                 
@@ -95,18 +93,19 @@ def scan_subnet_for_drone(local_ips, timeout=0.1, verbose=True):
             except:
                 pass
     
-    return None, None
+    return list(found_drones.items())
 
-def discover_drone(timeout=5.0, verbose=True):
+def discover_all_drones(timeout=5.0, verbose=True):
     """
-    Discover WildBridge drone on the network.
-    First tries UDP broadcast, then falls back to subnet scanning.
-    Returns tuple of (drone_ip, drone_name) or (None, None) if not found.
+    Discover all WildBridge drones on the network.
+    Returns list of tuples [(drone_ip, drone_name), ...]
     """
+    found_drones = {}
+    
     # Try broadcast first
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.settimeout(2.0)
+    sock.settimeout(timeout)
     
     try:
         sock.sendto(DISCOVERY_MSG, ('<broadcast>', DISCOVERY_PORT))
@@ -114,35 +113,45 @@ def discover_drone(timeout=5.0, verbose=True):
             print(f"Broadcasting discovery message on port {DISCOVERY_PORT}...")
         
         start_time = time.time()
-        while time.time() - start_time < 2.0:
+        while time.time() - start_time < timeout:
             try:
                 data, addr = sock.recvfrom(1024)
                 message = data.decode('utf-8')
                 if message.startswith(DISCOVERY_RESPONSE_PREFIX):
-                    # Parse: WILDBRIDGE_HERE:192.168.0.17:alpha
                     parts = message.split(':')
                     drone_ip = parts[1] if len(parts) > 1 else None
                     drone_name = parts[2] if len(parts) > 2 else "UNKNOWN"
-                    if drone_ip:
+                    if drone_ip and drone_ip not in found_drones:
                         if verbose:
-                            print(f"Found WildBridge drone at {drone_ip} (Name: {drone_name}, via broadcast)")
-                        sock.close()
-                        return drone_ip, drone_name
+                            print(f"Found WildBridge drone at {drone_ip} (Name: {drone_name})")
+                        found_drones[drone_ip] = drone_name
             except socket.timeout:
-                break
+                continue
     except Exception as e:
         if verbose:
             print(f"Broadcast discovery failed: {e}")
     finally:
         sock.close()
     
-    # Fallback to subnet scanning
-    if verbose:
-        print("Broadcast failed, scanning subnet...")
-    local_ips = get_local_ips()
-    if local_ips:
-        return scan_subnet_for_drone(local_ips, timeout=0.1, verbose=verbose)
+    if not found_drones:
+        if verbose:
+            print("Broadcast found no drones, scanning subnet...")
+        local_ips = get_local_ips()
+        if local_ips:
+            subnet_drones = scan_subnet_for_drones(local_ips, timeout=0.1, verbose=verbose)
+            for ip, name in subnet_drones:
+                found_drones[ip] = name
     
+    return list(found_drones.items())
+
+def discover_drone(timeout=5.0, verbose=True):
+    """
+    Discover a single WildBridge drone.
+    Returns tuple (drone_ip, drone_name) or (None, None).
+    """
+    drones = discover_all_drones(timeout, verbose)
+    if drones:
+        return drones[0]
     return None, None
 
 # HTTP POST Command Endpoints (port 8080)
