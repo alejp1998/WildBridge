@@ -26,12 +26,17 @@ class DjiNode(Node):
         self.get_logger().info("Node Initialisation")
 
         # Retrieve the drone's IP address from the parameter server
-        self.declare_parameter('ip_rc', '192.168.50.27')  # Default IP
+        self.declare_parameter('ip_rc', '')  # Default IP (empty for auto-discovery)
         self.ip_rc = self.get_parameter(
             'ip_rc').get_parameter_value().string_value
 
         # Initialize the DJI drone interface
         self.dji_interface = DJIInterface(self.ip_rc)
+        
+        # Update IP if discovered
+        if not self.ip_rc and self.dji_interface.IP_RC:
+            self.ip_rc = self.dji_interface.IP_RC
+            self.get_logger().info(f"Discovered drone at {self.ip_rc}")
 
         # Verify the connection to the drone
         if not self.verify_connection():

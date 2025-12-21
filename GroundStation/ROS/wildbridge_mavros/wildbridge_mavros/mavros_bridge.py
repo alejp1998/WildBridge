@@ -76,18 +76,29 @@ class WildBridgeMavrosNode(Node):
         self.get_logger().info("Initializing WildBridge MAVROS Bridge...")
         
         # Parameters
-        self.declare_parameter('drone_ip', '192.168.1.100')
+        self.declare_parameter('drone_ip', '')  # Empty default for auto-discovery
         self.declare_parameter('system_id', 1)
         self.declare_parameter('component_id', 1)
         self.declare_parameter('telemetry_rate', 20.0)  # Hz
         
         self.drone_ip = self.get_parameter('drone_ip').get_parameter_value().string_value
-        self.system_id = self.get_parameter('system_id').get_parameter_value().integer_value
-        self.component_id = self.get_parameter('component_id').get_parameter_value().integer_value
         self.telemetry_rate = self.get_parameter('telemetry_rate').get_parameter_value().double_value
         
+        if not self.drone_ip:
+            self.get_logger().info("No drone_ip provided, attempting auto-discovery...")
+        else:
+            self.get_logger().info(f"Connecting to drone at {self.drone_ip}...")
+
         # Initialize DJI interface
         self.dji = DJIInterface(self.drone_ip)
+        
+        # Update drone_ip if discovered
+        if not self.drone_ip and self.dji.IP_RC:
+            self.drone_ip = self.dji.IP_RC
+            drone_name = getattr(self.dji, 'drone_name', 'UNKNOWN')
+            self.get_logger().info(f"Discovered and connected to drone at {self.drone_ip} (Name: {drone_name})")
+        elif not self.drone_ip:
+            self.get_logger().warn("Failed to discover drone. Connection may fail.")
         
         # State tracking
         self.armed = False
@@ -288,16 +299,16 @@ class WildBridgeMavrosNode(Node):
             gps_msg = NavSatFix()
             gps_msg.header.stamp = now
             gps_msg.header.frame_id = 'earth'
-            gps_msg.latitude = location.get('latitude', 0.0)
-            gps_msg.longitude = location.get('longitude', 0.0)
-            gps_msg.altitude = location.get('altitude', 0.0)
+            gps_msg.latitude = float(location.get('latitude', 0.0))
+            gps_msg.longitude = float(location.get('longitude', 0.0))
+            gps_msg.altitude = float(location.get('altitude', 0.0))
             gps_msg.status.status = NavSatStatus.STATUS_FIX
             gps_msg.status.service = NavSatStatus.SERVICE_GPS
             self.global_position_pub.publish(gps_msg)
             
             # Relative altitude
             alt_msg = Float64()
-            alt_msg.data = location.get('altitude', 0.0)
+            alt_msg.data = float(location.get('altitude', 0.0))
             self.rel_alt_pub.publish(alt_msg)
         
         # Publish home position
@@ -306,8 +317,8 @@ class WildBridgeMavrosNode(Node):
             home_msg = NavSatFix()
             home_msg.header.stamp = now
             home_msg.header.frame_id = 'earth'
-            home_msg.latitude = home_location.get('latitude', 0.0)
-            home_msg.longitude = home_location.get('longitude', 0.0)
+            home_msg.latitude = float(home_location.get('latitude', 0.0))
+            home_msg.longitude = float(home_location.get('longitude', 0.0))
             home_msg.altitude = 0.0  # Home altitude typically at ground level
             self.home_position_pub.publish(home_msg)
         
@@ -318,20 +329,20 @@ class WildBridgeMavrosNode(Node):
         
         # Convert GPS to local coordinates (simplified: meters from home)
         if location and home_location:
-            lat_diff = location.get('latitude', 0.0) - home_location.get('latitude', 0.0)
-            lon_diff = location.get('longitude', 0.0) - home_location.get('longitude', 0.0)
+            lat_diff = float(location.get('latitude', 0.0)) - float(home_location.get('latitude', 0.0))
+            lon_diff = float(location.get('longitude', 0.0)) - float(home_location.get('longitude', 0.0))
             # Approximate conversion to meters (at equator 1 degree ≈ 111km)
-            pose_msg.pose.position.x = lon_diff * 111000 * math.cos(math.radians(location.get('latitude', 0.0)))
-            pose_msg.pose.position.y = lat_diff * 111000
-            pose_msg.pose.position.z = location.get('altitude', 0.0)
+            pose_msg.pose.position.x = float(lon_diff * 111000 * math.cos(math.radians(float(location.get('latitude', 0.0)))))
+            pose_msg.pose.position.y = float(lat_diff * 111000)
+            pose_msg.pose.position.z = float(location.get('altitude', 0.0))
         
         # Orientation from attitude
         attitude = telemetry.get('attitude', {})
         if attitude:
             # Convert euler to quaternion
-            roll = math.radians(attitude.get('roll', 0.0))
-            pitch = math.radians(attitude.get('pitch', 0.0))
-            yaw = math.radians(attitude.get('yaw', 0.0))
+            roll = math.radians(float(attitude.get('roll', 0.0)))
+            pitch = math.radians(float(attitude.get('pitch', 0.0)))
+            yaw = math.radians(float(attitude.get('yaw', 0.0)))
             q = self._euler_to_quaternion(roll, pitch, yaw)
             pose_msg.pose.orientation = q
         
@@ -343,9 +354,9 @@ class WildBridgeMavrosNode(Node):
             vel_msg = TwistStamped()
             vel_msg.header.stamp = now
             vel_msg.header.frame_id = 'base_link'
-            vel_msg.twist.linear.x = speed.get('x', 0.0)
-            vel_msg.twist.linear.y = speed.get('y', 0.0)
-            vel_msg.twist.linear.z = speed.get('z', 0.0)
+            vel_msg.twist.linear.x = float(speed.get('x', 0.0))
+            vel_msg.twist.linear.y = float(speed.get('y', 0.0))
+            vel_msg.twist.linear.z = float(speed.get('z', 0.0))
             self.local_velocity_pub.publish(vel_msg)
         
         # Publish IMU data
@@ -361,16 +372,18 @@ class WildBridgeMavrosNode(Node):
         if battery_level >= 0:
             battery_msg = BatteryState()
             battery_msg.header.stamp = now
-            battery_msg.percentage = battery_level / 100.0
+            battery_msg.percentage = float(battery_level) / 100.0
             battery_msg.voltage = 0.0  # Not available from DJI
             battery_msg.present = True
             self.battery_pub.publish(battery_msg)
         
         # Publish satellite count
         sat_count = telemetry.get('satelliteCount', 0)
-        sat_msg = UInt32()
-        sat_msg.data = int(sat_count)
-        self.gps_satellites_pub.publish(sat_msg)
+        if sat_count is not None:
+            sat_msg = UInt32()
+            sat_val = int(sat_count) if sat_count >= 0 else 0
+            sat_msg.data = max(0, min(sat_val, 4294967295))  # Clamp to uint32 range
+            self.gps_satellites_pub.publish(sat_msg)
         
         # Publish heading
         heading = telemetry.get('heading', 0.0)

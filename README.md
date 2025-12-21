@@ -46,6 +46,13 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 - **Scientific Applications**: Proven in conservation, wildfire detection, and atmospheric research
 - **Cross-platform Integration**: Compatible with Python, ROS 2, and standard TCP/HTTP clients
 
+### Drone Identity & Discovery
+
+WildBridge now supports user-configurable drone names for easier fleet management:
+- **Custom Naming**: Set a unique name (e.g., "RedScout", "Bravo") directly in the app by clicking the name display on the home screen.
+- **Auto-Discovery**: Ground station tools automatically discover drones on the network and identify them by name.
+- **Dynamic Namespaces**: ROS nodes automatically launch with namespaces matching the drone name (e.g., `/drone_RedScout/location`), eliminating manual configuration.
+
 ## Supported Hardware
 
 ### DJI Drones (Mobile SDK V5 Compatible)
@@ -503,18 +510,24 @@ GroundStation/ROS/
 - `/drone_N/command/gimbal_pitch` - Gimbal control
 
 #### Usage Example
+
+**Option 1: Auto-Discovery (Recommended)**
+The easiest way to connect is using the auto-discovery bridge, which finds your drone and sets up the ROS namespace automatically:
+
+```bash
+# Run with Docker (auto-discovers drone and sets namespace)
+docker run --rm --network=host wildbridge-ros
+```
+
+**Option 2: Manual Launch**
+For complex setups or swarms with known IPs:
+
 ```bash
 # Launch multi-drone system
 ros2 launch wildview_bringup swarm_connection.launch.py
 
-# Send takeoff command
-ros2 topic pub /drone_1/command/takeoff std_msgs/Empty
-
-# Navigate to waypoint [lat, lon, alt, yaw]
-ros2 topic pub /drone_1/command/goto_waypoint std_msgs/Float64MultiArray "{data: [49.306254, 4.593728, 20.0, 90.0]}"
-
-# Monitor telemetry
-ros2 topic echo /drone_1/location
+# Send takeoff command (namespace depends on drone name)
+ros2 topic pub /drone_RedScout/command/takeoff std_msgs/Empty
 ```
 
 This ROS2 implementation showcases how WildBridge's HTTP API can be wrapped for integration with existing robotics frameworks, enabling seamless multi-drone coordination in research applications.

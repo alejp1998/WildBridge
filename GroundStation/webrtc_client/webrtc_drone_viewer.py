@@ -30,6 +30,13 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRecorder
 from av import VideoFrame
 
+# Add parent directory to path to import djiInterface
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Python'))
+try:
+    from djiInterface import discover_drone
+except ImportError:
+    discover_drone = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -543,8 +550,8 @@ class DroneVideoReceiver:
 
 async def main():
     parser = argparse.ArgumentParser(description='WebRTC Drone Video Viewer')
-    parser.add_argument('--server', '-s', required=True,
-                       help='WebSocket server URL (e.g., ws://192.168.1.100:8082)')
+    parser.add_argument('--server', '-s', required=False,
+                       help='WebSocket server URL (e.g., ws://192.168.1.100:8082). If not provided, auto-discovery will be attempted.')
     parser.add_argument('--headless', action='store_true',
                        help='Run without displaying video (for servers)')
     parser.add_argument('--save-video', '-v', type=str,
@@ -560,7 +567,22 @@ async def main():
         logging.getLogger().setLevel(logging.DEBUG)
         logger.debug("Debug logging enabled")
     
-    logger.info(f"Connecting to: {args.server}")
+    server_url = args.server
+    if not server_url:
+        if discover_drone:
+            logger.info("No server URL provided. Attempting auto-discovery...")
+            drone_ip = discover_drone(timeout=5.0)
+            if drone_ip:
+                server_url = f"ws://{drone_ip}:8082"
+                logger.info(f"Discovered drone at {server_url}")
+            else:
+                logger.error("Failed to discover drone. Please provide --server URL.")
+                sys.exit(1)
+        else:
+            logger.error("Auto-discovery not available (djiInterface module not found). Please provide --server URL.")
+            sys.exit(1)
+    
+    logger.info(f"Connecting to: {server_url}")
     logger.info(f"Headless mode: {args.headless}")
     if args.save_video:
         logger.info(f"Saving video to: {args.save_video}")
@@ -568,7 +590,7 @@ async def main():
         logger.info(f"Saving frames to: {args.save_frames}")
     
     receiver = DroneVideoReceiver(
-        server_url=args.server,
+        server_url=server_url,
         headless=args.headless,
         save_video=args.save_video,
         save_frames=args.save_frames

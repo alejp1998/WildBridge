@@ -5,6 +5,25 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import android.widget.TextView
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import android.content.SharedPreferences
+import android.hardware.Sensor
+import android.widget.EditText
+import android.view.Menu
+import android.view.MenuItem
+import androidx.appcompat.app.AlertDialog
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
+import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
@@ -39,6 +58,8 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.io.PrintWriter
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -63,6 +84,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private const val HTTP_PORT = 8080
         private const val TELEMETRY_PORT = 8081
         private const val WEBRTC_PORT = 8082
+        private const val DISCOVERY_PORT = 30000
+        private const val DISCOVERY_MSG = "DISCOVER_WILDBRIDGE"
+        private const val DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -75,6 +99,60 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var httpServer: SimpleHttpServer? = null
     private var telemetryServer: TelemetryServer? = null
     private var webRTCStreamer: WebRTCStreamer? = null
+    
+    // Discovery
+    private var discoverySocket: DatagramSocket? = null
+    private var discoveryThread: Thread? = null
+    private var isDiscoveryRunning = false
+    private var droneSerialNumber: String = "UNKNOWN"
+    
+    // Drone Configuration
+    private lateinit var sharedPreferences: SharedPreferences
+    private var droneName: String = "drone_1"
+
+    // Phone Location
+    private var locationManager: LocationManager? = null
+    private var phoneLocation: Location? = null
+    private val locationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            phoneLocation = location
+        }
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
+    }
+
+    // Phone Sensors & Status
+    private var sensorManager: SensorManager? = null
+    private var wifiManager: WifiManager? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+    private var batteryManager: BatteryManager? = null
+    
+    private var phoneHeading: Double = 0.0
+    private var phonePressure: Float = 0.0f
+    
+    private val accelerometerReading = FloatArray(3)
+    private val magnetometerReading = FloatArray(3)
+    private val rotationMatrix = FloatArray(9)
+    private val orientationAngles = FloatArray(3)
+    
+    private val sensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+                System.arraycopy(event.values, 0, accelerometerReading, 0, accelerometerReading.size)
+            } else if (event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+                System.arraycopy(event.values, 0, magnetometerReading, 0, magnetometerReading.size)
+            } else if (event.sensor.type == Sensor.TYPE_PRESSURE) {
+                phonePressure = event.values[0]
+            }
+            
+            updateOrientationAngles()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            // Do nothing
+        }
+    }
     
     // Home point tracking
     private var isHomePointSetLatch = false
@@ -117,12 +195,40 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Initialize SharedPreferences
+        sharedPreferences = getSharedPreferences("WildBridgePrefs", Context.MODE_PRIVATE)
+        
+        // Load or prompt for drone name
+        loadDroneName()
+        
+        // Setup drone name display
+        setupDroneNameDisplay()
+        
         // Initialize ViewModels
         basicAircraftControlVM = ViewModelProvider(this)[BasicAircraftControlVM::class.java]
         virtualStickVM = ViewModelProvider(this)[VirtualStickVM::class.java]
         
         // Initialize DroneController
         DroneController.init(basicAircraftControlVM, virtualStickVM)
+
+        // Initialize LocationManager
+        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        startLocationUpdates()
+
+        // Initialize Phone Sensors & Managers
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        
+        // Acquire Multicast Lock to allow receiving UDP broadcasts
+        multicastLock = wifiManager?.createMulticastLock("WildBridgeMulticastLock")
+        multicastLock?.setReferenceCounted(true)
+        multicastLock?.acquire()
+        
+        batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        startSensorUpdates()
+        
+        // Get drone serial number
+        fetchDroneSerialNumber()
         
         // Setup key listeners for telemetry
         setupKeyListeners()
@@ -132,6 +238,25 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         
         // Show IP address
         showServerInfo()
+    }
+    
+    private fun setupDroneNameDisplay() {
+        // Find the TextView in the layout
+        val droneNameText = findViewById<TextView>(R.id.text_drone_name)
+        droneNameText?.let {
+            // Set initial text
+            it.text = droneName
+            
+            // Make it clickable to change drone name
+            it.setOnClickListener {
+                showDroneNameDialog(isFirstTime = false)
+            }
+        }
+    }
+    
+    private fun updateDroneNameDisplay() {
+        val droneNameText = findViewById<TextView>(R.id.text_drone_name)
+        droneNameText?.text = droneName
     }
 
     private fun setupKeyListeners() {
@@ -151,9 +276,104 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             timeNeededToLandProcessor.onNext(newValue?.timeNeededToLand ?: 0)
         }
     }
+    
+    private fun loadDroneName() {
+        droneName = sharedPreferences.getString("drone_name", null) ?: ""
+        
+        if (droneName.isEmpty()) {
+            // First time - prompt user for drone name
+            mainHandler.post {
+                showDroneNameDialog(isFirstTime = true)
+            }
+        } else {
+            Log.i(TAG, "Loaded drone name: $droneName")
+        }
+    }
+    
+    private fun showDroneNameDialog(isFirstTime: Boolean = false) {
+        val input = EditText(this)
+        input.hint = "e.g., drone_01, alpha, scout"
+        if (!isFirstTime) {
+            input.setText(droneName)
+        }
+        
+        val builder = AlertDialog.Builder(this)
+            .setTitle(if (isFirstTime) "Drone Name" else "Change Drone Name")
+            .setMessage(if (isFirstTime) "Please enter a unique name for this drone:" else "Enter new name for this drone:")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    droneName = name
+                    sharedPreferences.edit().putString("drone_name", droneName).apply()
+                    Log.i(TAG, "Drone name set to: $droneName")
+                    Toast.makeText(this, "Drone name saved: $droneName", Toast.LENGTH_SHORT).show()
+                    updateDroneNameDisplay()
+                } else {
+                    droneName = "drone_1"
+                    sharedPreferences.edit().putString("drone_name", droneName).apply()
+                    Toast.makeText(this, "Using default name: $droneName", Toast.LENGTH_SHORT).show()
+                    updateDroneNameDisplay()
+                }
+            }
+        
+        if (isFirstTime) {
+            builder.setCancelable(false)
+        } else {
+            builder.setNegativeButton("Cancel", null)
+        }
+        
+        builder.show()
+    }
+
+    private fun startLocationUpdates() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            // Request permissions if not granted
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1)
+            return
+        }
+        try {
+            locationManager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, locationListener)
+            locationManager?.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 1000L, 1f, locationListener)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting location updates: ${e.message}")
+        }
+    }
+
+    private fun startSensorUpdates() {
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.also { accelerometer ->
+            sensorManager?.registerListener(sensorListener, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+        sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.also { magneticField ->
+            sensorManager?.registerListener(sensorListener, magneticField, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+        sensorManager?.getDefaultSensor(Sensor.TYPE_PRESSURE)?.also { pressure ->
+            sensorManager?.registerListener(sensorListener, pressure, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+    }
+    
+    private fun updateOrientationAngles() {
+        // Update rotation matrix, which is needed to update orientation angles.
+        SensorManager.getRotationMatrix(rotationMatrix, null, accelerometerReading, magnetometerReading)
+        // "rotationMatrix" now has up-to-date information.
+
+        SensorManager.getOrientation(rotationMatrix, orientationAngles)
+        // "orientationAngles" now has up-to-date information.
+        
+        // Convert azimuth to degrees (0-360)
+        var azimuth = Math.toDegrees(orientationAngles[0].toDouble())
+        if (azimuth < 0) {
+            azimuth += 360.0
+        }
+        phoneHeading = azimuth
+    }
 
     private fun startServers() {
         val deviceIp = getDeviceIpAddress()
+        
+        // Start Discovery Server
+        startDiscoveryServer()
         
         // Start HTTP Command Server
         if (!isPortInUse(HTTP_PORT)) {
@@ -188,7 +408,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     context = this,
                     cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
                     signalingPort = WEBRTC_PORT,
-                    options = WebRTCMediaOptions()
+                    droneName = droneName,
+                    options = WebRTCMediaOptions(
+                        videoBitrate = 5_000_000, // Increase to 5 Mbps
+                        videoCodec = "H264"       // Use H264 for better hardware acceleration
+                    )
                 )
                 webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
                     override fun onServerStarted(ip: String, port: Int) {
@@ -238,27 +462,156 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         httpServer?.stop()
         telemetryServer?.stop()
         webRTCStreamer?.stop()
+        stopDiscoveryServer()
+        
+        // Stop location updates
+        locationManager?.removeUpdates(locationListener)
+        
+        // Stop sensor updates
+        sensorManager?.unregisterListener(sensorListener)
+        
+        // Release Multicast Lock
+        if (multicastLock?.isHeld == true) {
+            multicastLock?.release()
+        }
         
         // Cancel key listeners
         KeyManager.getInstance().cancelListen(this)
         
+        // Clean up DroneController to prevent memory leaks
+        DroneController.destroy()
+        
         Log.i(TAG, "All servers stopped")
+    }
+    
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Change Drone Name")
+        return super.onCreateOptionsMenu(menu)
+    }
+    
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            1 -> {
+                showDroneNameDialog(isFirstTime = false)
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
     }
 
     // ==================== Utility Methods ====================
 
+    private fun startDiscoveryServer() {
+        if (isDiscoveryRunning) return
+        isDiscoveryRunning = true
+        discoveryThread = thread(start = true) {
+            try {
+                discoverySocket = DatagramSocket(null)
+                discoverySocket?.reuseAddress = true
+                discoverySocket?.broadcast = true
+                discoverySocket?.bind(java.net.InetSocketAddress(DISCOVERY_PORT))
+                val buffer = ByteArray(1024)
+                Log.i(TAG, "Discovery server started on port $DISCOVERY_PORT with broadcast enabled")
+                
+                while (isDiscoveryRunning) {
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    discoverySocket?.receive(packet)
+                    val message = String(packet.data, 0, packet.length).trim()
+                    
+                    Log.d(TAG, "Received UDP packet from ${packet.address.hostAddress}: $message")
+                    
+                    if (message == DISCOVERY_MSG) {
+                        val deviceIp = getDeviceIpAddress()
+                        Log.i(TAG, "Discovery request received. My IP is $deviceIp")
+                        
+                        if (deviceIp != null) {
+                            val response = "$DISCOVERY_RESPONSE_PREFIX$deviceIp:$droneName"
+                            val responseData = response.toByteArray()
+                            val responsePacket = DatagramPacket(
+                                responseData,
+                                responseData.size,
+                                packet.address,
+                                packet.port
+                            )
+                            discoverySocket?.send(responsePacket)
+                            Log.i(TAG, "Responded to discovery from ${packet.address.hostAddress} with $response")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (isDiscoveryRunning) {
+                    Log.e(TAG, "Discovery server error: ${e.message}")
+                }
+            } finally {
+                discoverySocket?.close()
+                discoverySocket = null
+            }
+        }
+    }
+
+    private fun stopDiscoveryServer() {
+        isDiscoveryRunning = false
+        try {
+            discoverySocket?.close()
+        } catch (e: Exception) {
+            // Ignore
+        }
+        try {
+            discoveryThread?.join(1000)
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+    
+    private fun fetchDroneSerialNumber() {
+        try {
+            // Get drone serial number from DJI SDK
+            val serialKey = KeyTools.createKey(FlightControllerKey.KeySerialNumber)
+            KeyManager.getInstance().getValue(serialKey, object : dji.v5.common.callback.CommonCallbacks.CompletionCallbackWithParam<String> {
+                override fun onSuccess(serialNumber: String?) {
+                    droneSerialNumber = serialNumber?.takeLast(8) ?: "UNKNOWN"
+                    Log.i(TAG, "Drone serial number: $droneSerialNumber")
+                }
+                override fun onFailure(error: dji.v5.common.error.IDJIError) {
+                    droneSerialNumber = "UNKNOWN"
+                    Log.w(TAG, "Failed to get drone serial: ${error.description()}")
+                }
+            })
+        } catch (e: Exception) {
+            droneSerialNumber = "UNKNOWN"
+            Log.e(TAG, "Error fetching drone serial: ${e.message}")
+        }
+    }
+
     private fun getDeviceIpAddress(): String? {
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
+            var bestIp: String? = null
+            
             for (networkInterface in Collections.list(interfaces)) {
                 if (!networkInterface.isUp || networkInterface.isLoopback) continue
+                
                 val addresses = networkInterface.inetAddresses
                 for (address in Collections.list(addresses)) {
                     if (address is Inet4Address && !address.isLoopbackAddress) {
-                        return address.hostAddress
+                        val ip = address.hostAddress
+                        val name = networkInterface.name.lowercase()
+                        
+                        Log.d(TAG, "Found IP: $ip on interface: $name")
+                        
+                        // Prioritize WiFi (wlan0, etc)
+                        if (name.contains("wlan") || name.contains("ap")) {
+                            return ip
+                        }
+                        
+                        // Keep as fallback (e.g. eth0, rmnet_data0)
+                        if (bestIp == null) {
+                            bestIp = ip
+                        }
                     }
                 }
             }
+            return bestIp
         } catch (e: Exception) {
             Log.e(TAG, "Error getting IP address: ${e.message}")
         }
@@ -350,7 +703,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         val totalTime = timeNeededToGoHome + timeNeededToLand
         val maxRadiusCanFlyAndGoHome = goHomeInfo.maxRadiusCanFlyAndGoHome
 
-        return """{"speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode"}"""
+        val phoneLat = phoneLocation?.latitude ?: 0.0
+        val phoneLon = phoneLocation?.longitude ?: 0.0
+        
+        // Phone Status
+        val phoneBattery = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        val wifiRssi = wifiManager?.connectionInfo?.rssi ?: -100
+        
+        val phoneLocationJson = """{"latitude":$phoneLat,"longitude":$phoneLon,"heading":$phoneHeading,"pressure":$phonePressure,"battery":$phoneBattery,"wifiRssi":$wifiRssi}"""
+
+        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode"}"""
     }
 
     // ==================== HTTP Server ====================
@@ -442,9 +804,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private fun handleHttpRequest(method: String, uri: String, postData: String): String {
             return when (method) {
                 "POST" -> handlePostRequest(uri, postData)
+                "GET" -> handleGetRequest(uri)
                 "OPTIONS" -> "OK"
-                "GET" -> "Use POST for commands. Telemetry available on port $TELEMETRY_PORT"
                 else -> "Method Not Allowed"
+            }
+        }
+        
+        private fun handleGetRequest(uri: String): String {
+            return when (uri) {
+                "/config" -> {
+                    val deviceIp = getDeviceIpAddress() ?: "unknown"
+                    """{"droneName":"$droneName","ipAddress":"$deviceIp","httpPort":$HTTP_PORT,"telemetryPort":$TELEMETRY_PORT,"webrtcPort":$WEBRTC_PORT}"""
+                }
+                else -> "Use POST for commands. Telemetry available on port $TELEMETRY_PORT. Config available at GET /config"
             }
         }
 
