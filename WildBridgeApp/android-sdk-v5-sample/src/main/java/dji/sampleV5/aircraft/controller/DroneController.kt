@@ -377,6 +377,9 @@ object DroneController {
         isAltitudeReached = false
         val controlLoopHandler = Handler(Looper.getMainLooper())
         val updateInterval = 100L // Update every 100 ms
+        
+        // Capture initial yaw ONCE to prevent oscillation from compass noise
+        val initialYaw = getHeading()
 
         val runnable = object : Runnable {
             override fun run() {
@@ -407,12 +410,11 @@ object DroneController {
                 val maxVerticalSpeed = 4.0 // Maximum vertical speed in m/s
                 verticalSpeed = verticalSpeed.coerceIn(-maxVerticalSpeed, maxVerticalSpeed)
 
-                val currentYaw = getHeading()
-
+                // Use initial yaw captured at start to prevent oscillation from compass noise
                 val flightControlParam = VirtualStickFlightControlParam().apply {
                     this.pitch = 0.0
                     this.roll = 0.0
-                    this.yaw = currentYaw
+                    this.yaw = initialYaw
                     this.verticalThrottle = verticalSpeed
                     this.verticalControlMode = VerticalControlMode.VELOCITY
                     this.rollPitchControlMode = RollPitchControlMode.VELOCITY
