@@ -89,8 +89,17 @@ class MAVLinkProxy:
         self.qgc_port = qgc_port
         
         # Initialize DJI interface
-        print(f"Connecting to WildBridge at {drone_ip}...")
+        if drone_ip:
+            print(f"Connecting to WildBridge at {drone_ip}...")
+        else:
+            print("Connecting to WildBridge (auto-discovery)...")
+            
         self.dji = DJIInterface(drone_ip)
+        
+        # Update drone_ip if discovered
+        if not self.drone_ip and self.dji.IP_RC:
+            self.drone_ip = self.dji.IP_RC
+            print(f"Connected to WildBridge at {self.drone_ip}")
         
         # UDP socket for QGC communication
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -810,8 +819,8 @@ In QGroundControl:
         """
     )
     
-    parser.add_argument('--drone-ip', '-d', required=True,
-                        help='IP address of WildBridge RC')
+    parser.add_argument('--drone-ip', '-d', required=False, default="",
+                        help='IP address of WildBridge RC (optional, will auto-discover if not provided)')
     parser.add_argument('--qgc-host', default='127.0.0.1',
                         help='QGroundControl host (default: 127.0.0.1)')
     parser.add_argument('--qgc-port', '-p', type=int, default=14550,

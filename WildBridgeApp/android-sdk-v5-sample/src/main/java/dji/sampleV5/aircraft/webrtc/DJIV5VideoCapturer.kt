@@ -26,7 +26,8 @@ class DJIV5VideoCapturer(
     private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN,
     private val targetWidth: Int = FULL_HD_WIDTH,
     private val targetHeight: Int = FULL_HD_HEIGHT,
-    private val scaleToTarget: Boolean = true
+    private val scaleToTarget: Boolean = true,
+    private val droneName: String = "drone_1"
 ) : VideoCapturer {
 
     companion object {
@@ -91,7 +92,8 @@ class DJIV5VideoCapturer(
                         frameNumber = frameNumber,
                         timestampNs = timestampNs,
                         frameWidth = outputWidth,
-                        frameHeight = outputHeight
+                        frameHeight = outputHeight,
+                        droneName = droneName
                     )
                     Log.v(TAG, "Captured metadata for frame $frameNumber: lat=${metadata.latitude}, lon=${metadata.longitude}, battery=${metadata.batteryPercent}%")
                     listener.onFrameMetadata(metadata)

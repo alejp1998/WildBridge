@@ -18,7 +18,141 @@ import ast
 import json
 import socket
 import threading
+import time
 from datetime import datetime
+
+# Discovery Configuration
+DISCOVERY_PORT = 30000
+DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
+DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
+
+def get_local_ips():
+    """Get all local IP addresses for subnet detection."""
+    ip_list = []
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127."):
+                ip_list.append(ip)
+    except:
+        pass
+    
+    # Fallback method
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip not in ip_list and not ip.startswith("127."):
+            ip_list.append(ip)
+    except:
+        pass
+    
+    return ip_list
+
+def scan_subnet_for_drones(local_ips, timeout=0.1, verbose=True):
+    """
+    Scan subnet for WildBridge drones using direct UDP probing.
+    Returns list of tuples [(drone_ip, drone_name), ...]
+    """
+    found_drones = {}
+    if verbose:
+        print("Scanning subnet for WildBridge drones...")
+    
+    for local_ip in local_ips:
+        parts = local_ip.split('.')
+        subnet = f"{parts[0]}.{parts[1]}.{parts[2]}"
+        
+        # Try common IP ranges
+        ranges = list(range(1, 51)) + list(range(100, 121)) + list(range(150, 171)) + list(range(200, 221))
+        
+        for i in ranges:
+            ip = f"{subnet}.{i}"
+            if ip == local_ip:
+                continue
+            
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(timeout)
+                sock.sendto(DISCOVERY_MSG, (ip, DISCOVERY_PORT))
+                
+                try:
+                    data, addr = sock.recvfrom(1024)
+                    message = data.decode('utf-8')
+                    if message.startswith(DISCOVERY_RESPONSE_PREFIX):
+                        parts = message.split(':')
+                        drone_ip = parts[1] if len(parts) > 1 else addr[0]
+                        drone_name = parts[2] if len(parts) > 2 else "UNKNOWN"
+                        if verbose:
+                            print(f"Found WildBridge drone at {drone_ip} (Name: {drone_name})")
+                        found_drones[drone_ip] = drone_name
+                except socket.timeout:
+                    pass
+                
+                sock.close()
+            except:
+                pass
+    
+    return list(found_drones.items())
+
+def discover_all_drones(timeout=5.0, verbose=True):
+    """
+    Discover all WildBridge drones on the network.
+    Returns list of tuples [(drone_ip, drone_name), ...]
+    """
+    found_drones = {}
+    
+    # Try broadcast first
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(timeout)
+    
+    try:
+        sock.sendto(DISCOVERY_MSG, ('<broadcast>', DISCOVERY_PORT))
+        if verbose:
+            print(f"Broadcasting discovery message on port {DISCOVERY_PORT}...")
+        
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                data, addr = sock.recvfrom(1024)
+                message = data.decode('utf-8')
+                if message.startswith(DISCOVERY_RESPONSE_PREFIX):
+                    parts = message.split(':')
+                    drone_ip = parts[1] if len(parts) > 1 else None
+                    drone_name = parts[2] if len(parts) > 2 else "UNKNOWN"
+                    if drone_ip and drone_ip not in found_drones:
+                        if verbose:
+                            print(f"Found WildBridge drone at {drone_ip} (Name: {drone_name})")
+                        found_drones[drone_ip] = drone_name
+            except socket.timeout:
+                continue
+    except Exception as e:
+        if verbose:
+            print(f"Broadcast discovery failed: {e}")
+    finally:
+        sock.close()
+    
+    if not found_drones:
+        if verbose:
+            print("Broadcast found no drones, scanning subnet...")
+        local_ips = get_local_ips()
+        if local_ips:
+            subnet_drones = scan_subnet_for_drones(local_ips, timeout=0.1, verbose=verbose)
+            for ip, name in subnet_drones:
+                found_drones[ip] = name
+    
+    return list(found_drones.items())
+
+def discover_drone(timeout=5.0, verbose=True):
+    """
+    Discover a single WildBridge drone.
+    Returns tuple (drone_ip, drone_name) or (None, None).
+    """
+    drones = discover_all_drones(timeout, verbose)
+    if drones:
+        return drones[0]
+    return None, None
 
 # HTTP POST Command Endpoints (port 8080)
 EP_STICK = "/send/stick"  # expects a formatted string: "<leftX>,<leftY>,<rightX>,<rightY>"
@@ -45,6 +179,20 @@ EP_SET_RTH_ALTITUDE = "/send/setRTHAltitude"
 EP_TUNING = "/send/gotoWPwithPIDtuning"
 
 
+def get_config(ip_address):
+    """
+    Query drone configuration via HTTP GET /config endpoint.
+    Returns dict with droneName, ipAddress, ports, or None if failed.
+    """
+    try:
+        response = requests.get(f"http://{ip_address}:8080/config", timeout=2.0)
+        if response.status_code == 200:
+            return json.loads(response.text)
+    except Exception as e:
+        print(f"Failed to get config from {ip_address}: {e}")
+    return None
+
+
 class DJIInterface:
     """
     Interface for DJI drone control via HTTP commands (port 8080) and 
@@ -52,8 +200,34 @@ class DJIInterface:
     """
     
     def __init__(self, IP_RC=""):
-        self.IP_RC = IP_RC
-        self.baseCommandUrl = f"http://{IP_RC}:8080"
+        if not IP_RC:
+            print("No IP provided, attempting to discover drone...")
+            discovered_ip, drone_name = discover_drone()
+            if discovered_ip:
+                self.IP_RC = discovered_ip
+                self.drone_name = drone_name
+                
+                # If discovery didn't provide name, query config endpoint
+                if self.drone_name == "UNKNOWN":
+                    config = get_config(self.IP_RC)
+                    if config and "droneName" in config:
+                        self.drone_name = config["droneName"]
+                        print(f"Retrieved drone name from config: {self.drone_name}")
+            else:
+                print("Drone discovery failed.")
+                self.IP_RC = ""
+                self.drone_name = "UNKNOWN"
+        else:
+            self.IP_RC = IP_RC
+            # Query config endpoint to get drone name
+            config = get_config(self.IP_RC)
+            if config and "droneName" in config:
+                self.drone_name = config["droneName"]
+                print(f"Retrieved drone name from config: {self.drone_name}")
+            else:
+                self.drone_name = "UNKNOWN"
+
+        self.baseCommandUrl = f"http://{self.IP_RC}:8080"
         self.telemetryPort = 8081
         self.videoSource = f"rtsp://aaa:aaa@{self.IP_RC}:8554/streaming/live/1"
         

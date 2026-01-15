@@ -12,6 +12,9 @@ data class FrameMetadata(
     val timestampNs: Long,
     val captureTimeMs: Long,
     
+    // Drone identification
+    val droneName: String,
+    
     // Frame properties
     val frameWidth: Int,
     val frameHeight: Int,
@@ -51,6 +54,7 @@ data class FrameMetadata(
             put("frameNumber", frameNumber)
             put("timestampNs", timestampNs)
             put("captureTimeMs", captureTimeMs)
+            put("droneName", droneName)
             put("frameWidth", frameWidth)
             put("frameHeight", frameHeight)
             
@@ -97,6 +101,7 @@ data class FrameMetadata(
                 frameNumber = obj.optLong("frameNumber", 0),
                 timestampNs = obj.optLong("timestampNs", 0),
                 captureTimeMs = obj.optLong("captureTimeMs", 0),
+                droneName = obj.optString("droneName", "unknown"),
                 frameWidth = obj.optInt("frameWidth", 0),
                 frameHeight = obj.optInt("frameHeight", 0),
                 latitude = obj.optDouble("latitude", 0.0),

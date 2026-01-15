@@ -18,6 +18,7 @@ class WebRTCStreamer(
     private val context: Context,
     private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN,
     private val signalingPort: Int = 8081,
+    private val droneName: String = "drone_1",
     private val options: WebRTCMediaOptions = WebRTCMediaOptions()
 ) {
 
@@ -50,7 +51,7 @@ class WebRTCStreamer(
             return
         }
         
-        signalingServer = WebRTCSignalingServer(signalingPort, object : WebRTCSignalingServer.SignalingServerListener {
+        signalingServer = WebRTCSignalingServer(signalingPort, droneName, object : WebRTCSignalingServer.SignalingServerListener {
             override fun onServerStarted(port: Int) {
                 val ip = getLocalIpAddress() ?: "Unknown"
                 Log.d(TAG, "Signaling server started at $ip:$port")
@@ -135,7 +136,7 @@ class WebRTCStreamer(
         Log.d(TAG, "Creating peer connection for: $clientId")
         
         // Create a new video capturer for this client
-        val videoCapturer = DJIV5VideoCapturer(cameraIndex)
+        val videoCapturer = DJIV5VideoCapturer(cameraIndex, droneName = droneName)
         
         val client = WebRTCClient(
             clientId = clientId,
