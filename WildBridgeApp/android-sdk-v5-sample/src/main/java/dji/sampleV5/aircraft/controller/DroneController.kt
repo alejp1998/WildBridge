@@ -44,12 +44,17 @@ import java.util.zip.ZipFile
 
 object DroneController {
 
-    private lateinit var basicAircraftControlVM: BasicAircraftControlVM
-    lateinit var virtualStickVM: VirtualStickVM
+    private var basicAircraftControlVM: BasicAircraftControlVM? = null
+    var virtualStickVM: VirtualStickVM? = null
 
     fun init(basicVM: BasicAircraftControlVM, stickVM: VirtualStickVM ) {
         basicAircraftControlVM = basicVM
         virtualStickVM = stickVM
+    }
+
+    fun destroy() {
+        basicAircraftControlVM = null
+        virtualStickVM = null
     }
 
     //WAYPOINT MISSION
@@ -166,6 +171,7 @@ object DroneController {
 
     // STREAM STABILITY
     fun enableVirtualStick() {
+        virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
         // Cancel any active control loop first to prevent ghost navigation
         cancelActiveControlLoop()
         virtualStickVM.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
@@ -180,6 +186,7 @@ object DroneController {
     }
 
     fun disableVirtualStick() {
+        virtualStickVM?.disableVirtualStick(object : CommonCallbacks.CompletionCallback {
         // Cancel any active control loop first
         cancelActiveControlLoop()
         virtualStickVM.disableVirtualStick(object : CommonCallbacks.CompletionCallback {
@@ -248,17 +255,19 @@ object DroneController {
             rightX: Float = 0F,
             rightY: Float = 0F
     ) {
-        virtualStickVM.setLeftPosition(
+        virtualStickVM?.setLeftPosition(
                 (leftX * Stick.MAX_STICK_POSITION_ABS).toInt(),
                 (leftY * Stick.MAX_STICK_POSITION_ABS).toInt()
         )
-        virtualStickVM.setRightPosition(
+        virtualStickVM?.setRightPosition(
                 (rightX * Stick.MAX_STICK_POSITION_ABS).toInt(),
                 (rightY * Stick.MAX_STICK_POSITION_ABS).toInt()
         )
     }
 
     fun startTakeOff() {
+
+        basicAircraftControlVM?.startTakeOff(object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
         // Disable virtual sticks first to ensure no control loops are running before takeoff
         disableVirtualStick()
         
@@ -273,7 +282,7 @@ object DroneController {
     }
 
     fun startLanding() {
-        basicAircraftControlVM.startLanding(object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
+        basicAircraftControlVM?.startLanding(object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
             override fun onSuccess(t: EmptyMsg?) {
                 ToastUtils.showToast("start landing onSuccess.")
             }
@@ -284,7 +293,7 @@ object DroneController {
     }
 
     fun startReturnToHome() {
-        basicAircraftControlVM.startReturnToHome(object :
+        basicAircraftControlVM?.startReturnToHome(object :
                 CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
             override fun onSuccess(t: EmptyMsg?) {
                 ToastUtils.showToast("start RTH onSuccess.")
@@ -297,7 +306,23 @@ object DroneController {
     }
 
 
+    private fun stopCurrentMission() {
+        if (lastMissionNameNoExt.isNotEmpty()) {
+            WaypointMissionManager.getInstance().stopMission(lastMissionNameNoExt, object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() { /* no-op */ }
+                override fun onFailure(error: IDJIError) { /* ignore */ }
+            })
+        } else {
+            // Try to pause/stop any active mission even if we don't track the name
+             WaypointMissionManager.getInstance().pauseMission(object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() { /* no-op */ }
+                override fun onFailure(error: IDJIError) { /* ignore */ }
+            })
+        }
+    }
+
     fun gotoYaw(targetYaw: Double) {
+        stopCurrentMission()
         // Start new control loop session
         val loopId = startNewControlLoopSession()
         
@@ -307,6 +332,7 @@ object DroneController {
         val maxYawRate = 30.0 // degrees per second
         val yawPID = PID(3.0, 0.0, 0.0, updateInterval/1000, -maxYawRate to maxYawRate)
 
+        virtualStickVM?.enableVirtualStickAdvancedMode()
         // Enable Virtual Stick and advanced mode
         // NOTE: Use VM directly, not enableVirtualStick() which would cancel the loop we just started
         virtualStickVM.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
@@ -349,7 +375,7 @@ object DroneController {
                     this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
                 }
 
-                virtualStickVM.sendVirtualStickAdvancedParam(flightControlParam)
+                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
                 controlLoopYaw.postDelayed(this, updateInterval.toLong())
             }
         }
@@ -361,6 +387,7 @@ object DroneController {
     }
 
     fun gotoAltitude(targetAltitude: Double) {
+        stopCurrentMission()
         // Start new control loop session
         val loopId = startNewControlLoopSession()
 
@@ -381,6 +408,10 @@ object DroneController {
         // Capture initial yaw ONCE to prevent oscillation from compass noise
         val initialYaw = getHeading()
 
+        // Enable advanced Virtual Stick mode
+        virtualStickVM?.enableVirtualStickAdvancedMode()
+
+        controlLoopHandler.post(object : Runnable {
         val runnable = object : Runnable {
             override fun run() {
                 // CHECK IF WE SHOULD STILL BE RUNNING
@@ -422,7 +453,7 @@ object DroneController {
                     this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
                 }
 
-                virtualStickVM.sendVirtualStickAdvancedParam(flightControlParam)
+                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
 
                 // Schedule the next update
                 controlLoopHandler.postDelayed(this, updateInterval)
@@ -436,6 +467,7 @@ object DroneController {
     }
 
     fun gotoWP(targetLatitude: Double, targetLongitude: Double, targetAltitude: Double) {
+        stopCurrentMission()
         // Start new control loop session
         val loopId = startNewControlLoopSession()
         
@@ -445,6 +477,7 @@ object DroneController {
         // Enable Virtual Stick and advanced mode
         // NOTE: Use VM directly, not enableVirtualStick() which would cancel the loop we just started
         isWaypointReached = false
+        virtualStickVM?.enableVirtualStickAdvancedMode()
         virtualStickVM.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() { }
             override fun onFailure(error: IDJIError) {
@@ -532,7 +565,7 @@ object DroneController {
                 }
 
                 // Send the virtual stick control data
-                virtualStickVM.sendVirtualStickAdvancedParam(flightControlParam)
+                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
                 // Schedule the next update
                 controlLoop.postDelayed(this, updateInterval)
             }
@@ -545,12 +578,14 @@ object DroneController {
     }
 
     fun navigateToWaypointWithPID(targetLatitude: Double, targetLongitude: Double, targetAlt: Double, targetYaw: Double, maxSpeed: Double) {
+        stopCurrentMission()
         // Start new control loop session
         val loopId = startNewControlLoopSession()
 
         val updateInterval = 100.0  // Update every 100 ms
         val maxYawRate = 30.0 // degrees per second
 
+        virtualStickVM?.enableVirtualStickAdvancedMode()
         // Enable Virtual Stick and advanced mode
         // NOTE: Use VM directly, not enableVirtualStick() which would cancel the loop we just started
         virtualStickVM.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
@@ -567,6 +602,9 @@ object DroneController {
         val controlLoop = Handler(Looper.getMainLooper())
 
         isWaypointReached = false
+        virtualStickVM?.enableVirtualStickAdvancedMode()
+
+        controlLoop.post(object : Runnable {
         
         val runnable = object : Runnable {
             override fun run() {
@@ -611,7 +649,7 @@ object DroneController {
                     this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
                 }
 
-                virtualStickVM.sendVirtualStickAdvancedParam(flightControlParam)
+                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
                 controlLoop.postDelayed(this, updateInterval.toLong())
             }
         }
@@ -629,6 +667,7 @@ object DroneController {
         minSpeedFinal: Double = 1.0,
         slowdownRadius: Double = 4.0
     ) {
+        stopCurrentMission()
         if (waypoints.size < 2) return
         
         // Start new control loop session
@@ -640,6 +679,7 @@ object DroneController {
         isWaypointReached = false
         isIntermediaryWaypointReached = false
 
+        virtualStickVM?.enableVirtualStickAdvancedMode()
         // Enable Virtual Stick and advanced mode
         // NOTE: Use VM directly, not enableVirtualStick() which would cancel the loop we just started
         virtualStickVM.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
@@ -723,9 +763,6 @@ object DroneController {
                 // Project drone onto the segment [start, end]
                 val segLen = calculateDistance(start.first, start.second, end.first, end.second)
                 val projRatio = progress.coerceIn(0.0, 1.0)
-                val projLat = start.first + (end.first - start.first) * projRatio
-                val projLon = start.second + (end.second - start.second) * projRatio
-                val projAlt = start.third + (end.third - start.third) * projRatio
 
                 // Pure pursuit: lookahead point further along the segment
                 val lookaheadRatio = ((segLen * projRatio) + lookaheadDistance) / segLen
@@ -793,7 +830,7 @@ object DroneController {
                     this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
                 }
 
-                virtualStickVM.sendVirtualStickAdvancedParam(flightControlParam)
+                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
                 controlLoop.postDelayed(this, updateIntervalMs)
             }
         }

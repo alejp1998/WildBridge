@@ -96,6 +96,23 @@
             app:uxsdk_itemsMarginRight="@dimen/uxsdk_spacing_normal"
             app:uxsdk_itemsSpacing="14dp" />
 
+        <TextView
+            android:id="@+id/text_drone_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="drone_1"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:padding="12dp"
+            android:background="@drawable/uxsdk_background_black_rectangle"
+            android:clickable="true"
+            android:focusable="true"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/panel_top_bar"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="8dp" />
+
         <dji.v5.ux.core.widget.remainingflighttime.RemainingFlightTimeWidget
             android:id="@+id/widget_remaining_flight_time"
             android:layout_width="match_parent"

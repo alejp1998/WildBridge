@@ -36,13 +36,15 @@ object TelemetryProvider {
      * @param timestampNs The frame timestamp in nanoseconds
      * @param frameWidth The video frame width
      * @param frameHeight The video frame height
+     * @param droneName The name/identifier of this drone
      * @return FrameMetadata containing all telemetry synchronized with the frame
      */
     fun captureMetadata(
         frameNumber: Long,
         timestampNs: Long,
         frameWidth: Int,
-        frameHeight: Int
+        frameHeight: Int,
+        droneName: String = "drone_1"
     ): FrameMetadata {
         // Capture all telemetry values at this moment
         val location = location3DKey.get(LocationCoordinate3D(0.0, 0.0, 0.0))
@@ -59,6 +61,7 @@ object TelemetryProvider {
             frameNumber = frameNumber,
             timestampNs = timestampNs,
             captureTimeMs = System.currentTimeMillis(),
+            droneName = droneName,
             frameWidth = frameWidth,
             frameHeight = frameHeight,
             

@@ -26,12 +26,17 @@ class DjiNode(Node):
         self.get_logger().info("Node Initialisation")
 
         # Retrieve the drone's IP address from the parameter server
-        self.declare_parameter('ip_rc', '192.168.50.27')  # Default IP
+        self.declare_parameter('ip_rc', '')  # Default IP (empty for auto-discovery)
         self.ip_rc = self.get_parameter(
             'ip_rc').get_parameter_value().string_value
 
         # Initialize the DJI drone interface
         self.dji_interface = DJIInterface(self.ip_rc)
+        
+        # Update IP if discovered
+        if not self.ip_rc and self.dji_interface.IP_RC:
+            self.ip_rc = self.dji_interface.IP_RC
+            self.get_logger().info(f"Discovered drone at {self.ip_rc}")
 
         # Verify the connection to the drone
         if not self.verify_connection():
@@ -170,10 +175,18 @@ class DjiNode(Node):
 
         def connection_attempt():
             try:
-                # Try to send a simple request to verify connection
-                response = self.dji_interface.requestSend("/", "", verbose=True)
-                self.get_logger().info(f"Connection attempt response: {response}")
-                return True
+                # Try to get config to verify connection (cleaner than probing /)
+                config = get_config(self.ip_rc)
+                if config:
+                    self.get_logger().info(f"Connection verified. Drone config: {config}")
+                    return True
+                
+                # Fallback to old method if config fails but maybe server is up
+                response = self.dji_interface.requestSend("/", "", verbose=False)
+                if response:
+                    self.get_logger().info("Connection verified (via fallback probe).")
+                    return True
+                return False
             except RequestException as e:
                 self.get_logger().error(f"Connection failed: {e}")
                 return False

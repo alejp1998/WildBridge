@@ -14,8 +14,13 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class WebRTCSignalingServer(
     port: Int,
+    private val droneName: String = "drone_1",
     private val listener: SignalingServerListener
 ) : WebSocketServer(InetSocketAddress(port)) {
+
+    init {
+        isReuseAddr = true
+    }
 
     companion object {
         private const val TAG = "WebRTCSignalingServer"
@@ -44,6 +49,7 @@ class WebRTCSignalingServer(
         val welcomeMsg = JSONObject().apply {
             put("type", "welcome")
             put("clientId", clientId)
+            put("droneName", droneName)
         }
         conn.send(welcomeMsg.toString())
         
