@@ -556,17 +556,15 @@ def discover_all_drones(timeout=5.0, verbose=True, use_cache=True, max_retries=2
     Discover all WildBridge drones on the network with enhanced robustness.
     
     Discovery methods (in order of preference):
-    1. Cache verification (fastest)
+    1. Cache verification (fastest - instant if drone was seen recently)
     2. mDNS/Zeroconf (most reliable, industry standard)
-    3. Enhanced broadcast (multiple addresses)
-    4. Multicast discovery (better for VLANs)
-    5. Targeted subnet scan (only common ranges, fallback)
+    3. Targeted subnet scan (fallback, parallel scanning)
     
     Args:
         timeout: Timeout for each discovery method
         verbose: Print discovery progress
         use_cache: Try cached drones first
-        max_retries: Number of retry attempts for broadcast/multicast
+        max_retries: Number of retry attempts (unused, kept for API compatibility)
     
     Returns:
         List of tuples [(drone_ip, drone_name), ...]
@@ -616,48 +614,9 @@ def discover_all_drones(timeout=5.0, verbose=True, use_cache=True, max_retries=2
                 print(f"[mDNS] ✓ Found {len(found_drones)} drone(s)")
             return list(found_drones.items())
     
-    # Method 3: Enhanced broadcast discovery (try multiple addresses)
+    # Method 3: Targeted subnet scan (fallback, parallel scanning)
     if verbose:
-        print("[Broadcast] Trying enhanced broadcast discovery...")
-    
-    broadcast_drones = discover_via_broadcast_enhanced(timeout=timeout, verbose=verbose)
-    for ip, name in broadcast_drones:
-        if ip not in found_drones:
-            found_drones[ip] = name
-            if cache:
-                cache.update(ip, name)
-    
-    if found_drones:
-        if verbose:
-            print(f"[Broadcast] ✓ Found {len(found_drones)} drone(s)")
-        return list(found_drones.items())
-    
-    # Method 4: Multicast discovery (better for VLANs and complex networks)
-    if verbose:
-        print("[Multicast] Trying multicast discovery...")
-    
-    for attempt in range(max_retries):
-        if attempt > 0 and verbose:
-            print(f"  Retry {attempt + 1}/{max_retries}...")
-        
-        multicast_drones = discover_via_multicast(timeout=timeout, verbose=verbose)
-        for ip, name in multicast_drones:
-            if ip not in found_drones:
-                found_drones[ip] = name
-                if cache:
-                    cache.update(ip, name)
-        
-        if found_drones:
-            break
-    
-    if found_drones:
-        if verbose:
-            print(f"[Multicast] ✓ Found {len(found_drones)} drone(s)")
-        return list(found_drones.items())
-    
-    # Method 5: Targeted subnet scan (only as last resort, limited ranges)
-    if verbose:
-        print("[Subnet Scan] All other methods failed, trying targeted subnet scan...")
+        print("[Subnet Scan] Trying targeted subnet scan...")
         print("  ⚠ Note: This method doesn't scale to large networks")
     
     local_ips = get_local_ips()
