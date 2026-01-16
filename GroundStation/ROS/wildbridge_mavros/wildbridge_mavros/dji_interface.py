@@ -338,7 +338,7 @@ class WildBridgeServiceListener:
         self.add_service(zc, type_, name)
 
 
-def discover_via_mdns(timeout=3.0, verbose=True):
+def discover_via_mdns(timeout=5.0, verbose=True):
     """
     Discover drones using mDNS/Zeroconf - the industry standard for local service discovery.
     Works across subnets (with mDNS repeaters), more reliable than UDP broadcast.
@@ -436,7 +436,7 @@ def discover_via_broadcast_enhanced(timeout=3.0, verbose=True):
     return list(found_drones.items())
 
 
-def probe_single_ip(ip, timeout=0.5):
+def probe_single_ip(ip, timeout=1.5):
     """
     Probe a single IP for WildBridge drone.
     Returns (ip, name) tuple or None.
@@ -465,7 +465,7 @@ def probe_single_ip(ip, timeout=0.5):
     return None
 
 
-def scan_subnet_for_drones_parallel(local_ips, timeout=0.5, verbose=True, max_workers=50):
+def scan_subnet_for_drones_parallel(local_ips, timeout=1.5, verbose=True, max_workers=50):
     """
     Scan subnet for WildBridge drones using parallel UDP probing.
     Much faster than sequential scanning.
@@ -572,6 +572,16 @@ def discover_all_drones(timeout=5.0, verbose=True, use_cache=True, max_retries=2
     found_drones = {}
     cache = DiscoveryCache() if use_cache else None
     
+    def verify_drone_http(ip, name, source=""):
+        """Verify drone is running by checking HTTP endpoint."""
+        try:
+            response = requests.get(f"http://{ip}:8080/config", timeout=1.0)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+        return False
+    
     # Method 1: Try cached drones first for faster startup
     if cache:
         recent = cache.get_recent()
@@ -579,71 +589,90 @@ def discover_all_drones(timeout=5.0, verbose=True, use_cache=True, max_retries=2
             if verbose:
                 print(f"[Cache] Found {len(recent)} drone(s) in cache, verifying...")
             for ip, data in recent.items():
-                # Quick verification ping
-                try:
-                    response = requests.get(f"http://{ip}:8080/config", timeout=1.0)
-                    if response.status_code == 200:
-                        name = data.get("name", "UNKNOWN")
-                        found_drones[ip] = name
-                        if verbose:
-                            print(f"  ✓ Verified cached drone at {ip} (Name: {name})")
-                except:
+                name = data.get("name", "UNKNOWN")
+                if verify_drone_http(ip, name):
+                    found_drones[ip] = name
                     if verbose:
-                        print(f"  ✗ Cached drone at {ip} not responding")
+                        print(f"  ✓ Verified {ip} (Name: {name})")
+                else:
+                    if verbose:
+                        print(f"  ✗ {ip} not responding (app not running)")
     
-    # If we found drones in cache, we can return early
-    if found_drones:
-        if verbose:
-            print(f"[Cache] Using {len(found_drones)} verified cached drone(s)")
-        return list(found_drones.items())
+    if found_drones and verbose:
+        print(f"[Cache] Verified {len(found_drones)} cached drone(s), continuing to search for more...")
     
     # Method 2: mDNS/Zeroconf discovery (PREFERRED - industry standard)
     if ZEROCONF_AVAILABLE:
         if verbose:
-            print("[mDNS] Trying mDNS/Zeroconf discovery (recommended)...")
+            print("[mDNS] Trying mDNS/Zeroconf discovery...")
         
-        mdns_drones = discover_via_mdns(timeout=timeout, verbose=verbose)
+        mdns_drones = discover_via_mdns(timeout=min(timeout, 5.0), verbose=verbose)
+        new_from_mdns = 0
         for ip, name in mdns_drones:
             if ip not in found_drones:
-                found_drones[ip] = name
-                if cache:
-                    cache.update(ip, name)
+                # Verify the drone is actually running
+                if verify_drone_http(ip, name):
+                    found_drones[ip] = name
+                    new_from_mdns += 1
+                    if cache:
+                        cache.update(ip, name)
+                    if verbose:
+                        print(f"  ✓ Verified {ip} (Name: {name})")
+                else:
+                    if verbose:
+                        print(f"  ✗ {ip} mDNS registered but app not running")
         
-        if found_drones:
-            if verbose:
-                print(f"[mDNS] ✓ Found {len(found_drones)} drone(s)")
-            return list(found_drones.items())
+        if verbose:
+            if new_from_mdns > 0:
+                print(f"[mDNS] ✓ Found {new_from_mdns} verified drone(s) (total: {len(found_drones)})")
+            else:
+                print(f"[mDNS] No new active drones found")
     
     # Method 3: Targeted subnet scan (fallback, parallel scanning)
-    if verbose:
-        print("[Subnet Scan] Trying targeted subnet scan...")
-        print("  ⚠ Note: This method doesn't scale to large networks")
-    
-    local_ips = get_local_ips()
-    if local_ips:
+    # Only run if mDNS didn't find anything or zeroconf unavailable
+    if not ZEROCONF_AVAILABLE or len(found_drones) == 0:
         if verbose:
-            print(f"  Local IPs detected: {', '.join(local_ips)}")
+            print("[Subnet Scan] Trying targeted subnet scan...")
+            print("  ⚠ Note: This method doesn't scale to large networks")
         
-        # Only scan very limited ranges to avoid network floods
-        subnet_drones = scan_subnet_for_drones_parallel(
-            local_ips, 
-            timeout=0.3,  # Shorter timeout
-            verbose=verbose,
-            max_workers=50
-        )
-        for ip, name in subnet_drones:
-            found_drones[ip] = name
-            if cache:
-                cache.update(ip, name)
+        local_ips = get_local_ips()
+        if local_ips:
+            if verbose:
+                print(f"  Local IPs detected: {', '.join(local_ips)}")
+            
+            # Only scan very limited ranges to avoid network floods
+            subnet_drones = scan_subnet_for_drones_parallel(
+                local_ips, 
+                timeout=1.5,  # Allow time for slower drones to respond
+                verbose=verbose,
+                max_workers=50
+            )
+            new_from_scan = 0
+            for ip, name in subnet_drones:
+                if ip not in found_drones:
+                    # Verify the drone is actually running
+                    if verify_drone_http(ip, name):
+                        found_drones[ip] = name
+                        new_from_scan += 1
+                        if cache:
+                            cache.update(ip, name)
+                        if verbose:
+                            print(f"  ✓ Verified {ip} (Name: {name})")
+                    else:
+                        if verbose:
+                            print(f"  ✗ {ip} responded to UDP but app not running")
+            
+            if verbose and new_from_scan > 0:
+                print(f"[Subnet Scan] ✓ Found {new_from_scan} verified drone(s)")
     
     if verbose:
         if found_drones:
-            print(f"✓ Discovery complete: Found {len(found_drones)} drone(s)")
+            print(f"✓ Discovery complete: Found {len(found_drones)} active drone(s)")
         else:
-            print("✗ No drones found with any method")
+            print("✗ No active drones found with any method")
             print("\nTroubleshooting tips:")
             print("  1. Ensure drone WildBridge app is running")
-            print("  2. Check firewall allows UDP port 30000-30001")
+            print("  2. Check firewall allows UDP port 30000-30001 and TCP port 8080")
             print("  3. Verify you're on the same network as the drone")
             print("  4. Try: sudo iptables -L to check for blocking rules")
     
