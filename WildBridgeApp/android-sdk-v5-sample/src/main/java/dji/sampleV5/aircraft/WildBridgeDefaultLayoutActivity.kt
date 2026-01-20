@@ -1037,6 +1037,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         DroneController.disableVirtualStick()
                         "Received: abortMission"
                     }
+                    "/send/abortAll" -> {
+                        DroneController.abortAllMissions()
+                        "Received: abortAll"
+                    }
                     "/send/enableVirtualStick" -> {
                         DroneController.enableVirtualStick()
                         "Received: enableVirtualStick"

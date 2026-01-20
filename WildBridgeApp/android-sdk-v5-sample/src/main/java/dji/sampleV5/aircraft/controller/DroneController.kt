@@ -198,6 +198,52 @@ object DroneController {
         })
     }
 
+    /**
+     * Comprehensive abort function that stops ALL types of missions/navigation:
+     * 1. Cancels any active control loops (PID navigation)
+     * 2. Resets virtual sticks to neutral
+     * 3. Attempts to disable virtual stick (may fail if control authority was lost - that's OK)
+     * 4. Stops any DJI native waypoint missions
+     * 
+     * This function is designed to be resilient - it will attempt all abort actions
+     * regardless of individual failures, ensuring the drone stops moving.
+     */
+    fun abortAllMissions() {
+        // 1. Cancel any active PID control loops immediately
+        cancelActiveControlLoop()
+        
+        // 2. Reset sticks to neutral
+        setStick(0F, 0F, 0F, 0F)
+        
+        // 3. Try to disable virtual stick (may fail if we don't have control authority - that's OK)
+        virtualStickVM?.disableVirtualStick(object : CommonCallbacks.CompletionCallback {
+            override fun onSuccess() {
+                // Virtual stick disabled successfully
+            }
+            override fun onFailure(error: IDJIError) {
+                // Ignore - we may not have had control authority, which is fine
+                // The important thing is we've cancelled the control loops
+            }
+        })
+        
+        // 4. Also try to stop any DJI native waypoint mission
+        try {
+            if (lastMissionNameNoExt.isNotEmpty()) {
+                WaypointMissionManager.getInstance().stopMission(lastMissionNameNoExt, object : CommonCallbacks.CompletionCallback {
+                    override fun onSuccess() { }
+                    override fun onFailure(error: IDJIError) { }
+                })
+            }
+            // Also try pause in case there's an unnamed mission running
+            WaypointMissionManager.getInstance().pauseMission(object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() { }
+                override fun onFailure(error: IDJIError) { }
+            })
+        } catch (e: Exception) {
+            // Ignore any errors - we just want to try our best to stop everything
+        }
+    }
+
     fun calculateDistance(
             latA: Double,
             lngA: Double,

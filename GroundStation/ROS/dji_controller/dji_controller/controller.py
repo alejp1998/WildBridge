@@ -57,6 +57,8 @@ class DjiNode(Node):
         self.create_subscription(
             Empty, 'command/abort_mission', self.abort_mission_callback, 10)
         self.create_subscription(
+            Empty, 'command/abort_all', self.abort_all_callback, 10)
+        self.create_subscription(
             Empty, 'command/enable_virtual_stick', self.enable_virtual_stick_callback, 10)
         self.create_subscription(
             Empty, 'command/abort_dji_native_mission', self.abort_dji_native_mission_callback, 10)
@@ -222,6 +224,10 @@ class DjiNode(Node):
     def abort_mission_callback(self, msg):
         self.get_logger().info("Received abort mission command.")
         self.dji_interface.requestAbortMission()
+
+    def abort_all_callback(self, msg):
+        self.get_logger().info("Received abort ALL command - stopping all missions.")
+        self.dji_interface.requestAbortAll()
 
     def enable_virtual_stick_callback(self, msg):
         self.get_logger().info("Received enable virtual stick command.")
