@@ -335,6 +335,25 @@ object DroneController {
     }
 
     fun startReturnToHome() {
+        // CRITICAL: Disable virtual stick before RTH to prevent conflicts
+        // Virtual stick mode can interfere with RTH causing erratic behavior
+        cancelActiveControlLoop()
+        
+        virtualStickVM?.disableVirtualStick(object : CommonCallbacks.CompletionCallback {
+            override fun onSuccess() {
+                // Virtual stick disabled, now safe to start RTH
+                executeRTH()
+            }
+
+            override fun onFailure(error: IDJIError) {
+                // Virtual stick may already be disabled or we don't have control authority
+                // Still try RTH - the DJI SDK may handle it
+                executeRTH()
+            }
+        })
+    }
+    
+    private fun executeRTH() {
         basicAircraftControlVM?.startReturnToHome(object :
                 CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
             override fun onSuccess(t: EmptyMsg?) {
