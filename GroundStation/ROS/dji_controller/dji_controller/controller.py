@@ -163,6 +163,10 @@ class DjiNode(Node):
         self.camera_is_recording_pub = self.create_publisher(
             Bool, 'camera/is_recording', 10)
 
+        # Flight mode publisher
+        self.flight_mode_pub = self.create_publisher(
+            String, 'flight_mode', 10)
+
         # Timer to publish telemetry at regular intervals
         # Publish every 1/20 second (50ms)
         self.create_timer(0.05, self.publish_states)
@@ -460,6 +464,10 @@ class DjiNode(Node):
             # Camera recording status
             self.camera_is_recording_pub.publish(
                 Bool(data=telemetry.get('isRecording', False)))
+
+            # Flight mode
+            self.flight_mode_pub.publish(
+                String(data=telemetry.get('flightMode', 'UNKNOWN')))
 
         except Exception as e:
             self.get_logger().error(f"Error while publishing states: {e}")
