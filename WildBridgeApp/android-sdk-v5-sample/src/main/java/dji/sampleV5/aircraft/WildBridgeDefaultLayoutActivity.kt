@@ -14,6 +14,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.hardware.Sensor
+import android.widget.CheckBox
 import android.widget.EditText
 import android.view.Menu
 import android.view.MenuItem
@@ -228,6 +229,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Initialize DroneController
         DroneController.init(basicAircraftControlVM, virtualStickVM)
 
+        // Start listening for RC stick inputs (needed for manual override detection)
+        virtualStickVM.listenRCStick()
+
+        // Setup Manual Override checkbox
+        setupManualOverrideCheckbox()
+
         // Initialize LocationManager
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         startLocationUpdates()
@@ -257,6 +264,44 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         showServerInfo()
     }
     
+    // ==================== Manual Override Checkbox ====================
+
+    private fun setupManualOverrideCheckbox() {
+        updateManualOverrideUI()
+
+        findViewById<CheckBox>(R.id.cb_manual_override)?.setOnCheckedChangeListener { _, isChecked ->
+            if (!isChecked) {
+                DroneController.deactivateManualOverride()
+                updateManualOverrideUI()
+            }
+        }
+
+        DroneController.manualOverrideListener = object : DroneController.ManualOverrideListener {
+            override fun onManualOverrideActivated() {
+                mainHandler.post { updateManualOverrideUI() }
+            }
+        }
+    }
+
+    private fun updateManualOverrideUI() {
+        val isActive = DroneController.isManualOverrideActive
+        findViewById<CheckBox>(R.id.cb_manual_override)?.let { cb ->
+            cb.setOnCheckedChangeListener(null)
+            cb.isChecked = isActive
+            cb.text = if (isActive) "\u26a0 Manual" else "Manual"
+            cb.setTextColor(if (isActive) 0xFFFF0000.toInt() else 0xFFFFFFFF.toInt())
+            cb.setBackgroundColor(if (isActive) 0x33FF0000 else 0x00000000)
+            cb.setOnCheckedChangeListener { _, isChecked ->
+                if (!isChecked) {
+                    DroneController.deactivateManualOverride()
+                    updateManualOverrideUI()
+                }
+            }
+        }
+    }
+
+    // ==================== End Manual Override Checkbox ====================
+
     private fun setupDroneNameDisplay() {
         // Find the TextView in the layout
         val droneNameText = findViewById<TextView>(R.id.text_drone_name)
@@ -860,7 +905,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         
         val phoneLocationJson = """{"latitude":$phoneLat,"longitude":$phoneLon,"heading":$phoneHeading,"pressure":$phonePressure,"battery":$phoneBattery,"wifiRssi":$wifiRssi}"""
 
-        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode"}"""
+        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode","isManualOverrideActive":${DroneController.isManualOverrideActive}}"""
     }
 
     // ==================== HTTP Server ====================
@@ -985,6 +1030,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Return to home command sent."
                     }
                     "/send/stick" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("stick")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         val cmd = postData.split(",")
                         val lx = cmd[0].toFloat()
                         val ly = cmd[1].toFloat()
@@ -1018,11 +1066,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Received: roll: $roll, pitch: $pitch, yaw: $yaw"
                     }
                     "/send/gotoYaw" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("gotoYaw")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         val yaw = postData.split(",")[0].toDouble()
                         DroneController.gotoYaw(yaw)
                         "Received: yaw: $yaw"
                     }
                     "/send/gotoAltitude" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("gotoAltitude")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         val targetAltitude = postData.split(",")[0].toDouble()
                         DroneController.gotoAltitude(targetAltitude)
                         "Received: Altitude: $targetAltitude"
@@ -1042,6 +1096,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Received: abortAll"
                     }
                     "/send/enableVirtualStick" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("enableVirtualStick")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         DroneController.enableVirtualStick()
                         "Received: enableVirtualStick"
                     }
@@ -1054,6 +1111,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Received: camera stop recording"
                     }
                     "/send/gotoWP" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("gotoWP")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         val cmd = postData.split(",")
                         if (cmd.size < 3) return "Invalid input. Expected format: lat,lon,alt"
                         val latitude = cmd[0].toDouble()
@@ -1063,6 +1123,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Waypoint command received: Latitude=$latitude, Longitude=$longitude, Altitude=$altitude"
                     }
                     "/send/gotoWPwithPID" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("gotoWPwithPID")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         val cmd = postData.split(",")
                         if (cmd.size < 5) return "Invalid input. Expected format: lat,lon,alt,yaw,maxSpeed"
                         val latitude = cmd[0].toDouble()
@@ -1074,6 +1137,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Waypoint command received: Latitude=$latitude, Longitude=$longitude, Altitude=$altitude, Yaw=$yaw, MaxSpeed=$maxSpeed"
                     }
                     "/send/navigateTrajectory" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("navigateTrajectory")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         Log.d("DroneServer", "Received trajectory data: $postData")
                         val segments = postData.split(";").map { it.trim() }.filter { it.isNotEmpty() }
                         if (segments.isEmpty()) return "Invalid input. Expected at least one waypoint."
@@ -1088,6 +1154,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         "Trajectory command received. Waypoints=${waypoints.size}"
                     }
                     "/send/navigateTrajectoryDJINative" -> {
+                        if (DroneController.shouldRejectAutonomousCommand("navigateTrajectoryDJINative")) {
+                            return "REJECTED: Manual override active. Deactivate manual override first."
+                        }
                         val segments = postData.split(";").map { it.trim() }.filter { it.isNotEmpty() }
                         if (segments.size < 3) return "Invalid input. Need speed and at least 2 waypoints: speed;lat,lon,alt;..."
                         val trajectorySpeed = segments[0].toDoubleOrNull()
@@ -1114,6 +1183,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         } else {
                             "Invalid altitude value"
                         }
+                    }
+                    // --- Manual Override Control ---
+                    "/send/deactivateManualOverride" -> {
+                        DroneController.deactivateManualOverride()
+                        mainHandler.post { updateManualOverrideUI() }
+                        "Manual override deactivated. Autonomous commands are now allowed."
+                    }
+                    "/get/isManualOverrideActive" -> {
+                        if (DroneController.isManualOverrideActive) "true" else "false"
                     }
                     else -> "Not Found: $uri"
                 }
