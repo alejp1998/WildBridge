@@ -57,8 +57,10 @@ object DroneController {
         private set
 
     // RC stick deadzone threshold [0..660]. DJI RC sticks report ±660.
-    // A value of ~50 (~7.5% deflection) filters out small accidental touches.
-    const val RC_STICK_DEADZONE = 50
+    // 200 ≈ 30 % deflection — requires a clear, deliberate push to activate
+    // override, making accidental triggering from calibration drift or small
+    // incidental touches virtually impossible.
+    const val RC_STICK_DEADZONE = 200
 
     // Listener interface so the UI can react to automatic activation
     interface ManualOverrideListener {
