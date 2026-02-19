@@ -340,6 +340,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     // ==================== End Drone Status View ====================
 
+    private fun updateAltitudeView(altitudeMetres: Double) {
+        findViewById<TextView>(R.id.text_altitude)?.text = "${altitudeMetres.toInt()} m"
+    }
+
     private fun setupDroneNameDisplay() {
         // Find the TextView in the layout
         val droneNameText = findViewById<TextView>(R.id.text_drone_name)
@@ -378,6 +382,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Refresh the status badge when the FC flying state changes so IDLE upgrades to HOVERING
         KeyManager.getInstance().listen(isFlyingKey, this) { _, _ ->
             mainHandler.post { updateDroneStatusView(DroneController.droneStatus) }
+        }
+        // Keep altitude display in sync with every position update
+        KeyManager.getInstance().listen(location3DKey, this) { _, newValue ->
+            mainHandler.post { updateAltitudeView(newValue?.altitude ?: 0.0) }
         }
     }
     
