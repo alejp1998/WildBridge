@@ -179,6 +179,16 @@ object DroneController {
     val isAutonomousFlightActive: Boolean
         get() = controlLoopEnabled
 
+    /**
+     * Mirrors the FC isFlying telemetry key. Updated by the Activity via the
+     * isFlyingKey listener so VirtualStickVM can gate manual-override detection:
+     * sticks only latch override when the drone is actually airborne (prevents
+     * ground-level calibration drift false-positives) or when an autonomous loop
+     * is running (catches pilot intervention mid-mission).
+     */
+    @Volatile
+    var isAirborne: Boolean = false
+
     // Unique ID for each control loop session - loops check this to ensure they're still valid
     @Volatile
     private var currentControlLoopId: Long = 0

@@ -138,7 +138,7 @@ class VirtualStickVM : DJIViewModel() {
                 Math.abs(sv.rightHorizontal),
                 Math.abs(sv.rightVertical)
             )
-            if (maxDeflection > DroneController.RC_STICK_DEADZONE && DroneController.isAutonomousFlightActive) {
+            if (maxDeflection > DroneController.RC_STICK_DEADZONE && (DroneController.isAirborne || DroneController.isAutonomousFlightActive)) {
                 DroneController.activateManualOverride()
             }
         }

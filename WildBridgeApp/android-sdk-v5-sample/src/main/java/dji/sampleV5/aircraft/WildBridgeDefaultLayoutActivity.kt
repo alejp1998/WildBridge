@@ -379,8 +379,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         KeyManager.getInstance().listen(timeNeededToLandKey, this) { _, newValue ->
             timeNeededToLandProcessor.onNext(newValue?.timeNeededToLand ?: 0)
         }
-        // Refresh the status badge when the FC flying state changes so IDLE upgrades to HOVERING
-        KeyManager.getInstance().listen(isFlyingKey, this) { _, _ ->
+        // Keep isAirborne in DroneController in sync with FC telemetry — used by
+        // VirtualStickVM to gate manual-override detection: only fire when airborne
+        // (prevents ground-level RC drift false-positives) or during autonomous flight.
+        KeyManager.getInstance().listen(isFlyingKey, this) { _, newValue ->
+            DroneController.isAirborne = newValue ?: false
             mainHandler.post { updateDroneStatusView(DroneController.droneStatus) }
         }
         // Keep altitude display in sync with every position update
