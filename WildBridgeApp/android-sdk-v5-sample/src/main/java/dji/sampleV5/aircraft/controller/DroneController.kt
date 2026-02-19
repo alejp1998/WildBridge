@@ -74,6 +74,7 @@ object DroneController {
         if (!isManualOverrideActive) {
             isManualOverrideActive = true
             cancelActiveControlLoop()
+            setDroneStatus(DroneStatus.MANUAL_OVERRIDE)
             ToastUtils.showToast("⚠ MANUAL OVERRIDE ACTIVE — autonomous commands blocked")
             manualOverrideListener?.onManualOverrideActivated()
         }
@@ -85,6 +86,7 @@ object DroneController {
      */
     fun deactivateManualOverride() {
         isManualOverrideActive = false
+        setDroneStatus(DroneStatus.IDLE)
         ToastUtils.showToast("Manual override cleared — autonomous commands enabled")
     }
 
@@ -104,6 +106,32 @@ object DroneController {
         return false
     }
     // ==================== End Manual Override ====================
+
+    // ==================== Drone Status ====================
+    /**
+     * High-level operational state of the drone, derived from app-side command tracking.
+     * The UI layer can also upgrade IDLE → HOVERING using FC telemetry (isFlying key).
+     */
+    enum class DroneStatus {
+        IDLE, TAKING_OFF, HOVERING, NAVIGATING, LANDING, RETURNING_HOME, MANUAL_OVERRIDE, ABORTING
+    }
+
+    interface DroneStatusListener {
+        fun onDroneStatusChanged(status: DroneStatus)
+    }
+    var droneStatusListener: DroneStatusListener? = null
+
+    @Volatile
+    var droneStatus: DroneStatus = DroneStatus.IDLE
+        private set
+
+    private val statusResetHandler = Handler(Looper.getMainLooper())
+
+    private fun setDroneStatus(status: DroneStatus) {
+        droneStatus = status
+        droneStatusListener?.onDroneStatusChanged(status)
+    }
+    // ==================== End Drone Status ====================
 
     fun init(basicVM: BasicAircraftControlVM, stickVM: VirtualStickVM ) {
         basicAircraftControlVM = basicVM
@@ -177,6 +205,8 @@ object DroneController {
         activeControlLoopRunnable = null
         // Reset stick to neutral position
         setStick(0F, 0F, 0F, 0F)
+        // Reset navigation status — but don't overwrite TAKING_OFF, LANDING, RTH, MANUAL, ABORTING
+        if (droneStatus == DroneStatus.NAVIGATING) setDroneStatus(DroneStatus.IDLE)
     }
     
     /**
@@ -187,6 +217,7 @@ object DroneController {
         controlLoopEnabled = true
         currentControlLoopId++
         controlLoopStartTime = System.currentTimeMillis()
+        setDroneStatus(DroneStatus.NAVIGATING)
         return currentControlLoopId
     }
     
@@ -288,7 +319,12 @@ object DroneController {
      */
     fun abortAllMissions() {
         // 1. Cancel any active PID control loops immediately
+        setDroneStatus(DroneStatus.ABORTING)
         cancelActiveControlLoop()
+        // ABORTING is a transient display state — return to IDLE after 2 s
+        statusResetHandler.postDelayed({
+            if (droneStatus == DroneStatus.ABORTING) setDroneStatus(DroneStatus.IDLE)
+        }, 2_000L)
         
         // 2. Reset sticks to neutral
         setStick(0F, 0F, 0F, 0F)
@@ -390,23 +426,33 @@ object DroneController {
     fun startTakeOff() {
         // Disable virtual sticks first to ensure no control loops are running before takeoff
         disableVirtualStick()
-        
+        setDroneStatus(DroneStatus.TAKING_OFF)
         basicAircraftControlVM?.startTakeOff(object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
             override fun onSuccess(t: EmptyMsg?) {
                 ToastUtils.showToast("start takeOff onSuccess.")
+                // Auto-reset after ~12 s; telemetry will upgrade IDLE → HOVERING if airborne
+                statusResetHandler.postDelayed({
+                    if (droneStatus == DroneStatus.TAKING_OFF) setDroneStatus(DroneStatus.IDLE)
+                }, 12_000L)
             }
             override fun onFailure(error: IDJIError) {
+                setDroneStatus(DroneStatus.IDLE)
                 ToastUtils.showToast("start takeOff onFailure, $error")
             }
         })
     }
 
     fun startLanding() {
+        setDroneStatus(DroneStatus.LANDING)
+        statusResetHandler.postDelayed({
+            if (droneStatus == DroneStatus.LANDING) setDroneStatus(DroneStatus.IDLE)
+        }, 40_000L)
         basicAircraftControlVM?.startLanding(object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
             override fun onSuccess(t: EmptyMsg?) {
                 ToastUtils.showToast("start landing onSuccess.")
             }
             override fun onFailure(error: IDJIError) {
+                setDroneStatus(DroneStatus.IDLE)
                 ToastUtils.showToast("start landing onFailure, $error")
             }
         })
@@ -415,6 +461,10 @@ object DroneController {
     fun startReturnToHome() {
         // CRITICAL: Disable virtual stick before RTH to prevent conflicts
         // Virtual stick mode can interfere with RTH causing erratic behavior
+        setDroneStatus(DroneStatus.RETURNING_HOME)
+        statusResetHandler.postDelayed({
+            if (droneStatus == DroneStatus.RETURNING_HOME) setDroneStatus(DroneStatus.IDLE)
+        }, 120_000L)
         cancelActiveControlLoop()
         
         virtualStickVM?.disableVirtualStick(object : CommonCallbacks.CompletionCallback {

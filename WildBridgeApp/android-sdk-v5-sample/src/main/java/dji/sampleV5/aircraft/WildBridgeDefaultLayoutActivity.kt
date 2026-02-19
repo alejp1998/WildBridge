@@ -235,6 +235,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Setup Manual Override checkbox
         setupManualOverrideCheckbox()
 
+        // Setup drone status indicator
+        setupDroneStatusView()
+
         // Initialize LocationManager
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         startLocationUpdates()
@@ -302,6 +305,41 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     // ==================== End Manual Override Checkbox ====================
 
+    // ==================== Drone Status View ====================
+
+    private fun setupDroneStatusView() {
+        DroneController.droneStatusListener = object : DroneController.DroneStatusListener {
+            override fun onDroneStatusChanged(status: DroneController.DroneStatus) {
+                mainHandler.post { updateDroneStatusView(status) }
+            }
+        }
+        updateDroneStatusView(DroneController.droneStatus)
+    }
+
+    private fun updateDroneStatusView(appStatus: DroneController.DroneStatus) {
+        val statusTv = findViewById<TextView>(R.id.text_drone_status) ?: return
+        // Upgrade IDLE → HOVERING when the FC says the drone is airborne
+        val resolved = if (appStatus == DroneController.DroneStatus.IDLE && isFlyingKey.get(false)) {
+            DroneController.DroneStatus.HOVERING
+        } else {
+            appStatus
+        }
+        val (icon, label, color) = when (resolved) {
+            DroneController.DroneStatus.IDLE            -> Triple("●", "IDLE",       0xFFAAAAAA.toInt())
+            DroneController.DroneStatus.TAKING_OFF      -> Triple("▲", "TAKING OFF", 0xFFFFC107.toInt())
+            DroneController.DroneStatus.HOVERING        -> Triple("●", "HOVERING",   0xFF4CAF50.toInt())
+            DroneController.DroneStatus.NAVIGATING      -> Triple("►", "NAVIGATING", 0xFF2196F3.toInt())
+            DroneController.DroneStatus.LANDING         -> Triple("▼", "LANDING",    0xFFFF9800.toInt())
+            DroneController.DroneStatus.RETURNING_HOME  -> Triple("⌂", "RTH",        0xFFFF9800.toInt())
+            DroneController.DroneStatus.MANUAL_OVERRIDE -> Triple("✋", "MANUAL",     0xFFF44336.toInt())
+            DroneController.DroneStatus.ABORTING        -> Triple("✖", "ABORTING",   0xFFF44336.toInt())
+        }
+        statusTv.text = "$icon $label"
+        statusTv.setTextColor(color)
+    }
+
+    // ==================== End Drone Status View ====================
+
     private fun setupDroneNameDisplay() {
         // Find the TextView in the layout
         val droneNameText = findViewById<TextView>(R.id.text_drone_name)
@@ -336,6 +374,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
         KeyManager.getInstance().listen(timeNeededToLandKey, this) { _, newValue ->
             timeNeededToLandProcessor.onNext(newValue?.timeNeededToLand ?: 0)
+        }
+        // Refresh the status badge when the FC flying state changes so IDLE upgrades to HOVERING
+        KeyManager.getInstance().listen(isFlyingKey, this) { _, _ ->
+            mainHandler.post { updateDroneStatusView(DroneController.droneStatus) }
         }
     }
     
@@ -546,7 +588,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Cancel key listeners
         KeyManager.getInstance().cancelListen(this)
         
-        // Clean up DroneController to prevent memory leaks
+        // Clean up DroneController listeners and resources
+        DroneController.droneStatusListener = null
         DroneController.destroy()
         
         Log.i(TAG, "All servers stopped")
