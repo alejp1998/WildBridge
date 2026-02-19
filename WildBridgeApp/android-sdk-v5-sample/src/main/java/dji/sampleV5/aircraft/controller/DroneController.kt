@@ -140,7 +140,15 @@ object DroneController {
     // Kill switch - when false, ALL control loops must stop immediately
     @Volatile
     private var controlLoopEnabled = false
-    
+
+    /**
+     * True while a PID/virtual-stick control loop is actively running.
+     * Used externally (e.g. VirtualStickVM) to gate the manual-override check so that
+     * RC stick noise or drift doesn't spuriously activate override when the drone is idle.
+     */
+    val isAutonomousFlightActive: Boolean
+        get() = controlLoopEnabled
+
     // Unique ID for each control loop session - loops check this to ensure they're still valid
     @Volatile
     private var currentControlLoopId: Long = 0
@@ -211,12 +219,15 @@ object DroneController {
         }
         
         // Check if drone is still in virtual stick mode
-        // If user takes manual control, virtual stick gets disabled - kill the loop
+        // If virtual stick gets disabled while a loop is running, kill the loop.
         val isVirtualStickEnabled = virtualStickVM?.currentVirtualStickStateInfo?.value?.state?.isVirtualStickEnable ?: false
         if (!isVirtualStickEnabled) {
-            // Virtual stick was disabled externally (user took control)
-            // Activate manual override latch so subsequent commands are also blocked
-            activateManualOverride()
+            // Virtual stick was disabled externally.
+            // NOTE: Do NOT call activateManualOverride() here — virtual stick can be disabled
+            // by the system itself (e.g. disableVirtualStick() called by startTakeOff(), signal
+            // loss recovery, FC safety checks) which would spuriously latch manual override and
+            // block subsequent autonomous commands.  Real pilot RC-stick intervention is detected
+            // in VirtualStickVM.tryUpdateVirtualStickByRc() while isAutonomousFlightActive is true.
             controlLoopEnabled = false
             return false
         }
