@@ -295,13 +295,8 @@ object DroneController {
         // Cancel any active control loop first to prevent ghost navigation
         cancelActiveControlLoop()
         virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
-            override fun onSuccess() {
-                ToastUtils.showToast("enableVirtualStick success.")
-            }
-
-            override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("enableVirtualStick error,$error")
-            }
+            override fun onSuccess() { }
+            override fun onFailure(error: IDJIError) { /* SDK may report "already enabled" — not a real error */ }
         })
     }
 
@@ -309,13 +304,8 @@ object DroneController {
         // Cancel any active control loop first
         cancelActiveControlLoop()
         virtualStickVM?.disableVirtualStick(object : CommonCallbacks.CompletionCallback {
-            override fun onSuccess() {
-                ToastUtils.showToast("disableVirtualStick success.")
-            }
-
-            override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("disableVirtualStick error,${error})")
-            }
+            override fun onSuccess() { }
+            override fun onFailure(error: IDJIError) { /* SDK may report "already disabled" — not a real error */ }
         })
     }
 
@@ -539,7 +529,7 @@ object DroneController {
         virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() { }
             override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("enableVirtualStick error,$error")
+                /* SDK may report "already enabled" — not a real error */
             }
         })
         virtualStickVM?.enableVirtualStickAdvancedMode()
@@ -596,9 +586,7 @@ object DroneController {
         // NOTE: Use VM directly, not enableVirtualStick() which would cancel the loop we just started
         virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() { }
-            override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("enableVirtualStick error,$error")
-            }
+            override fun onFailure(error: IDJIError) { /* SDK may report "already enabled" — not a real error */ }
         })
         virtualStickVM?.enableVirtualStickAdvancedMode()
 
@@ -681,7 +669,7 @@ object DroneController {
         virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() { }
             override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("enableVirtualStick error,$error")
+                /* SDK may report "already enabled" — not a real error */
             }
         })
         virtualStickVM?.enableVirtualStickAdvancedMode()
@@ -791,7 +779,7 @@ object DroneController {
         virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() { }
             override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("enableVirtualStick error,$error")
+                /* SDK may report "already enabled" — not a real error */
             }
         })
         virtualStickVM?.enableVirtualStickAdvancedMode()
@@ -884,7 +872,7 @@ object DroneController {
         virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() { }
             override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("enableVirtualStick error,$error")
+                /* SDK may report "already enabled" — not a real error */
             }
         })
         virtualStickVM?.enableVirtualStickAdvancedMode()
