@@ -15,6 +15,7 @@ import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.hardware.Sensor
 import android.widget.CheckBox
+import android.widget.ToggleButton
 import android.widget.EditText
 import android.view.Menu
 import android.view.MenuItem
@@ -267,16 +268,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         showServerInfo()
     }
     
-    // ==================== Manual Override Checkbox ====================
+    // ==================== Mode Toggle (AUTO / MANUAL) ====================
 
     private fun setupManualOverrideCheckbox() {
         updateManualOverrideUI()
 
-        findViewById<CheckBox>(R.id.cb_manual_override)?.setOnCheckedChangeListener { _, isChecked ->
-            if (!isChecked) {
+        findViewById<ToggleButton>(R.id.cb_manual_override)?.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked) {
+                DroneController.activateManualOverride()
+            } else {
                 DroneController.deactivateManualOverride()
-                updateManualOverrideUI()
             }
+            updateManualOverrideUI()
         }
 
         DroneController.manualOverrideListener = object : DroneController.ManualOverrideListener {
@@ -288,22 +291,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun updateManualOverrideUI() {
         val isActive = DroneController.isManualOverrideActive
-        findViewById<CheckBox>(R.id.cb_manual_override)?.let { cb ->
-            cb.setOnCheckedChangeListener(null)
-            cb.isChecked = isActive
-            cb.text = if (isActive) "\u26a0 Manual" else "Manual"
-            cb.setTextColor(if (isActive) 0xFFFF0000.toInt() else 0xFFFFFFFF.toInt())
-            cb.setBackgroundColor(if (isActive) 0x33FF0000 else 0x00000000)
-            cb.setOnCheckedChangeListener { _, isChecked ->
-                if (!isChecked) {
-                    DroneController.deactivateManualOverride()
-                    updateManualOverrideUI()
-                }
+        findViewById<ToggleButton>(R.id.cb_manual_override)?.let { tb ->
+            tb.setOnCheckedChangeListener(null)
+            tb.isChecked = isActive
+            tb.setTextColor(if (isActive) 0xFFF44336.toInt() else 0xFF4CAF50.toInt())
+            tb.setOnCheckedChangeListener { _, isChecked ->
+                if (isChecked) DroneController.activateManualOverride()
+                else DroneController.deactivateManualOverride()
+                updateManualOverrideUI()
             }
         }
     }
 
-    // ==================== End Manual Override Checkbox ====================
+    // ==================== End Mode Toggle ====================
 
     // ==================== Drone Status View ====================
 
@@ -342,6 +342,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun updateAltitudeView(altitudeMetres: Double) {
         findViewById<TextView>(R.id.text_altitude)?.text = "${altitudeMetres.toInt()} m"
+    }
+
+    private fun updateSatelliteView(count: Int) {
+        findViewById<TextView>(R.id.text_satellite_count)?.text = "🛰 $count"
     }
 
     private fun setupDroneNameDisplay() {
@@ -389,6 +393,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Keep altitude display in sync with every position update
         KeyManager.getInstance().listen(location3DKey, this) { _, newValue ->
             mainHandler.post { updateAltitudeView(newValue?.altitude ?: 0.0) }
+        }
+        // Satellite count
+        KeyManager.getInstance().listen(satelliteCountKey, this) { _, newValue ->
+            mainHandler.post { updateSatelliteView(newValue ?: 0) }
         }
     }
     

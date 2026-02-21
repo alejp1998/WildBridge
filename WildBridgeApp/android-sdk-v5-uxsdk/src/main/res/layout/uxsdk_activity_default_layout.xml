@@ -96,20 +96,18 @@
             app:uxsdk_itemsMarginRight="@dimen/uxsdk_spacing_normal"
             app:uxsdk_itemsSpacing="14dp" />
 
-        <!-- Manual Override Indicator & Deactivate Toggle -->
-        <CheckBox
+        <!-- Autonomous / Manual mode toggle -->
+        <ToggleButton
             android:id="@+id/cb_manual_override"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Manual"
-            android:textColor="#FFFFFF"
+            android:textOff="⚙ AUTO"
+            android:textOn="✋ MANUAL"
             android:textSize="13sp"
             android:textStyle="bold"
-            android:buttonTint="#FF0000"
+            android:padding="6dp"
             android:checked="false"
-            android:enabled="true"
-            android:padding="4dp"
-            android:background="#00000000"
+            android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintBottom_toTopOf="@+id/text_drone_name"
             android:layout_marginStart="16dp"
@@ -162,6 +160,23 @@
             android:padding="8dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toEndOf="@+id/text_drone_status"
+            app:layout_constraintBottom_toBottomOf="@+id/text_drone_name"
+            app:layout_constraintTop_toTopOf="@+id/text_drone_name"
+            android:layout_marginStart="8dp"
+            tools:ignore="HardcodedText" />
+
+        <!-- GPS satellite count -->
+        <TextView
+            android:id="@+id/text_satellite_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🛰 0"
+            android:textColor="#FFCCCCCC"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:padding="8dp"
+            android:background="@drawable/uxsdk_background_black_rectangle"
+            app:layout_constraintStart_toEndOf="@+id/text_altitude"
             app:layout_constraintBottom_toBottomOf="@+id/text_drone_name"
             app:layout_constraintTop_toTopOf="@+id/text_drone_name"
             android:layout_marginStart="8dp"
