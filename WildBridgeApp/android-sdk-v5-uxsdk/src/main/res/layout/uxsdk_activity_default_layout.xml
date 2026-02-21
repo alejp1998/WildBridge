@@ -97,16 +97,17 @@
             app:uxsdk_itemsSpacing="14dp" />
 
         <!-- Autonomous / Manual mode toggle -->
-        <ToggleButton
+        <Switch
             android:id="@+id/cb_manual_override"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textOff="⚙ AUTO"
-            android:textOn="✋ MANUAL"
+            android:text="AUTO"
+            android:textColor="#FF2196F3"
             android:textSize="13sp"
             android:textStyle="bold"
             android:padding="6dp"
             android:checked="false"
+            android:switchMinWidth="44dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintBottom_toTopOf="@+id/text_drone_name"

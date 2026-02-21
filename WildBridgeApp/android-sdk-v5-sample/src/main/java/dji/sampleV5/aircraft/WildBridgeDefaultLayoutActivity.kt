@@ -14,7 +14,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.hardware.Sensor
+import android.content.res.ColorStateList
 import android.widget.CheckBox
+import android.widget.Switch
 import android.widget.ToggleButton
 import android.widget.EditText
 import android.view.Menu
@@ -273,12 +275,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun setupManualOverrideCheckbox() {
         updateManualOverrideUI()
 
-        findViewById<ToggleButton>(R.id.cb_manual_override)?.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked) {
-                DroneController.activateManualOverride()
-            } else {
-                DroneController.deactivateManualOverride()
-            }
+        findViewById<Switch>(R.id.cb_manual_override)?.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked) DroneController.activateManualOverride()
+            else DroneController.deactivateManualOverride()
             updateManualOverrideUI()
         }
 
@@ -290,12 +289,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun updateManualOverrideUI() {
-        val isActive = DroneController.isManualOverrideActive
-        findViewById<ToggleButton>(R.id.cb_manual_override)?.let { tb ->
-            tb.setOnCheckedChangeListener(null)
-            tb.isChecked = isActive
-            tb.setTextColor(if (isActive) 0xFFF44336.toInt() else 0xFF4CAF50.toInt())
-            tb.setOnCheckedChangeListener { _, isChecked ->
+        val isManual = DroneController.isManualOverrideActive
+        // Blue = autonomous, Red = manual
+        val color = if (isManual) 0xFFF44336.toInt() else 0xFF2196F3.toInt()
+        val tint = ColorStateList.valueOf(color)
+        findViewById<Switch>(R.id.cb_manual_override)?.let { sw ->
+            sw.setOnCheckedChangeListener(null)
+            sw.isChecked = isManual
+            sw.text = if (isManual) "MANUAL" else "AUTO"
+            sw.setTextColor(color)
+            sw.trackTintList = tint
+            sw.thumbTintList = ColorStateList.valueOf(if (isManual) 0xFFB71C1C.toInt() else 0xFF1565C0.toInt())
+            sw.setOnCheckedChangeListener { _, isChecked ->
                 if (isChecked) DroneController.activateManualOverride()
                 else DroneController.deactivateManualOverride()
                 updateManualOverrideUI()
