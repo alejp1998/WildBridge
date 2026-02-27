@@ -329,28 +329,28 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         } else {
             appStatus
         }
-        val (icon, label, color) = when (resolved) {
-            DroneController.DroneStatus.IDLE            -> Triple("●", "IDLE",       0xFFAAAAAA.toInt())
-            DroneController.DroneStatus.TAKING_OFF      -> Triple("▲", "TAKING OFF", 0xFFFFC107.toInt())
-            DroneController.DroneStatus.HOVERING        -> Triple("●", "HOVERING",   0xFF4CAF50.toInt())
-            DroneController.DroneStatus.NAVIGATING      -> Triple("►", "NAVIGATING", 0xFF2196F3.toInt())
-            DroneController.DroneStatus.LANDING         -> Triple("▼", "LANDING",    0xFFFF9800.toInt())
-            DroneController.DroneStatus.RETURNING_HOME  -> Triple("⌂", "RTH",        0xFFFF9800.toInt())
-            DroneController.DroneStatus.MANUAL_OVERRIDE -> Triple("✋", "MANUAL",     0xFFF44336.toInt())
-            DroneController.DroneStatus.ABORTING        -> Triple("✖", "ABORTING",   0xFFF44336.toInt())
+        val (label, color) = when (resolved) {
+            DroneController.DroneStatus.IDLE            -> Pair("IDLE",       0xFFAAAAAA.toInt())
+            DroneController.DroneStatus.TAKING_OFF      -> Pair("TAKEOFF",    0xFFFFC107.toInt())
+            DroneController.DroneStatus.HOVERING        -> Pair("HOVER",      0xFF4CAF50.toInt())
+            DroneController.DroneStatus.NAVIGATING      -> Pair("NAV",        0xFF2196F3.toInt())
+            DroneController.DroneStatus.LANDING         -> Pair("LAND",       0xFFFF9800.toInt())
+            DroneController.DroneStatus.RETURNING_HOME  -> Pair("RTH",        0xFFFF9800.toInt())
+            DroneController.DroneStatus.MANUAL_OVERRIDE -> Pair("MANUAL",     0xFFF44336.toInt())
+            DroneController.DroneStatus.ABORTING        -> Pair("ABORT",      0xFFF44336.toInt())
         }
-        statusTv.text = "$icon $label"
+        statusTv.text = label
         statusTv.setTextColor(color)
     }
 
     // ==================== End Drone Status View ====================
 
     private fun updateAltitudeView(altitudeMetres: Double) {
-        findViewById<TextView>(R.id.text_altitude)?.text = "${altitudeMetres.toInt()} m"
+        findViewById<TextView>(R.id.text_altitude)?.text = "ALT ${altitudeMetres.toInt()}m"
     }
 
     private fun updateSatelliteView(count: Int) {
-        findViewById<TextView>(R.id.text_satellite_count)?.text = "🛰 $count"
+        findViewById<TextView>(R.id.text_satellite_count)?.text = "SAT $count"
     }
 
     private fun setupDroneNameDisplay() {
