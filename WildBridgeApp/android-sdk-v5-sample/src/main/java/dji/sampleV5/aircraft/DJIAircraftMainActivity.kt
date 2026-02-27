@@ -22,6 +22,7 @@ class DJIAircraftMainActivity : DJIMainActivity() {
         GeoidManager.getInstance().init(this)
 
         enableDefaultLayout(WildBridgeDefaultLayoutActivity::class.java)
+        enableLocalVideoDetectionTest(LocalVideoDetectionTestActivity::class.java)
         enableWidgetList(WidgetsActivity::class.java)
     }
 

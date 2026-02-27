@@ -1,5 +1,7 @@
 package dji.sampleV5.aircraft.webrtc
 
+import dji.sampleV5.aircraft.detection.DetectionResult
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -45,7 +47,11 @@ data class FrameMetadata(
     val batteryPercent: Int,
     val isFlying: Boolean,
     val flightMode: String,          // DJI flight mode string (e.g. "GPS", "ATTI", "SPORT", "TRIPOD")
-    val isManualOverrideActive: Boolean = false  // True when pilot has taken manual RC control
+    val isManualOverrideActive: Boolean = false,  // True when pilot has taken manual RC control
+
+    // ── On-device detections (rhino_yolo26s) ──────────────────────────────
+    /** Detections produced by the edge model for this frame. Empty when detection is OFF. */
+    val detections: List<DetectionResult> = emptyList()
 ) {
     /**
      * Convert to JSON for transmission via WebRTC data channel
@@ -87,6 +93,9 @@ data class FrameMetadata(
             put("isFlying", isFlying)
             put("flightMode", flightMode)
             put("isManualOverrideActive", isManualOverrideActive)
+
+            // Detections array (empty when detection is OFF)
+            put("detections", DetectionResult.listToJsonArray(detections))
         }
     }
     
@@ -125,7 +134,10 @@ data class FrameMetadata(
                 batteryPercent = obj.optInt("batteryPercent", 0),
                 isFlying = obj.optBoolean("isFlying", false),
                 flightMode = obj.optString("flightMode", "UNKNOWN"),
-                isManualOverrideActive = obj.optBoolean("isManualOverrideActive", false)
+                isManualOverrideActive = obj.optBoolean("isManualOverrideActive", false),
+                detections = DetectionResult.listFromJsonArray(
+                    obj.optJSONArray("detections") ?: JSONArray()
+                )
             )
         }
     }

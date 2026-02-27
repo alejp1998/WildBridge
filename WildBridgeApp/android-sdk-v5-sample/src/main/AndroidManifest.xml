@@ -102,6 +102,13 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false"/>
 
+        <activity android:name=".LocalVideoDetectionTestActivity"
+            android:theme="@style/full_screen_theme"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:process=":local_detection"
+            android:exported="false"/>
+
         <activity android:name="dji.v5.ux.sample.showcase.widgetlist.WidgetsActivity"
             android:theme="@style/full_screen_theme"
             android:screenOrientation="landscape"

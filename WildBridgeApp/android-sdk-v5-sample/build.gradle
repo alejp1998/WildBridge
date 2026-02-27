@@ -108,6 +108,12 @@ android {
     buildFeatures {
         viewBinding true
     }
+
+    // Prevent the TFLite model being compressed in the APK so it can be
+    // memory-mapped directly (required by Interpreter / FileUtil.loadMappedFile)
+    aaptOptions {
+        noCompress "tflite"
+    }
 }
 
 dependencies {
@@ -145,4 +151,10 @@ dependencies {
 
     // WebRTC for drone video streaming (Stream's maintained fork)
     implementation 'io.getstream:stream-webrtc-android:1.1.1'
+
+    // ── On-device wildlife detection (rhino_yolo26s) ─────────────────────
+    // TFLite runtime – GPU/NNAPI delegate is wired in at runtime via Interpreter.Options
+    implementation 'org.tensorflow:tensorflow-lite:2.14.0'
+    // Required for Interpreter.Options.useNNAPI and the GPU delegate fallback
+    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
 }

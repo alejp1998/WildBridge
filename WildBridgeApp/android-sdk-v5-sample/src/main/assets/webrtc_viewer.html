@@ -3,15 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DJI Drone WebRTC Viewer</title>
+    <title>WildBridge Drone Viewer</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #1a1a2e;
             color: #fff;
             min-height: 100vh;
@@ -20,86 +16,46 @@
             align-items: center;
             padding: 20px;
         }
-        h1 {
-            margin-bottom: 20px;
-            color: #4ade80;
-        }
-        .container {
-            max-width: 900px;
-            width: 100%;
-        }
+        h1 { margin-bottom: 20px; color: #4ade80; }
+        .container { max-width: 960px; width: 100%; }
         .connection-panel {
             background: #16213e;
             padding: 20px;
             border-radius: 10px;
             margin-bottom: 20px;
         }
-        .form-group {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
-            align-items: center;
-        }
-        label {
-            min-width: 100px;
-            color: #94a3b8;
-        }
+        .form-group { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; }
+        label { min-width: 100px; color: #94a3b8; }
         input {
             flex: 1;
             padding: 10px 15px;
             border: 1px solid #334155;
-            border-radius: 5px;
-            background: #1e293b;
+            border-radius: 6px;
+            background: #0f172a;
             color: #fff;
             font-size: 14px;
-        }
-        input:focus {
-            outline: none;
-            border-color: #4ade80;
         }
         .btn {
-            padding: 10px 25px;
+            padding: 10px 20px;
             border: none;
-            border-radius: 5px;
-            font-size: 14px;
+            border-radius: 6px;
             cursor: pointer;
-            transition: all 0.3s ease;
+            font-size: 14px;
+            font-weight: 600;
         }
-        .btn-primary {
-            background: #4ade80;
-            color: #1a1a2e;
-        }
-        .btn-primary:hover {
-            background: #22c55e;
-        }
-        .btn-danger {
-            background: #ef4444;
-            color: #fff;
-        }
-        .btn-danger:hover {
-            background: #dc2626;
-        }
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 15px;
-            background: #1e293b;
-            border-radius: 5px;
-        }
+        .btn-primary { background: #3b82f6; color: #fff; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-danger { background: #ef4444; color: #fff; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status { display: flex; align-items: center; gap: 8px; }
         .status-indicator {
-            width: 10px;
-            height: 10px;
+            width: 12px; height: 12px;
             border-radius: 50%;
             background: #ef4444;
         }
-        .status-indicator.connected {
-            background: #4ade80;
-        }
+        .status-indicator.connected { background: #4ade80; }
+        /* ── Video + overlay ── */
         .video-container {
             background: #000;
             border-radius: 10px;
@@ -108,16 +64,41 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            position: relative;
         }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
+        video { width: 100%; height: 100%; object-fit: contain; }
+        #detectionCanvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
         }
-        .placeholder {
-            color: #64748b;
-            text-align: center;
+        #telemetryHud {
+            position: absolute;
+            top: 10px; right: 12px;
+            background: rgba(0,0,0,0.55);
+            color: #e2e8f0;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            line-height: 1.65;
+            pointer-events: none;
         }
+        #aiBadge {
+            position: absolute;
+            top: 10px; left: 12px;
+            background: rgba(0,180,0,0.8);
+            color: #fff;
+            font-family: monospace;
+            font-size: 12px;
+            font-weight: bold;
+            padding: 4px 10px;
+            border-radius: 4px;
+            pointer-events: none;
+            display: none;
+        }
+        .placeholder { color: #64748b; text-align: center; }
         .logs {
             background: #16213e;
             padding: 15px;
@@ -126,26 +107,18 @@
             max-height: 200px;
             overflow-y: auto;
         }
-        .logs h3 {
-            margin-bottom: 10px;
-            color: #94a3b8;
-        }
-        .log-entry {
-            font-family: monospace;
-            font-size: 12px;
-            color: #64748b;
-            margin: 3px 0;
-        }
-        .log-entry.info { color: #3b82f6; }
+        .logs h3 { margin-bottom: 10px; color: #94a3b8; }
+        .log-entry { font-family: monospace; font-size: 12px; color: #64748b; margin: 3px 0; }
+        .log-entry.info    { color: #3b82f6; }
         .log-entry.success { color: #4ade80; }
-        .log-entry.error { color: #ef4444; }
-        .log-entry.warn { color: #f59e0b; }
+        .log-entry.error   { color: #ef4444; }
+        .log-entry.warn    { color: #f59e0b; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚁 DJI Drone WebRTC Viewer</h1>
-        
+        <h1>WildBridge Drone Viewer</h1>
+
         <div class="connection-panel">
             <div class="form-group">
                 <label>Server URL:</label>
@@ -159,10 +132,13 @@
             </div>
         </div>
 
-        <div class="video-container">
+        <div class="video-container" id="videoContainer">
             <video id="remoteVideo" autoplay playsinline></video>
+            <canvas id="detectionCanvas"></canvas>
+            <div id="telemetryHud">No telemetry</div>
+            <div id="aiBadge">AI: --</div>
             <div class="placeholder" id="videoPlaceholder">
-                <p>📹 Connect to the drone to view video feed</p>
+                <p>Connect to the drone to view video feed</p>
             </div>
         </div>
 
@@ -177,91 +153,158 @@
         let peerConnection = null;
         let clientId = null;
 
+        let telemetryChannel = null;
+        let staleTimer = null;
+
+        // ── Colour palette for detection boxes (per class index) ──────────
+        const PALETTE = [
+            '#00ff00','#ff9900','#ff3355','#0099ff',
+            '#ffff00','#00ffff','#ff00ff','#aa44ff'
+        ];
+
+        // ─────────────────────────────────────────────────────────────────
+        // Telemetry / detection rendering
+        // ─────────────────────────────────────────────────────────────────
+        function handleMetadata(raw) {
+            let meta;
+            try { meta = JSON.parse(raw); } catch(e) { return; }
+            updateHud(meta);
+            const dets = meta.detections || [];
+            drawDetections(dets);
+            updateAiBadge(dets, meta);
+            clearTimeout(staleTimer);
+            staleTimer = setTimeout(() => {
+                drawDetections([]);
+                document.getElementById('aiBadge').style.display = 'none';
+            }, 2500);
+        }
+
+        function updateHud(meta) {
+            const hud = document.getElementById('telemetryHud');
+            const lat  = (meta.latitude  || 0).toFixed(6);
+            const lon  = (meta.longitude || 0).toFixed(6);
+            const alt  = (meta.altitudeASL || 0).toFixed(1);
+            const bat  = meta.batteryPercent != null ? meta.batteryPercent + '%' : '--';
+            const sats = meta.satelliteCount != null ? meta.satelliteCount : '--';
+            const hdg  = (meta.aircraftYaw || 0).toFixed(1);
+            const spd  = Math.sqrt(
+                Math.pow(meta.velocityX||0,2) +
+                Math.pow(meta.velocityY||0,2) +
+                Math.pow(meta.velocityZ||0,2)).toFixed(1);
+            hud.innerHTML =
+                'GPS: ' + lat + ', ' + lon + '<br>' +
+                'Alt: ' + alt + ' m ASL<br>' +
+                'Hdg: ' + hdg + ' deg  Spd: ' + spd + ' m/s<br>' +
+                'Bat: ' + bat + '  Sats: ' + sats;
+        }
+
+        function updateAiBadge(dets, meta) {
+            const badge = document.getElementById('aiBadge');
+            if (dets.length > 0) {
+                const ms    = dets[0].inferenceMs != null ? (+dets[0].inferenceMs).toFixed(0) : '--';
+                const model = dets[0].modelName || meta.modelName || '';
+                badge.textContent = 'AI: ' + dets.length + ' det  ' + ms + 'ms  [' + model + ']';
+                badge.style.display = 'block';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        function drawDetections(dets) {
+            const canvas = document.getElementById('detectionCanvas');
+            const video  = document.getElementById('remoteVideo');
+            canvas.width  = video.videoWidth  || canvas.offsetWidth;
+            canvas.height = video.videoHeight || canvas.offsetHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const det of dets) {
+                const x1 = det.x1 * canvas.width;
+                const y1 = det.y1 * canvas.height;
+                const x2 = det.x2 * canvas.width;
+                const y2 = det.y2 * canvas.height;
+                const color = PALETTE[(det.classId || 0) % PALETTE.length];
+                ctx.strokeStyle = color;
+                ctx.lineWidth   = 2;
+                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                const label = (det.className || ('cls' + det.classId)) +
+                              ' ' + (+det.confidence || 0).toFixed(2);
+                ctx.font = 'bold 13px monospace';
+                const tw = ctx.measureText(label).width;
+                ctx.fillStyle = color;
+                ctx.fillRect(x1, y1 - 18, tw + 6, 18);
+                ctx.fillStyle = '#000';
+                ctx.fillText(label, x1 + 3, y1 - 4);
+            }
+        }
+
+        function attachDataChannel(ch) {
+            log('Data channel ready: ' + ch.label + ' (id=' + ch.id + ')', 'success');
+            ch.onmessage = function(ev) { handleMetadata(ev.data); };
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // WebRTC / signalling
+        // ─────────────────────────────────────────────────────────────────
         const config = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
-            ]
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         };
 
-        function log(message, type = 'info') {
+        function log(message, type) {
+            type = type || 'info';
             const container = document.getElementById('logContainer');
             const entry = document.createElement('div');
-            entry.className = `log-entry ${type}`;
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            entry.className = 'log-entry ' + type;
+            entry.textContent = '[' + new Date().toLocaleTimeString() + '] ' + message;
             container.appendChild(entry);
             container.scrollTop = container.scrollHeight;
             console.log(message);
         }
 
         function setStatus(connected, text) {
-            const indicator = document.getElementById('statusIndicator');
-            const statusText = document.getElementById('statusText');
-            indicator.className = `status-indicator ${connected ? 'connected' : ''}`;
-            statusText.textContent = text;
+            document.getElementById('statusIndicator').className =
+                'status-indicator' + (connected ? ' connected' : '');
+            document.getElementById('statusText').textContent = text;
         }
 
         function connect() {
             const url = document.getElementById('serverUrl').value;
-            if (!url) {
-                log('Please enter server URL', 'error');
-                return;
-            }
-
-            log(`Connecting to ${url}...`);
+            if (!url) { log('Please enter server URL', 'error'); return; }
+            log('Connecting to ' + url + '...');
             setStatus(false, 'Connecting...');
-
             try {
                 ws = new WebSocket(url);
-
-                ws.onopen = () => {
+                ws.onopen = function() {
                     log('WebSocket connected', 'success');
                     setStatus(true, 'Connected to signaling server');
-                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('connectBtn').disabled    = true;
                     document.getElementById('disconnectBtn').disabled = false;
-                    
-                    // Register as a viewer
                     ws.send(JSON.stringify({ type: 'register', role: 'viewer' }));
                 };
-
-                ws.onmessage = async (event) => {
+                ws.onmessage = async function(event) {
                     const message = JSON.parse(event.data);
-                    log(`Received: ${message.type}`, 'info');
-
+                    log('Received: ' + message.type, 'info');
                     switch (message.type) {
                         case 'welcome':
                             clientId = message.clientId;
-                            log(`Assigned client ID: ${clientId}`, 'success');
+                            log('Assigned client ID: ' + clientId, 'success');
                             break;
-
-                        case 'offer':
-                            await handleOffer(message);
-                            break;
-
-                        case 'answer':
-                            await handleAnswer(message);
-                            break;
-
-                        case 'candidate':
-                            await handleCandidate(message);
-                            break;
-
-                        default:
-                            log(`Unknown message type: ${message.type}`, 'warn');
+                        case 'offer':     await handleOffer(message);     break;
+                        case 'answer':    await handleAnswer(message);    break;
+                        case 'candidate': await handleCandidate(message); break;
+                        default: log('Unknown message type: ' + message.type, 'warn');
                     }
                 };
-
-                ws.onclose = () => {
+                ws.onclose = function() {
                     log('WebSocket disconnected', 'warn');
                     setStatus(false, 'Disconnected');
                     cleanup();
                 };
-
-                ws.onerror = (error) => {
-                    log(`WebSocket error: ${error}`, 'error');
+                ws.onerror = function(error) {
+                    log('WebSocket error: ' + error, 'error');
                     setStatus(false, 'Connection error');
                 };
-            } catch (e) {
-                log(`Connection failed: ${e.message}`, 'error');
+            } catch(e) {
+                log('Connection failed: ' + e.message, 'error');
             }
         }
 
@@ -272,24 +315,25 @@
         }
 
         function cleanup() {
-            if (ws) {
-                ws.close();
-                ws = null;
+            if (ws) { ws.close(); ws = null; }
+            if (telemetryChannel) {
+                try { telemetryChannel.close(); } catch(_) {}
+                telemetryChannel = null;
             }
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            document.getElementById('connectBtn').disabled = false;
+            if (peerConnection) { peerConnection.close(); peerConnection = null; }
+            clearTimeout(staleTimer);
+            drawDetections([]);
+            document.getElementById('aiBadge').style.display = 'none';
+            document.getElementById('connectBtn').disabled    = false;
             document.getElementById('disconnectBtn').disabled = true;
-            document.getElementById('remoteVideo').srcObject = null;
+            document.getElementById('remoteVideo').srcObject  = null;
             document.getElementById('videoPlaceholder').style.display = 'block';
         }
 
         async function createPeerConnection() {
             peerConnection = new RTCPeerConnection(config);
 
-            peerConnection.onicecandidate = (event) => {
+            peerConnection.onicecandidate = function(event) {
                 if (event.candidate) {
                     log('Sending ICE candidate', 'info');
                     ws.send(JSON.stringify({
@@ -301,7 +345,7 @@
                 }
             };
 
-            peerConnection.ontrack = (event) => {
+            peerConnection.ontrack = function(event) {
                 log('Received remote track', 'success');
                 const video = document.getElementById('remoteVideo');
                 video.srcObject = event.streams[0];
@@ -309,16 +353,33 @@
                 setStatus(true, 'Receiving video');
             };
 
-            peerConnection.oniceconnectionstatechange = () => {
-                log(`ICE state: ${peerConnection.iceConnectionState}`);
+            peerConnection.oniceconnectionstatechange = function() {
+                log('ICE state: ' + peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'disconnected' ||
                     peerConnection.iceConnectionState === 'failed') {
                     setStatus(false, 'Connection lost');
                 }
             };
 
-            peerConnection.onconnectionstatechange = () => {
-                log(`Connection state: ${peerConnection.connectionState}`);
+            peerConnection.onconnectionstatechange = function() {
+                log('Connection state: ' + peerConnection.connectionState);
+            };
+
+            // Negotiated telemetry data channel — must mirror Android settings:
+            //   negotiated=true, id=0, ordered=true, maxRetransmits=0
+            telemetryChannel = peerConnection.createDataChannel('telemetry', {
+                negotiated: true,
+                id: 0,
+                ordered: true,
+                maxRetransmits: 0
+            });
+            attachDataChannel(telemetryChannel);
+
+            // Accept any additional non-negotiated data channels
+            peerConnection.ondatachannel = function(event) {
+                if (event.channel && event.channel.id !== 0) {
+                    attachDataChannel(event.channel);
+                }
             };
 
             return peerConnection;
@@ -326,39 +387,26 @@
 
         async function handleOffer(message) {
             log('Processing offer...', 'info');
-            
-            if (!peerConnection) {
-                await createPeerConnection();
-            }
-
+            if (!peerConnection) await createPeerConnection();
             try {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription({
-                    type: 'offer',
-                    sdp: message.sdp
-                }));
-
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription({ type: 'offer', sdp: message.sdp }));
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
-
                 log('Sending answer', 'info');
-                ws.send(JSON.stringify({
-                    type: 'answer',
-                    sdp: answer.sdp
-                }));
-            } catch (e) {
-                log(`Error handling offer: ${e.message}`, 'error');
+                ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
+            } catch(e) {
+                log('Error handling offer: ' + e.message, 'error');
             }
         }
 
         async function handleAnswer(message) {
             log('Processing answer...', 'info');
             try {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription({
-                    type: 'answer',
-                    sdp: message.sdp
-                }));
-            } catch (e) {
-                log(`Error handling answer: ${e.message}`, 'error');
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription({ type: 'answer', sdp: message.sdp }));
+            } catch(e) {
+                log('Error handling answer: ' + e.message, 'error');
             }
         }
 
@@ -372,17 +420,15 @@
                         candidate: message.candidate
                     }));
                 }
-            } catch (e) {
-                log(`Error handling candidate: ${e.message}`, 'error');
+            } catch(e) {
+                log('Error handling candidate: ' + e.message, 'error');
             }
         }
 
-        // Try to auto-fill URL from query parameter
+        // Auto-fill server URL from ?server= query param
         const urlParams = new URLSearchParams(window.location.search);
         const serverParam = urlParams.get('server');
-        if (serverParam) {
-            document.getElementById('serverUrl').value = serverParam;
-        }
+        if (serverParam) document.getElementById('serverUrl').value = serverParam;
     </script>
 </body>
 </html>

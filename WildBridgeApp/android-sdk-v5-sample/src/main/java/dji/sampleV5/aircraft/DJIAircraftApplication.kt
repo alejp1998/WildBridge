@@ -1,5 +1,6 @@
 package dji.sampleV5.aircraft
 
+import android.app.Application
 import android.content.Context
 import android.util.Log
 
@@ -13,7 +14,17 @@ import android.util.Log
  */
 class DJIAircraftApplication : DJIApplication() {
 
+    private fun isLocalDetectionProcess(): Boolean {
+        val processName = Application.getProcessName()
+        return processName?.endsWith(":local_detection") == true
+    }
+
     override fun attachBaseContext(base: Context?) {
+        if (isLocalDetectionProcess()) {
+            super.attachBaseContext(base)
+            Log.d("DJIAircraftApp", "Skipping DJI attachBaseContext init in local detection process")
+            return
+        }
         Log.d("DJIAircraftApp", "attachBaseContext() called")
         try {
             super.attachBaseContext(base)
@@ -27,6 +38,10 @@ class DJIAircraftApplication : DJIApplication() {
     }
 
     override fun onCreate() {
+        if (isLocalDetectionProcess()) {
+            Log.d("DJIAircraftApp", "Skipping DJI onCreate init in local detection process")
+            return
+        }
         Log.d("DJIAircraftApp", "DJIAircraftApplication onCreate() called")
         try {
             super.onCreate()

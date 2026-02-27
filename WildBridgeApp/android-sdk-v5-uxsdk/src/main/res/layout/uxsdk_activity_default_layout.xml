@@ -66,6 +66,20 @@
                     tools:layout_editor_absoluteY="0dp" />
             </dji.v5.ux.core.widget.fpv.FPVWidget>
 
+            <!-- Detection overlay host (actual overlay view is attached from :sample at runtime) -->
+            <FrameLayout
+                android:id="@+id/view_detection_overlay_host"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone"
+                android:background="@android:color/transparent"
+                android:clickable="false"
+                android:focusable="false"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+
             <dji.v5.ux.core.widget.fpv.FPVWidget
                 android:id="@+id/widget_secondary_fpv"
                 android:layout_width="@dimen/uxsdk_mini_map_width"
@@ -110,6 +124,25 @@
             android:switchMinWidth="44dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintBottom_toTopOf="@+id/sw_detection"
+            android:layout_marginStart="16dp"
+            android:layout_marginBottom="4dp"
+            tools:ignore="HardcodedText" />
+
+        <!-- Wildlife detection toggle -->
+        <Switch
+            android:id="@+id/sw_detection"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Detect OFF"
+            android:textColor="#FFAAAAAA"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:padding="6dp"
+            android:checked="false"
+            android:switchMinWidth="44dp"
+            android:background="@drawable/uxsdk_background_black_rectangle"
+            app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintBottom_toTopOf="@+id/text_drone_name"
             android:layout_marginStart="16dp"
             android:layout_marginBottom="4dp"
@@ -121,16 +154,16 @@
             android:layout_height="wrap_content"
             android:text="drone_1"
             android:textColor="#FFFFFF"
-            android:textSize="18sp"
+            android:textSize="16sp"
             android:textStyle="bold"
-            android:padding="12dp"
+            android:padding="8dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             android:clickable="true"
             android:focusable="true"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"
             android:layout_marginStart="16dp"
-            android:layout_marginBottom="16dp" />
+            android:layout_marginBottom="12dp" />
 
         <!-- Drone operational status indicator (icon + label, updates in real-time) -->
         <TextView
@@ -139,14 +172,14 @@
             android:layout_height="wrap_content"
             android:text="● IDLE"
             android:textColor="#FFAAAAAA"
-            android:textSize="14sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:padding="8dp"
+            android:padding="4dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toEndOf="@+id/text_drone_name"
             app:layout_constraintBottom_toBottomOf="@+id/text_drone_name"
             app:layout_constraintTop_toTopOf="@+id/text_drone_name"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="4dp"
             tools:ignore="HardcodedText" />
 
         <!-- Altitude above takeoff in whole metres -->
@@ -156,14 +189,14 @@
             android:layout_height="wrap_content"
             android:text="0 m"
             android:textColor="#FFCCCCCC"
-            android:textSize="14sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:padding="8dp"
+            android:padding="4dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toEndOf="@+id/text_drone_status"
             app:layout_constraintBottom_toBottomOf="@+id/text_drone_name"
             app:layout_constraintTop_toTopOf="@+id/text_drone_name"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="4dp"
             tools:ignore="HardcodedText" />
 
         <!-- GPS satellite count -->
@@ -173,14 +206,14 @@
             android:layout_height="wrap_content"
             android:text="🛰 0"
             android:textColor="#FFCCCCCC"
-            android:textSize="14sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:padding="8dp"
+            android:padding="4dp"
             android:background="@drawable/uxsdk_background_black_rectangle"
             app:layout_constraintStart_toEndOf="@+id/text_altitude"
             app:layout_constraintBottom_toBottomOf="@+id/text_drone_name"
             app:layout_constraintTop_toTopOf="@+id/text_drone_name"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="4dp"
             tools:ignore="HardcodedText" />
 
         <dji.v5.ux.core.widget.remainingflighttime.RemainingFlightTimeWidget

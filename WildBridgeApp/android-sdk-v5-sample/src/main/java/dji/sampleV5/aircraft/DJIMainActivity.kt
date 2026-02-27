@@ -178,6 +178,10 @@ abstract class DJIMainActivity : AppCompatActivity() {
         enableShowCaseButton(binding.defaultLayoutButton, cl)
     }
 
+    fun <T> enableLocalVideoDetectionTest(cl: Class<T>) {
+        enableShowCaseButton(binding.localVideoDetectionButton, cl)
+    }
+
     fun <T> enableWidgetList(cl: Class<T>) {
         enableShowCaseButton(binding.widgetListButton, cl)
     }

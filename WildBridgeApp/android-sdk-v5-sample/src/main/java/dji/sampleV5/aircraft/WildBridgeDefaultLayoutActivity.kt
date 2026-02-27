@@ -19,6 +19,8 @@ import android.widget.CheckBox
 import android.widget.Switch
 import android.widget.ToggleButton
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.text.InputType
 import android.view.Menu
 import android.view.MenuItem
 import androidx.appcompat.app.AlertDialog
@@ -29,6 +31,10 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.detection.CameraFrameSampler
+import dji.sampleV5.aircraft.detection.DetectionOverlayView
+import dji.sampleV5.aircraft.detection.DetectionState
+import dji.sampleV5.aircraft.detection.RhinoYoloDetector
 import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -98,6 +104,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private const val DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
         private const val MULTICAST_GROUP = "239.255.42.99"
         private const val MULTICAST_PORT = 30001
+        private const val PREF_DETECTION_FPS = "detection_fps"
+        private const val DEFAULT_DETECTION_FPS = 2.0f
+        private const val ASSUMED_CAMERA_FPS = 30.0f
         
         // mDNS/Zeroconf service type
         private const val MDNS_SERVICE_TYPE = "_wildbridge._tcp."
@@ -113,6 +122,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var httpServer: SimpleHttpServer? = null
     private var telemetryServer: TelemetryServer? = null
     private var webRTCStreamer: WebRTCStreamer? = null
+
+    // Wildlife detection
+    private var rhinoDetector: RhinoYoloDetector? = null
+    private var frameSampler: CameraFrameSampler? = null
+    private var detectionOverlayView: DetectionOverlayView? = null
+    @Volatile private var isDetectionEnabled: Boolean = false
+    private var detectionFps: Float = DEFAULT_DETECTION_FPS
     
     // Discovery (UDP broadcast/multicast)
     private var discoverySocket: DatagramSocket? = null
@@ -218,6 +234,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         
         // Initialize SharedPreferences
         sharedPreferences = getSharedPreferences("WildBridgePrefs", Context.MODE_PRIVATE)
+        detectionFps = sharedPreferences.getFloat(PREF_DETECTION_FPS, DEFAULT_DETECTION_FPS)
         
         // Load or prompt for drone name
         loadDroneName()
@@ -265,6 +282,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         
         // Start all servers
         startServers()
+        
+        // Set up on-device wildlife detection
+        setupDetection()
         
         // Show IP address
         showServerInfo()
@@ -329,28 +349,28 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         } else {
             appStatus
         }
-        val (icon, label, color) = when (resolved) {
-            DroneController.DroneStatus.IDLE            -> Triple("●", "IDLE",       0xFFAAAAAA.toInt())
-            DroneController.DroneStatus.TAKING_OFF      -> Triple("▲", "TAKING OFF", 0xFFFFC107.toInt())
-            DroneController.DroneStatus.HOVERING        -> Triple("●", "HOVERING",   0xFF4CAF50.toInt())
-            DroneController.DroneStatus.NAVIGATING      -> Triple("►", "NAVIGATING", 0xFF2196F3.toInt())
-            DroneController.DroneStatus.LANDING         -> Triple("▼", "LANDING",    0xFFFF9800.toInt())
-            DroneController.DroneStatus.RETURNING_HOME  -> Triple("⌂", "RTH",        0xFFFF9800.toInt())
-            DroneController.DroneStatus.MANUAL_OVERRIDE -> Triple("✋", "MANUAL",     0xFFF44336.toInt())
-            DroneController.DroneStatus.ABORTING        -> Triple("✖", "ABORTING",   0xFFF44336.toInt())
+        val (label, color) = when (resolved) {
+            DroneController.DroneStatus.IDLE            -> Pair("IDLE",       0xFFAAAAAA.toInt())
+            DroneController.DroneStatus.TAKING_OFF      -> Pair("TAKEOFF",    0xFFFFC107.toInt())
+            DroneController.DroneStatus.HOVERING        -> Pair("HOVER",      0xFF4CAF50.toInt())
+            DroneController.DroneStatus.NAVIGATING      -> Pair("NAV",        0xFF2196F3.toInt())
+            DroneController.DroneStatus.LANDING         -> Pair("LAND",       0xFFFF9800.toInt())
+            DroneController.DroneStatus.RETURNING_HOME  -> Pair("RTH",        0xFFFF9800.toInt())
+            DroneController.DroneStatus.MANUAL_OVERRIDE -> Pair("MANUAL",     0xFFF44336.toInt())
+            DroneController.DroneStatus.ABORTING        -> Pair("ABORT",      0xFFF44336.toInt())
         }
-        statusTv.text = "$icon $label"
+        statusTv.text = label
         statusTv.setTextColor(color)
     }
 
     // ==================== End Drone Status View ====================
 
     private fun updateAltitudeView(altitudeMetres: Double) {
-        findViewById<TextView>(R.id.text_altitude)?.text = "${altitudeMetres.toInt()} m"
+        findViewById<TextView>(R.id.text_altitude)?.text = "ALT ${altitudeMetres.toInt()}m"
     }
 
     private fun updateSatelliteView(count: Int) {
-        findViewById<TextView>(R.id.text_satellite_count)?.text = "🛰 $count"
+        findViewById<TextView>(R.id.text_satellite_count)?.text = "SAT $count"
     }
 
     private fun setupDroneNameDisplay() {
@@ -572,6 +592,130 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
+    // ==================== Wildlife Detection ====================
+
+    /**
+     * Initialises the detection overlay, TFLite detector, and camera frame
+     * sampler.  Wires up the detection toggle switch so the user can turn
+     * inference ON/OFF without affecting WebRTC streaming or any other service.
+     *
+     * Frame pipeline:
+     *   DJI camera → CameraFrameSampler (every 5 frames) → RhinoYoloDetector
+     *       → DetectionState (shared) → overlay invalidate + WebRTC metadata
+     */
+    private fun setupDetection() {
+        // Overlay host from :uxsdk layout; actual custom overlay is attached at runtime from :sample
+        val overlayHost = findViewById<FrameLayout>(R.id.view_detection_overlay_host)
+        if (detectionOverlayView == null && overlayHost != null) {
+            detectionOverlayView = DetectionOverlayView(this)
+            overlayHost.removeAllViews()
+            overlayHost.addView(
+                detectionOverlayView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+
+        // Detection toggle switch
+        val sw = findViewById<android.widget.Switch>(R.id.sw_detection) ?: run {
+            Log.w(TAG, "sw_detection not found in layout – detection toggle unavailable")
+            return
+        }
+
+        val hasModelAsset = hasAsset(RhinoYoloDetector.MODEL_ASSET)
+        if (!hasModelAsset) {
+            sw.isEnabled = false
+            sw.text = "Detect N/A"
+            sw.setTextColor(0xFFF44336.toInt())
+            val msg = "Missing model asset: ${RhinoYoloDetector.MODEL_ASSET}"
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            Log.e(TAG, msg)
+            return
+        }
+
+        // TFLite detector – model loads lazily from assets/ on first inference call
+        rhinoDetector = RhinoYoloDetector(this)
+
+        // Frame sampler: target FPS is configurable (default = 2 fps)
+        val sampleEveryN = (ASSUMED_CAMERA_FPS / detectionFps.coerceAtLeast(0.5f)).toInt().coerceAtLeast(1)
+        frameSampler = CameraFrameSampler(sampleEveryN = sampleEveryN)
+        frameSampler?.callback = { nv21, width, height, frameNo ->
+            if (isDetectionEnabled) {
+                rhinoDetector?.detectAsync(nv21, width, height, frameNo) { results ->
+                    DetectionState.update(results)
+                    mainHandler.post {
+                        detectionOverlayView?.updateDetections(results)
+                    }
+                }
+            }
+        }
+
+        sw.setOnCheckedChangeListener { _, checked ->
+            isDetectionEnabled = checked
+            if (checked) {
+                sw.text = "Detect ON"
+                sw.setTextColor(0xFF4CAF50.toInt())
+                overlayHost?.visibility = android.view.View.VISIBLE
+                frameSampler?.start()
+                Log.i(TAG, "Wildlife detection ON  (model: rhino_yolo26s, input: 1280×1280, target=${detectionFps}fps)")
+            } else {
+                sw.text = "Detect OFF"
+                sw.setTextColor(0xFFAAAAAA.toInt())
+                frameSampler?.stop()
+                DetectionState.clear()
+                detectionOverlayView?.updateDetections(emptyList())
+                overlayHost?.visibility = android.view.View.GONE
+                Log.i(TAG, "Wildlife detection OFF")
+            }
+        }
+    }
+
+    private fun showDetectionFpsDialog() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(detectionFps.toString())
+            hint = "e.g. 2"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Detection FPS")
+            .setMessage("Set target inference rate (frames/s).")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val value = input.text.toString().toFloatOrNull()
+                if (value == null || value <= 0f) {
+                    Toast.makeText(this, "Invalid FPS value", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                detectionFps = value.coerceIn(0.5f, 30f)
+                sharedPreferences.edit().putFloat(PREF_DETECTION_FPS, detectionFps).apply()
+                frameSampler?.stop()
+                frameSampler = null
+                rhinoDetector?.release()
+                rhinoDetector = null
+                setupDetection()
+                if (isDetectionEnabled) {
+                    frameSampler?.start()
+                }
+                Toast.makeText(this, "Detection FPS set to ${detectionFps}", Toast.LENGTH_SHORT).show()
+                Log.i(TAG, "Detection FPS updated to ${detectionFps}")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun hasAsset(name: String): Boolean {
+        return try {
+            assets.open(name).use { true }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ==================== End Wildlife Detection ====================
+
     private fun showServerInfo() {
         val deviceIp = getDeviceIpAddress() ?: "Unknown"
         val message = """
@@ -581,7 +725,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             Telemetry: $TELEMETRY_PORT
             WebRTC Video: $WEBRTC_PORT
         """.trimIndent()
-        
+
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         Log.i(TAG, message)
     }
@@ -594,6 +738,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         telemetryServer?.stop()
         webRTCStreamer?.stop()
         stopDiscoveryServer()
+
+        // Stop detection
+        frameSampler?.stop()
+        DetectionState.clear()
+        rhinoDetector?.release()
+        rhinoDetector = null
         
         // Unregister mDNS service
         unregisterMdnsService()
@@ -621,6 +771,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Change Drone Name")
+        menu.add(0, 2, 1, "Detection FPS")
         return super.onCreateOptionsMenu(menu)
     }
     
@@ -628,6 +779,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         return when (item.itemId) {
             1 -> {
                 showDroneNameDialog(isFirstTime = false)
+                true
+            }
+            2 -> {
+                showDetectionFpsDialog()
                 true
             }
             else -> super.onOptionsItemSelected(item)
