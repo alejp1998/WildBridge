@@ -541,7 +541,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     signalingPort = WEBRTC_PORT,
                     droneName = droneName,
                     options = WebRTCMediaOptions(
-                        videoBitrate = 8_000_000, // 8 Mbps for 1080p
+                        videoResolutionWidth = 1280,
+                        videoResolutionHeight = 720,
+                        fps = 10,
+                        videoBitrate = 5_000_000, // 5 Mbps tuned for 720p
                         videoCodec = "H264"       // Use H264 for better hardware acceleration
                     )
                 )
