@@ -543,7 +543,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     options = WebRTCMediaOptions(
                         videoResolutionWidth = 1280,
                         videoResolutionHeight = 720,
-                        fps = 10,
+                        fps = 5,
                         videoBitrate = 5_000_000, // 5 Mbps tuned for 720p
                         videoCodec = "H264"       // Use H264 for better hardware acceleration
                     )
