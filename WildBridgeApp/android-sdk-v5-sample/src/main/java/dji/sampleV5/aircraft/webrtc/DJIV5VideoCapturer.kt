@@ -149,6 +149,7 @@ class DJIV5VideoCapturer(
     }
 
     override fun startCapture(width: Int, height: Int, framerate: Int) {
+        changeResolution(width, height)
         targetFps = framerate.coerceAtLeast(1)
         frameIntervalNs = 1_000_000_000L / targetFps.toLong()
         lastSentTimestampNs.set(0L)
