@@ -785,18 +785,21 @@ object DroneController {
     fun navigateToWaypointWithPID(targetLatitude: Double, targetLongitude: Double, targetAlt: Double, targetYaw: Double, maxSpeed: Double) {
         val newTarget = WaypointTarget(targetLatitude, targetLongitude, targetAlt, targetYaw, maxSpeed)
         _isWaypointReached = false
-        activeWaypointTarget = newTarget
 
         // If a PID loop is already running, just hot-swap the target.
         // The running loop reads activeWaypointTarget each tick and will smoothly steer to the new waypoint
         // without stopping, restarting, or resetting PID state.
         if (controlLoopEnabled) {
+            activeWaypointTarget = newTarget
             return
         }
 
         // No active loop — start a fresh one
+        // Set target AFTER startNewControlLoopSession() because it calls cancelActiveControlLoop()
+        // which clears activeWaypointTarget.
         stopCurrentMission()
         val loopId = startNewControlLoopSession()
+        activeWaypointTarget = newTarget
 
         val updateInterval = 100.0  // Update every 100 ms
         val maxYawRate = 30.0 // degrees per second
@@ -817,6 +820,11 @@ object DroneController {
 
         val controlLoop = Handler(Looper.getMainLooper())
         virtualStickVM?.enableVirtualStickAdvancedMode()
+
+        // Cooldown: after reaching a waypoint, keep PID loop alive for this long
+        // to allow the bridge to hot-swap the next target without a cold restart.
+        val holdCooldownMs = 200L
+        var reachedAtMs = 0L  // SystemClock.elapsedRealtime() when waypoint was first reached, 0 = not reached
 
         val runnable = object : Runnable {
             override fun run() {
@@ -852,12 +860,22 @@ object DroneController {
                 val altError = target.altitude - currentPosition.altitude
 
                 if (distance < WP_ACCEPT_DISTANCE_M && abs(yawError) < WP_ACCEPT_YAW_DEG && abs(altError) < WP_ACCEPT_ALTITUDE_M) {
-                    setStick(0F, 0F, 0F, 0F)
-                    _isWaypointReached = true
-                    activeWaypointTarget = null
-                    controlLoopEnabled = false
-                    disableVirtualStick() // Disable virtual stick to let drone hold GPS position
-                    return
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (!_isWaypointReached) {
+                        _isWaypointReached = true
+                        reachedAtMs = now
+                    }
+                    // Cooldown expired — no new waypoint arrived, stop cleanly
+                    if (now - reachedAtMs >= holdCooldownMs) {
+                        setStick(0F, 0F, 0F, 0F)
+                        activeWaypointTarget = null
+                        controlLoopEnabled = false
+                        disableVirtualStick()
+                        return
+                    }
+                } else {
+                    // Moved outside acceptance (e.g. GPS drift or new target) — reset cooldown
+                    reachedAtMs = 0L
                 }
 
                 // DJI SDK V5 quirk: in BODY frame, the SDK's "pitch" field actually controls
