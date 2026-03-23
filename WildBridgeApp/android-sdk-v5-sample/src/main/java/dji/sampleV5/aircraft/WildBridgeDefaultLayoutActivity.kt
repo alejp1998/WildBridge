@@ -289,6 +289,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Setup Manual Override checkbox
         setupManualOverrideCheckbox()
 
+        // Setup Video Mode toggle (Quality vs FPS)
+        setupVideoModeToggle()
+
         // Setup AI Detection (AutoSensing) toggle & overlay
         setupAutoSensingToggle()
 
@@ -366,6 +369,85 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     // ==================== End Mode Toggle ====================
+
+    // ==================== Video Mode Toggle (Quality / FPS) ====================
+
+    private var isFpsMode = false
+
+    private fun setupVideoModeToggle() {
+        val sw = findViewById<Switch>(R.id.sw_video_mode) ?: return
+        sw.isChecked = false  // default = Quality mode
+        sw.setOnCheckedChangeListener { _, isChecked ->
+            isFpsMode = isChecked
+            sw.text = if (isChecked) "FPS" else "QUALITY"
+            sw.setTextColor(if (isChecked) 0xFFFF9800.toInt() else 0xFF00BCD4.toInt())
+            restartWebRTCWithMode(isChecked)
+        }
+    }
+
+    private fun restartWebRTCWithMode(fpsMode: Boolean) {
+        val deviceIp = getDeviceIpAddress()
+        // Stop existing streamer
+        webRTCStreamer?.stop()
+        webRTCStreamer = null
+
+        val options = if (fpsMode) {
+            // FPS mode: 30 fps, lower bitrate per frame
+            WebRTCMediaOptions(
+                videoResolutionWidth = 1280,
+                videoResolutionHeight = 720,
+                fps = 30,
+                videoBitrate = 4_000_000,
+                videoCodec = "H264"
+            )
+        } else {
+            // Quality mode (default): 5 fps, high bitrate per frame
+            WebRTCMediaOptions(
+                videoResolutionWidth = 1280,
+                videoResolutionHeight = 720,
+                fps = 5,
+                videoBitrate = 5_000_000,
+                videoCodec = "H264"
+            )
+        }
+
+        try {
+            webRTCStreamer = WebRTCStreamer(
+                context = this,
+                cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
+                signalingPort = WEBRTC_PORT,
+                droneName = droneName,
+                options = options
+            )
+            webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
+                override fun onServerStarted(ip: String, port: Int) {
+                    Log.i(TAG, "WebRTC server restarted (${if (fpsMode) "FPS" else "Quality"} mode) at ws://$ip:$port")
+                }
+                override fun onServerStopped() {
+                    Log.i(TAG, "WebRTC server stopped")
+                }
+                override fun onServerError(error: String) {
+                    Log.e(TAG, "WebRTC error: $error")
+                }
+                override fun onClientConnected(clientId: String, totalClients: Int) {
+                    Log.i(TAG, "WebRTC client connected: $clientId (total: $totalClients)")
+                }
+                override fun onClientDisconnected(clientId: String, totalClients: Int) {
+                    Log.i(TAG, "WebRTC client disconnected: $clientId (total: $totalClients)")
+                }
+            }
+            webRTCStreamer?.start()
+            val mode = if (fpsMode) "FPS (30fps)" else "Quality (5fps)"
+            Log.i(TAG, "WebRTC restarted in $mode mode on $deviceIp:$WEBRTC_PORT")
+            mainHandler.post {
+                Toast.makeText(this, "Video: $mode", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting WebRTC: ${e.message}")
+        }
+    }
+
+    // ==================== End Video Mode Toggle ====================
 
     // ==================== AutoSensing (AI Detection) Toggle ====================
 

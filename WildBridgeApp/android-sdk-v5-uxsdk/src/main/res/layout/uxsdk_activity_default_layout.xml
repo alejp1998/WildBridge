@@ -106,6 +106,25 @@
             app:uxsdk_itemsMarginRight="@dimen/uxsdk_spacing_normal"
             app:uxsdk_itemsSpacing="14dp" />
 
+        <!-- Video stream mode toggle: Quality (5 fps) vs FPS (30 fps) -->
+        <Switch
+            android:id="@+id/sw_video_mode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="QUALITY"
+            android:textColor="#FF00BCD4"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:padding="4dp"
+            android:checked="false"
+            android:switchMinWidth="40dp"
+            android:background="@drawable/uxsdk_background_black_rectangle"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintBottom_toTopOf="@+id/sw_auto_sensing"
+            android:layout_marginStart="16dp"
+            android:layout_marginBottom="4dp"
+            tools:ignore="HardcodedText,UseSwitchCompatOrMaterialXml" />
+
         <!-- AutoSensing (AI detection) toggle — ON by default -->
         <Switch
             android:id="@+id/sw_auto_sensing"
