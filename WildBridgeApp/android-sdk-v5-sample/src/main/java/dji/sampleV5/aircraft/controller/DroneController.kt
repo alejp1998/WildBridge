@@ -62,6 +62,11 @@ object DroneController {
     // incidental touches virtually impossible.
     const val RC_STICK_DEADZONE = 200
 
+    // Waypoint acceptance thresholds — shared across all control loops
+    const val WP_ACCEPT_DISTANCE_M = 1.5    // horizontal distance in meters
+    const val WP_ACCEPT_ALTITUDE_M = 0.5    // vertical error in meters
+    const val WP_ACCEPT_YAW_DEG = 4.0       // yaw error in degrees
+
     // Listener interface so the UI can react to automatic activation
     interface ManualOverrideListener {
         fun onManualOverrideActivated()
@@ -158,10 +163,10 @@ object DroneController {
         return (compassHeadKey.get(0.0)).toDouble()
     }
 
-    private var _isWaypointReached = false
-    private var _isYawReached = false
-    private var _isAltitudeReached = false
-    private var _isIntermediaryWaypointReached = false
+    @Volatile private var _isWaypointReached = false
+    @Volatile private var _isYawReached = false
+    @Volatile private var _isAltitudeReached = false
+    @Volatile private var _isIntermediaryWaypointReached = false
 
     // Hot-swappable waypoint target for smooth PID transitions.
     // When a new waypoint arrives mid-flight, the target is swapped without restarting the loop.
@@ -706,7 +711,7 @@ object DroneController {
 
                 val altError = targetAltitude - currentPosition.altitude
 
-                if (distanceToWaypoint < 0.5 && abs(altError) < 0.5) { // Stop if close enough to the waypoint
+                if (distanceToWaypoint < WP_ACCEPT_DISTANCE_M && abs(altError) < WP_ACCEPT_ALTITUDE_M) {
                     setStick(0F, 0F, 0F, 0F)
                     _isWaypointReached = true
                     controlLoopEnabled = false
@@ -747,17 +752,15 @@ object DroneController {
                 val yawErrorFactor = max(0f, 1f - (abs(yawError) / maxYawError).toFloat())
                 speed *= yawErrorFactor
 
-                // Set pitch_control to move forward at the computed speed
-                val pitchControl = speed.toDouble()
+                val forwardSpeed = speed.toDouble()
+                val lateralSpeed = 0.0 // No lateral movement
 
-                // Set roll_control to zero (no lateral movement)
-                val rollControl = 0F.toDouble()
-
-                // Create the VirtualStickFlightControlParam object
+                // DJI SDK V5 quirk: in BODY frame, the SDK's "pitch" field actually controls
+                // lateral (left/right) movement and "roll" controls forward/backward. This is
+                // the inverse of what the field names suggest. Confirmed empirically.
                 val flightControlParam = VirtualStickFlightControlParam().apply {
-                    this.pitch =
-                            rollControl // Weird, it only works if I'm switching the pitch and roll (I think it's a bug, or it's because I fly in mode 1 ?)
-                    this.roll = pitchControl
+                    this.pitch = lateralSpeed
+                    this.roll = forwardSpeed
                     this.yaw = yawControl
                     this.verticalThrottle = targetAltitude
                     this.verticalControlMode = VerticalControlMode.POSITION
@@ -809,7 +812,7 @@ object DroneController {
         virtualStickVM?.enableVirtualStickAdvancedMode()
 
         // PID with generous upper bound; actual speed is clamped per-tick to the target's maxSpeed
-        val distancePID = PID(0.65, 0.0001, 0.001, updateInterval/1000, 0.0 to 15.0)
+        val distancePID = PID(0.65, 0.0001, 0.001, updateInterval/1000, 0.0 to maxSpeed)
         val yawPID = PID(3.0, 0.0000, 0.00, updateInterval/1000, -maxYawRate to maxYawRate)
 
         val controlLoop = Handler(Looper.getMainLooper())
@@ -843,12 +846,12 @@ object DroneController {
                 val angularVelocity = yawPID.update(yawError)
 
                 val movementDirectionRelative = normalizeAngle(movementDirection - currentYaw) // Relative to the drone's heading
-                val pitch = targetSpeed * cos(Math.toRadians(movementDirectionRelative))
-                val roll = targetSpeed * sin(Math.toRadians(movementDirectionRelative))
+                val forwardSpeed = targetSpeed * cos(Math.toRadians(movementDirectionRelative))
+                val lateralSpeed = targetSpeed * sin(Math.toRadians(movementDirectionRelative))
 
                 val altError = target.altitude - currentPosition.altitude
 
-                if (distance < 2 && abs(yawError) < 4 && abs(altError) < 2) { // Close enough to the waypoint
+                if (distance < WP_ACCEPT_DISTANCE_M && abs(yawError) < WP_ACCEPT_YAW_DEG && abs(altError) < WP_ACCEPT_ALTITUDE_M) {
                     setStick(0F, 0F, 0F, 0F)
                     _isWaypointReached = true
                     activeWaypointTarget = null
@@ -857,9 +860,12 @@ object DroneController {
                     return
                 }
 
+                // DJI SDK V5 quirk: in BODY frame, the SDK's "pitch" field actually controls
+                // lateral (left/right) movement and "roll" controls forward/backward. This is
+                // the inverse of what the field names suggest. Confirmed empirically.
                 val flightControlParam = VirtualStickFlightControlParam().apply {
-                    this.pitch = roll // Weird, it only works if I'm switching the pitch and roll (I think it's a bug, or it's because I fly in mode 1 ?)
-                    this.roll = pitch
+                    this.pitch = lateralSpeed
+                    this.roll = forwardSpeed
                     this.yaw = angularVelocity
                     this.verticalThrottle = target.altitude
                     this.verticalControlMode = VerticalControlMode.POSITION
@@ -1015,13 +1021,13 @@ object DroneController {
                         targetSpeed = minSpeedFinal + (cruiseSpeed - minSpeedFinal) * (distToEnd / slowdownRadius)
                 }
 
-                val pitch = targetSpeed * cos(Math.toRadians(moveDirRel))
-                val roll = targetSpeed * sin(Math.toRadians(moveDirRel))
+                val forwardSpeed = targetSpeed * cos(Math.toRadians(moveDirRel))
+                val lateralSpeed = targetSpeed * sin(Math.toRadians(moveDirRel))
 
                 // Stop criteria: last segment, close to endpoint, and altitude close
                 val reached = isLastSegment &&
-                        (calculateDistance(current.latitude, current.longitude, end.first, end.second) < 0.8) &&
-                        (abs(targetAlt - current.altitude) < 1.0)
+                        (calculateDistance(current.latitude, current.longitude, end.first, end.second) < WP_ACCEPT_DISTANCE_M) &&
+                        (abs(targetAlt - current.altitude) < WP_ACCEPT_ALTITUDE_M)
 
                 if (reached) {
                     setStick(0F, 0F, 0F, 0F)
@@ -1037,10 +1043,12 @@ object DroneController {
                     return
                 }
 
-                // Send control command
+                // DJI SDK V5 quirk: in BODY frame, the SDK's "pitch" field actually controls
+                // lateral (left/right) movement and "roll" controls forward/backward. This is
+                // the inverse of what the field names suggest. Confirmed empirically.
                 val flightControlParam = VirtualStickFlightControlParam().apply {
-                    this.pitch = roll // DJI SDK: roll/pitch swapped
-                    this.roll = pitch
+                    this.pitch = lateralSpeed
+                    this.roll = forwardSpeed
                     this.yaw = targetYawRate
                     this.verticalThrottle = targetAlt
                     this.verticalControlMode = VerticalControlMode.POSITION
