@@ -1,6 +1,6 @@
 package dji.sampleV5.aircraft.webrtc
 
-import dji.sampleV5.aircraft.detection.DetectedTarget
+import dji.v5.ux.detection.DetectedTarget
 import org.json.JSONArray
 import org.json.JSONObject
 

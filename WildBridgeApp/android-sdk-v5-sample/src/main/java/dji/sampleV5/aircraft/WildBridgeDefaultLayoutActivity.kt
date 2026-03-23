@@ -3,6 +3,7 @@ package dji.sampleV5.aircraft
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import java.io.File
 import android.util.Log
 import android.widget.Toast
 import android.widget.TextView
@@ -29,8 +30,8 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
-import dji.sampleV5.aircraft.detection.DetectedTarget
-import dji.sampleV5.aircraft.detection.DetectionOverlayView
+import dji.v5.ux.detection.DetectedTarget
+import dji.v5.ux.detection.DetectionOverlayView
 import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
 import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
@@ -1536,7 +1537,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         """{"active":$isAutoSensingActive,"targetCount":${currentDetectedTargets.size}}"""
                     }
                     "/get/autoSensing/targets" -> {
-                        DetectedTarget.listToJsonArray(currentDetectedTargets)
+                        DetectedTarget.listToJsonArray(currentDetectedTargets).toString()
                     }
                     else -> "Not Found: $uri"
                 }

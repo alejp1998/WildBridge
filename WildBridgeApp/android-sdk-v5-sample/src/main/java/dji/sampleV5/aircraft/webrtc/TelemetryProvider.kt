@@ -7,7 +7,7 @@ import dji.sdk.keyvalue.value.common.Attitude
 import dji.sdk.keyvalue.value.common.LocationCoordinate3D
 import dji.sdk.keyvalue.value.common.Velocity3D
 import dji.sampleV5.aircraft.controller.DroneController
-import dji.sampleV5.aircraft.detection.DetectedTarget
+import dji.v5.ux.detection.DetectedTarget
 import dji.v5.et.create
 import dji.v5.et.get
 

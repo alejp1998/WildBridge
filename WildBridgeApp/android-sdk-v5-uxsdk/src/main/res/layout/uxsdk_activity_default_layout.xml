@@ -67,7 +67,7 @@
             </dji.v5.ux.core.widget.fpv.FPVWidget>
 
             <!-- Detection bounding-box overlay (on top of FPV, below interaction) -->
-            <dji.sampleV5.aircraft.detection.DetectionOverlayView
+            <dji.v5.ux.detection.DetectionOverlayView
                 android:id="@+id/detection_overlay"
                 android:layout_width="0dp"
                 android:layout_height="0dp"

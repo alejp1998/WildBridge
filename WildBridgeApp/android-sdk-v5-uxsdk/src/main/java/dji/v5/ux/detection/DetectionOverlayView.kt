@@ -1,4 +1,4 @@
-package dji.sampleV5.aircraft.detection
+package dji.v5.ux.detection
 
 import android.content.Context
 import android.graphics.Canvas
