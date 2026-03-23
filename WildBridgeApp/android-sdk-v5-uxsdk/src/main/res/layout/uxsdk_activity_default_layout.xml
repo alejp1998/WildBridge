@@ -66,6 +66,16 @@
                     tools:layout_editor_absoluteY="0dp" />
             </dji.v5.ux.core.widget.fpv.FPVWidget>
 
+            <!-- Detection bounding-box overlay (on top of FPV, below interaction) -->
+            <dji.sampleV5.aircraft.detection.DetectionOverlayView
+                android:id="@+id/detection_overlay"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+
             <dji.v5.ux.core.widget.fpv.FPVWidget
                 android:id="@+id/widget_secondary_fpv"
                 android:layout_width="@dimen/uxsdk_mini_map_width"
@@ -95,6 +105,25 @@
             app:layout_constraintTop_toTopOf="parent"
             app:uxsdk_itemsMarginRight="@dimen/uxsdk_spacing_normal"
             app:uxsdk_itemsSpacing="14dp" />
+
+        <!-- AutoSensing (AI detection) toggle — ON by default -->
+        <Switch
+            android:id="@+id/sw_auto_sensing"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AI DETECT"
+            android:textColor="#FF00E676"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:padding="4dp"
+            android:checked="true"
+            android:switchMinWidth="40dp"
+            android:background="@drawable/uxsdk_background_black_rectangle"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintBottom_toTopOf="@+id/cb_manual_override"
+            android:layout_marginStart="16dp"
+            android:layout_marginBottom="4dp"
+            tools:ignore="HardcodedText,UseSwitchCompatOrMaterialXml" />
 
         <!-- Autonomous / Manual mode toggle -->
         <Switch

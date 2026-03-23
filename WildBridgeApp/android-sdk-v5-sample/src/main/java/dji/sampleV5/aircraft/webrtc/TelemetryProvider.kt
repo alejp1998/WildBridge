@@ -7,6 +7,7 @@ import dji.sdk.keyvalue.value.common.Attitude
 import dji.sdk.keyvalue.value.common.LocationCoordinate3D
 import dji.sdk.keyvalue.value.common.Velocity3D
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.detection.DetectedTarget
 import dji.v5.et.create
 import dji.v5.et.get
 
@@ -17,6 +18,10 @@ import dji.v5.et.get
  * ensuring the metadata is synchronized with the video frame.
  */
 object TelemetryProvider {
+    
+    /** Current detected targets from AutoSensing – updated by the activity */
+    @Volatile
+    var currentDetectedTargets: List<DetectedTarget> = emptyList()
     
     // DJI Keys for telemetry - created once and reused
     private val location3DKey = FlightControllerKey.KeyAircraftLocation3D.create()
@@ -94,7 +99,8 @@ object TelemetryProvider {
             batteryPercent = batteryPercent,
             isFlying = isFlying,
             flightMode = flightMode,
-            isManualOverrideActive = DroneController.isManualOverrideActive
+            isManualOverrideActive = DroneController.isManualOverrideActive,
+            detectedTargets = currentDetectedTargets
         )
     }
 }

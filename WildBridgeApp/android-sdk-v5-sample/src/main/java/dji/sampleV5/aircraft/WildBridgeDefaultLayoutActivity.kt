@@ -29,12 +29,15 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.detection.DetectedTarget
+import dji.sampleV5.aircraft.detection.DetectionOverlayView
 import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
 import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.server.TelemetryServer
 import dji.sampleV5.aircraft.webrtc.WebRTCMediaOptions
 import dji.sampleV5.aircraft.webrtc.WebRTCStreamer
+import dji.sampleV5.aircraft.webrtc.TelemetryProvider
 import dji.sdk.keyvalue.key.BatteryKey
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.DJIKey
@@ -58,6 +61,17 @@ import dji.v5.et.set
 import dji.v5.manager.KeyManager
 import dji.v5.ux.core.util.DataProcessor
 import dji.v5.ux.sample.showcase.defaultlayout.DefaultLayoutActivity
+import dji.v5.manager.intelligent.AutoSensingInfo
+import dji.v5.manager.intelligent.AutoSensingInfoListener
+import dji.v5.manager.intelligent.AutoSensingTarget
+import dji.v5.manager.intelligent.IntelligentFlightManager
+import dji.v5.manager.intelligent.IntelligentModel
+import dji.v5.manager.intelligent.TargetType
+import dji.v5.manager.intelligent.smarttrack.SmartTrackTarget
+import dji.v5.manager.intelligent.spotlight.SpotLightTarget
+import dji.v5.common.callback.CommonCallbacks
+import dji.v5.common.error.IDJIError
+import dji.sdk.keyvalue.value.common.DoubleRect
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
@@ -179,6 +193,42 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     // Home point tracking
     private var isHomePointSetLatch = false
 
+    // ==================== AutoSensing (AI Detection) ====================
+    private var isAutoSensingActive = false
+    @Volatile private var currentDetectedTargets: List<DetectedTarget> = emptyList()
+    private var detectionOverlay: DetectionOverlayView? = null
+
+    private val autoSensingInfoListener = object : AutoSensingInfoListener {
+        override fun onAutoSensingInfoUpdate(info: AutoSensingInfo) {
+            val targets = info.targets?.mapIndexed { idx, t ->
+                val rect = t.rect
+                // DoubleRect is center-based: (x,y) = center, (width,height) = dimensions
+                val cx = rect?.x ?: 0.0
+                val cy = rect?.y ?: 0.0
+                val hw = (rect?.width ?: 0.0) / 2.0
+                val hh = (rect?.height ?: 0.0) / 2.0
+                DetectedTarget(
+                    index = t.targetIndex,
+                    type = t.targetType?.name ?: "UNKNOWN",
+                    left = cx - hw,
+                    top = cy - hh,
+                    right = cx + hw,
+                    bottom = cy + hh
+                )
+            } ?: emptyList()
+            currentDetectedTargets = targets
+            TelemetryProvider.currentDetectedTargets = targets
+            mainHandler.post { detectionOverlay?.setTargets(targets) }
+        }
+
+        override fun onTrackingTargetUpdate(target: AutoSensingTarget) { }
+
+        override fun onIntelligentModelUpdate(models: MutableList<IntelligentModel>) { }
+
+        override fun onRunningIntelligentModelUpdate(modelId: Int) { }
+    }
+    // ==================== End AutoSensing Fields ====================
+
     // Battery and flight time data processors
     private val chargeRemainingProcessor: DataProcessor<Int> = DataProcessor.create(0)
     private val goHomeAssessmentProcessor: DataProcessor<LowBatteryRTHInfo> = DataProcessor.create(LowBatteryRTHInfo())
@@ -238,6 +288,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
         // Setup Manual Override checkbox
         setupManualOverrideCheckbox()
+
+        // Setup AI Detection (AutoSensing) toggle & overlay
+        setupAutoSensingToggle()
 
         // Setup drone status indicator
         setupDroneStatusView()
@@ -313,6 +366,61 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     // ==================== End Mode Toggle ====================
+
+    // ==================== AutoSensing (AI Detection) Toggle ====================
+
+    private fun setupAutoSensingToggle() {
+        detectionOverlay = findViewById(R.id.detection_overlay)
+
+        val sw = findViewById<Switch>(R.id.sw_auto_sensing) ?: return
+        sw.isChecked = true
+        sw.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked) startAutoSensing() else stopAutoSensing()
+        }
+        // Start by default
+        startAutoSensing()
+    }
+
+    private fun startAutoSensing() {
+        if (isAutoSensingActive) return
+        try {
+            IntelligentFlightManager.getInstance().addAutoSensingInfoListener(autoSensingInfoListener)
+            IntelligentFlightManager.getInstance().startAutoSensing(object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    isAutoSensingActive = true
+                    Log.i(TAG, "AutoSensing started")
+                }
+                override fun onFailure(error: IDJIError) {
+                    Log.e(TAG, "AutoSensing start failed: ${error.description()}")
+                }
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "AutoSensing start exception: ${e.message}")
+        }
+    }
+
+    private fun stopAutoSensing() {
+        if (!isAutoSensingActive) return
+        try {
+            IntelligentFlightManager.getInstance().stopAutoSensing(object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    isAutoSensingActive = false
+                    currentDetectedTargets = emptyList()
+                    TelemetryProvider.currentDetectedTargets = emptyList()
+                    mainHandler.post { detectionOverlay?.clearTargets() }
+                    Log.i(TAG, "AutoSensing stopped")
+                }
+                override fun onFailure(error: IDJIError) {
+                    Log.e(TAG, "AutoSensing stop failed: ${error.description()}")
+                }
+            })
+            IntelligentFlightManager.getInstance().removeAutoSensingInfoListener(autoSensingInfoListener)
+        } catch (e: Exception) {
+            Log.e(TAG, "AutoSensing stop exception: ${e.message}")
+        }
+    }
+
+    // ==================== End AutoSensing Toggle ====================
 
     // ==================== Drone Status View ====================
 
@@ -649,6 +757,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        
+        // Stop AutoSensing
+        stopAutoSensing()
         
         // Stop all servers
         httpServer?.stop()
@@ -1036,7 +1147,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         
         val phoneLocationJson = """{"latitude":$phoneLat,"longitude":$phoneLon,"heading":$phoneHeading,"pressure":$phonePressure,"battery":$phoneBattery,"wifiRssi":$wifiRssi}"""
 
-        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode","isManualOverrideActive":${DroneController.isManualOverrideActive}}"""
+        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode","isManualOverrideActive":${DroneController.isManualOverrideActive},"autoSensingActive":$isAutoSensingActive,"detectedTargets":${DetectedTarget.listToJsonArray(currentDetectedTargets)}}"""
     }
 
     // ==================== HTTP Server ====================
@@ -1323,6 +1434,27 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     }
                     "/get/isManualOverrideActive" -> {
                         if (DroneController.isManualOverrideActive) "true" else "false"
+                    }
+                    // --- AutoSensing (AI Detection) Control ---
+                    "/send/autoSensing/start" -> {
+                        mainHandler.post {
+                            startAutoSensing()
+                            findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = true
+                        }
+                        "AutoSensing start requested"
+                    }
+                    "/send/autoSensing/stop" -> {
+                        mainHandler.post {
+                            stopAutoSensing()
+                            findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = false
+                        }
+                        "AutoSensing stop requested"
+                    }
+                    "/get/autoSensing/status" -> {
+                        """{"active":$isAutoSensingActive,"targetCount":${currentDetectedTargets.size}}"""
+                    }
+                    "/get/autoSensing/targets" -> {
+                        DetectedTarget.listToJsonArray(currentDetectedTargets)
                     }
                     else -> "Not Found: $uri"
                 }
