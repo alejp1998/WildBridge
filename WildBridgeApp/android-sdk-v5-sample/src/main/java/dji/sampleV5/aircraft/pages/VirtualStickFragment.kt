@@ -49,6 +49,7 @@ import java.util.Collections
 import dji.v5.ux.core.util.DataProcessor
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
 import dji.sampleV5.aircraft.server.TelemetryServer
 
 // Import for custom HTTP server implementation
@@ -99,6 +100,9 @@ class VirtualStickFragment : DJIFragment() {
     private var httpServer: SimpleHttpServer? = null
     private var telemetryServer: TelemetryServer? = null
     private var isHomePointSetLatch = false
+
+    // Periodic flight-log telemetry snapshot (every 5 s, only while a session is active)
+    private var telemetryLogRunnable: Runnable? = null
 
     // WebRTC streaming
     private var webRTCStreamer: WebRTCStreamer? = null
@@ -278,6 +282,7 @@ class VirtualStickFragment : DJIFragment() {
 
                 // Log the request for debugging
                 Log.i("DroneServer", "Handling POST request: $uri with data: $postData")
+                WildBridgeFlightLogger.logCommand(uri, postData)
 
                 when (uri) {
                     "/send/takeoff" -> {
@@ -591,6 +596,17 @@ class VirtualStickFragment : DJIFragment() {
             }
         }
         mainHandler.post(distanceUpdateRunnable)
+
+        // Snapshot telemetry to the flight log every 5 seconds while a session is open.
+        telemetryLogRunnable = object : Runnable {
+            override fun run() {
+                if (WildBridgeFlightLogger.isSessionActive) {
+                    WildBridgeFlightLogger.logTelemetry(getTelemetryJson())
+                }
+                mainHandler.postDelayed(this, 5_000)
+            }
+        }
+        mainHandler.postDelayed(telemetryLogRunnable!!, 5_000)
 
         initBtnClickListener()
         
@@ -1207,6 +1223,8 @@ class VirtualStickFragment : DJIFragment() {
         httpServer?.stop()
         telemetryServer?.stop()
         stopCameraStream()
+        telemetryLogRunnable?.let { mainHandler.removeCallbacks(it) }
+        telemetryLogRunnable = null
         KeyManager.getInstance().cancelListen(this)
     }
 

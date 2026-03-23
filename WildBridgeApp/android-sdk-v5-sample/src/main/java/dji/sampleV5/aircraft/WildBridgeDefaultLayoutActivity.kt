@@ -29,6 +29,7 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
 import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -262,7 +263,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         
         // Setup key listeners for telemetry
         setupKeyListeners()
-        
+
+        // Sync any DJI TXT flight records accumulated since the last launch.
+        syncDjiFlightLogsInBackground()
+
         // Start all servers
         startServers()
         
@@ -315,6 +319,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun setupDroneStatusView() {
         DroneController.droneStatusListener = object : DroneController.DroneStatusListener {
             override fun onDroneStatusChanged(status: DroneController.DroneStatus) {
+                WildBridgeFlightLogger.logStatus(status.name)
                 mainHandler.post { updateDroneStatusView(status) }
             }
         }
@@ -344,6 +349,28 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     // ==================== End Drone Status View ====================
+
+    /**
+     * Copy DJI SDK-managed TXT flight records into the WildBridge DJI_FlightRecords folder.
+     * Runs on a background thread. Already-copied files are skipped (by filename).
+     * The DJI records live in Android/data/<pkg>/files/DJI/FlightRecord/ — we derive
+     * the path directly so we don't depend on FlightLogManager being initialised.
+     */
+    private fun syncDjiFlightLogsInBackground() {
+        Thread {
+            try {
+                val djiPath = File(getExternalFilesDir(null), "DJI/FlightRecord").absolutePath
+                val count = WildBridgeFlightLogger.syncDjiFlightLogs(djiPath)
+                if (count > 0) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Synced $count DJI flight log(s) to WildBridge folder", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "syncDjiFlightLogsInBackground: ${e.message}")
+            }
+        }.start()
+    }
 
     private fun updateAltitudeView(altitudeMetres: Double) {
         findViewById<TextView>(R.id.text_altitude)?.text = "ALT ${altitudeMetres.toInt()}m"
@@ -392,8 +419,36 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // VirtualStickVM to gate manual-override detection: only fire when airborne
         // (prevents ground-level RC drift false-positives) or during autonomous flight.
         KeyManager.getInstance().listen(isFlyingKey, this) { _, newValue ->
-            DroneController.isAirborne = newValue ?: false
+            val flying = newValue ?: false
+            val wasFlying = DroneController.isAirborne
+            DroneController.isAirborne = flying
             mainHandler.post { updateDroneStatusView(DroneController.droneStatus) }
+            // Flight log session lifecycle: open a new file on takeoff, close it on landing.
+            if (!wasFlying && flying) {
+                WildBridgeFlightLogger.startSession()
+            } else if (wasFlying && !flying) {
+                // 10-second grace period before closing in case of brief mid-air telemetry glitch.
+                mainHandler.postDelayed({
+                    if (!DroneController.isAirborne) {
+                        WildBridgeFlightLogger.endSession("landed")
+                        // Sync DJI TXT records — idempotent, safe to run immediately.
+                        // Any file the SDK hasn't finalised yet will be picked up next launch.
+                        syncDjiFlightLogsInBackground()
+                    }
+                }, 10_000L)
+            }
+        }
+        // Detect RTH triggered from the RC controller (not from our server HTTP request).
+        // When the server triggers RTH it calls startReturnToHome() which sets droneStatus
+        // to RETURNING_HOME BEFORE the DJI SDK switches to GO_HOME flight mode.
+        // If we see GO_HOME but our status is not RETURNING_HOME, the pilot pressed the
+        // RTH button on the physical controller → activate manual override so the server
+        // cannot accidentally interfere with the returning drone.
+        KeyManager.getInstance().listen(flightModeKey, this) { _, newValue ->
+            if (newValue == FlightMode.GO_HOME &&
+                DroneController.droneStatus != DroneController.DroneStatus.RETURNING_HOME) {
+                mainHandler.post { DroneController.activateManualOverride() }
+            }
         }
         // Keep altitude display in sync with every position update
         KeyManager.getInstance().listen(location3DKey, this) { _, newValue ->
@@ -407,7 +462,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     
     private fun loadDroneName() {
         droneName = sharedPreferences.getString("drone_name", null) ?: ""
-        
+
         if (droneName.isEmpty()) {
             // First time - prompt user for drone name
             mainHandler.post {
@@ -415,6 +470,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             }
         } else {
             Log.i(TAG, "Loaded drone name: $droneName")
+            WildBridgeFlightLogger.setDroneName(droneName)
         }
     }
     
@@ -434,12 +490,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 if (name.isNotEmpty()) {
                     droneName = name
                     sharedPreferences.edit().putString("drone_name", droneName).apply()
+                    WildBridgeFlightLogger.setDroneName(droneName)
                     Log.i(TAG, "Drone name set to: $droneName")
                     Toast.makeText(this, "Drone name saved: $droneName", Toast.LENGTH_SHORT).show()
                     updateDroneNameDisplay()
                 } else {
                     droneName = "drone_1"
                     sharedPreferences.edit().putString("drone_name", droneName).apply()
+                    WildBridgeFlightLogger.setDroneName(droneName)
                     Toast.makeText(this, "Using default name: $droneName", Toast.LENGTH_SHORT).show()
                     updateDroneNameDisplay()
                 }
@@ -618,7 +676,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Clean up DroneController listeners and resources
         DroneController.droneStatusListener = null
         DroneController.destroy()
-        
+
+        // Close the active flight log if the app is killed mid-flight
+        WildBridgeFlightLogger.endSession("app_stopped")
+
         Log.i(TAG, "All servers stopped")
     }
     
