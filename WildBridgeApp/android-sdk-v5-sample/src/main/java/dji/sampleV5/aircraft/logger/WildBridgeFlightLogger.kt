@@ -18,9 +18,9 @@ import java.util.Locale
  *
  * === WildBridge JSONL logs ===
  * Written to the best available storage (priority order):
- *   1. Removable microSD card root → WildBridge/FlightLogs/YYYY-MM-DD/HH-mm-ss_<drone>.jsonl
+ *   1. Removable microSD card root → WildBridge/FlightLogs/YYYY-MM-DD/ (needs MANAGE_EXTERNAL_STORAGE on API 30+)
  *   2. Documents/WildBridge/FlightLogs/YYYY-MM-DD/  (needs MANAGE_EXTERNAL_STORAGE on API 30+)
- *   3. Android/data/<pkg>/files/FlightLogs/YYYY-MM-DD/  (app-external fallback)
+ *   3. Android/data/<pkg>/files/FlightLogs/YYYY-MM-DD/  (app-external fallback — deleted on uninstall)
  *
  * One JSONL file is created per flight session. Each line is one JSON event:
  *   {"t":1711188600,"type":"SESSION_START","drone":"scout"}
@@ -142,14 +142,21 @@ object WildBridgeFlightLogger {
             Log.w(TAG, "syncDjiFlightLogs: empty source path")
             return 0
         }
-        val destDir = resolveDjiSyncDir() ?: return 0
+        val sourceDir = File(djiLogPath)
+        if (!sourceDir.isDirectory) {
+            Log.w(TAG, "syncDjiFlightLogs: source does not exist: $djiLogPath")
+            return 0
+        }
+        val destDir = resolveDjiSyncDir()
+        if (destDir == null) {
+            Log.e(TAG, "syncDjiFlightLogs: could not create destination directory")
+            return 0
+        }
         return try {
-            val sourceDir = File(djiLogPath)
-            val allFiles = sourceDir.listFiles { f ->
-                f.isFile && (f.extension.equals("txt", ignoreCase = true) ||
-                             f.extension.equals("csv", ignoreCase = true) ||
-                             f.extension.equals("clog", ignoreCase = true))
-            } ?: emptyArray()
+            // Walk the tree recursively — DJI SDK may place records in subdirectories.
+            val allFiles = sourceDir.walk().filter { f ->
+                f.isFile && f.extension.lowercase() in setOf("txt", "csv", "clog")
+            }
 
             var copied = 0
             for (src in allFiles) {
@@ -181,26 +188,52 @@ object WildBridgeFlightLogger {
     private fun resolveDjiSyncDir(): File? {
         val subPath = "WildBridge/DJI_FlightRecords"
         val ctx = ContextUtil.getContext()
-        // Removable SD card (index >= 1)
-        try {
-            val externalDirs = ctx.getExternalFilesDirs(null)
-            for (i in 1 until externalDirs.size) {
-                val d = externalDirs[i] ?: continue
-                var root = d; repeat(4) { root = root.parentFile ?: root }
-                val dir = File(root, subPath)
-                if (dir.mkdirs() || dir.isDirectory) return dir
+        val hasFullAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                Environment.isExternalStorageManager()
+
+        // 1. Removable SD card root — survives both uninstalls and reflashing.
+        //    Requires MANAGE_EXTERNAL_STORAGE on Android 11+ to write outside app-private.
+        if (hasFullAccess) {
+            try {
+                val externalDirs = ctx.getExternalFilesDirs(null)
+                for (i in 1 until externalDirs.size) {
+                    val d = externalDirs[i] ?: continue
+                    var root = d; repeat(4) { root = root.parentFile ?: root }
+                    val dir = File(root, subPath)
+                    if (dir.mkdirs() || dir.isDirectory) {
+                        Log.i(TAG, "resolveDjiSyncDir: using SD card root: ${dir.absolutePath}")
+                        return dir
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "resolveDjiSyncDir: SD card root check failed: ${e.message}")
             }
-        } catch (_: Exception) {}
-        // Documents folder
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) {
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), subPath)
-            if (dir.mkdirs() || dir.isDirectory) return dir
         }
-        // App-external fallback
+
+        // 2. Documents folder — survives uninstalls; needs MANAGE_EXTERNAL_STORAGE on API 30+.
+        if (hasFullAccess) {
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), subPath)
+            if (dir.mkdirs() || dir.isDirectory) {
+                Log.i(TAG, "resolveDjiSyncDir: using Documents: ${dir.absolutePath}")
+                return dir
+            }
+        }
+
+        // 3. App-external fallback — does NOT survive uninstalls.
+        Log.w(TAG, "resolveDjiSyncDir: MANAGE_EXTERNAL_STORAGE not granted, falling back to app-external")
         return try {
             val dir = File(ctx.getExternalFilesDir(null), "DJI_FlightRecords")
-            dir.mkdirs(); if (dir.isDirectory) dir else null
-        } catch (_: Exception) { null }
+            if (dir.mkdirs() || dir.isDirectory) {
+                Log.w(TAG, "resolveDjiSyncDir: using app-external fallback: ${dir.absolutePath}")
+                dir
+            } else {
+                Log.e(TAG, "resolveDjiSyncDir: all storage options failed")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "resolveDjiSyncDir: fallback failed: ${e.message}")
+            null
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -209,41 +242,41 @@ object WildBridgeFlightLogger {
      * Resolve the directory where the log file for today's date should live.
      *
      * Priority chain (highest to lowest durability):
-     *   1. Removable microSD card — truly survives OS reflashing (RC Plus / RC Pro).
-     *      Accessed via the app-private path on the card (no MANAGE_EXTERNAL_STORAGE needed).
+     *   1. Removable microSD card root — survives both uninstalls and OS reflashing.
+     *      Requires MANAGE_EXTERNAL_STORAGE on Android 11+ (requested at startup).
      *   2. Public Documents folder — survives app uninstalls; visible in file managers.
-     *      Requires MANAGE_EXTERNAL_STORAGE on Android 11+ (already in the manifest).
-     *   3. App-external files dir — survives `adb install -r` reinstalls but not uninstalls.
+     *      Requires MANAGE_EXTERNAL_STORAGE on Android 11+ (requested at startup).
+     *   3. App-external files dir — does NOT survive uninstalls (last-resort fallback).
      */
     private fun resolveLogDir(): File? {
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val subPath = "WildBridge/FlightLogs/$dateStr"
         val ctx = ContextUtil.getContext()
+        val hasFullAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                Environment.isExternalStorageManager()
 
-        // 1. Removable SD card (index ≥ 1 of getExternalFilesDirs).
-        //    getExternalFilesDirs returns app-private paths per card; no special permission
-        //    needed and the data lives on the physical card — truly reflash-proof.
-        try {
-            val externalDirs = ctx.getExternalFilesDirs(null)
-            for (i in 1 until externalDirs.size) {
-                val appPrivateOnCard = externalDirs[i] ?: continue
-                // Navigate up 4 levels (.../Android/data/<pkg>/files → card root)
-                var cardRoot: File = appPrivateOnCard
-                repeat(4) { cardRoot = cardRoot.parentFile ?: cardRoot }
-                val dir = File(cardRoot, subPath)
-                if (dir.mkdirs() || dir.isDirectory) {
-                    Log.i(TAG, "Using removable SD card: ${dir.absolutePath}")
-                    return dir
+        // 1. Removable SD card root — survives both uninstalls and reflashing.
+        //    Requires MANAGE_EXTERNAL_STORAGE on Android 11+ to write outside app-private.
+        if (hasFullAccess) {
+            try {
+                val externalDirs = ctx.getExternalFilesDirs(null)
+                for (i in 1 until externalDirs.size) {
+                    val appPrivateOnCard = externalDirs[i] ?: continue
+                    var cardRoot: File = appPrivateOnCard
+                    repeat(4) { cardRoot = cardRoot.parentFile ?: cardRoot }
+                    val dir = File(cardRoot, subPath)
+                    if (dir.mkdirs() || dir.isDirectory) {
+                        Log.i(TAG, "Using removable SD card root: ${dir.absolutePath}")
+                        return dir
+                    }
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "Removable SD card root check failed: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Removable SD card check failed: ${e.message}")
         }
 
         // 2. Public Documents/WildBridge/FlightLogs — needs MANAGE_EXTERNAL_STORAGE on API 30+.
-        val canUsePublic = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-                Environment.isExternalStorageManager()
-        if (canUsePublic) {
+        if (hasFullAccess) {
             val documentsRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
             val dir = File(documentsRoot, "WildBridge/FlightLogs/$dateStr")
             if (dir.mkdirs() || dir.isDirectory) {
@@ -252,8 +285,8 @@ object WildBridgeFlightLogger {
             }
         }
 
-        // 3. App-external fallback.
-        Log.w(TAG, "Falling back to app-external files dir")
+        // 3. App-external fallback — does NOT survive uninstalls.
+        Log.w(TAG, "MANAGE_EXTERNAL_STORAGE not granted, falling back to app-external files dir")
         return try {
             val fallback = File(ctx.getExternalFilesDir(null), "FlightLogs/$dateStr")
             fallback.mkdirs()

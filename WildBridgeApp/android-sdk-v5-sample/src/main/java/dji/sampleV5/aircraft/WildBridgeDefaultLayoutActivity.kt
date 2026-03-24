@@ -1,8 +1,12 @@
 package dji.sampleV5.aircraft
 
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import java.io.File
 import android.util.Log
 import android.widget.Toast
@@ -321,6 +325,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Setup key listeners for telemetry
         setupKeyListeners()
 
+        // Ensure MANAGE_EXTERNAL_STORAGE is granted so flight logs survive uninstalls.
+        ensureManageExternalStoragePermission()
+
         // Sync any DJI TXT flight records accumulated since the last launch.
         syncDjiFlightLogsInBackground()
 
@@ -456,12 +463,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         detectionOverlay = findViewById(R.id.detection_overlay)
 
         val sw = findViewById<Switch>(R.id.sw_auto_sensing) ?: return
-        sw.isChecked = true
+        sw.isChecked = true   // default to "desired on"
         sw.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) startAutoSensing() else stopAutoSensing()
         }
-        // Start by default
-        startAutoSensing()
+        // Do NOT call startAutoSensing() here — the SDK is not connected yet.
+        // It will be started automatically on takeoff (see isFlyingKey listener)
+        // or when the user toggles the switch while the drone is connected.
     }
 
     private fun startAutoSensing() {
@@ -542,10 +550,25 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     // ==================== End Drone Status View ====================
 
     /**
+     * On Android 11+ the app needs MANAGE_EXTERNAL_STORAGE to write outside its
+     * private directories (SD card root, Documents).  The permission is declared
+     * in the manifest but must be toggled by the user in Settings.
+     */
+    private fun ensureManageExternalStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            Log.w(TAG, "MANAGE_EXTERNAL_STORAGE not granted — requesting…")
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Cannot open MANAGE_ALL_FILES_ACCESS_PERMISSION settings: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Copy DJI SDK-managed TXT flight records into the WildBridge DJI_FlightRecords folder.
      * Runs on a background thread. Already-copied files are skipped (by filename).
-     * The DJI records live in Android/data/<pkg>/files/DJI/FlightRecord/ — we derive
-     * the path directly so we don't depend on FlightLogManager being initialised.
      */
     private fun syncDjiFlightLogsInBackground() {
         Thread {
@@ -617,6 +640,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             // Flight log session lifecycle: open a new file on takeoff, close it on landing.
             if (!wasFlying && flying) {
                 WildBridgeFlightLogger.startSession()
+                // Start AutoSensing on takeoff if the toggle is checked.
+                // Cannot start during onCreate() because the SDK is not connected yet.
+                val sw = findViewById<Switch>(R.id.sw_auto_sensing)
+                if (sw?.isChecked == true && !isAutoSensingActive) {
+                    startAutoSensing()
+                }
             } else if (wasFlying && !flying) {
                 // 10-second grace period before closing in case of brief mid-air telemetry glitch.
                 mainHandler.postDelayed({
