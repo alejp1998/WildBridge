@@ -119,11 +119,14 @@ class DJIV5VideoCapturer(
                 )
                 
                 // Scale to target resolution if enabled and dimensions differ
-                val outputBuffer = if (scaleToTarget && (width != targetWidth || height != targetHeight)) {
-                    buffer.cropAndScale(
+                val needsScale = scaleToTarget && (width != targetWidth || height != targetHeight)
+                val outputBuffer = if (needsScale) {
+                    val scaled = buffer.cropAndScale(
                         0, 0, width, height,  // Use full source frame
                         targetWidth, targetHeight  // Scale to target
                     )
+                    buffer.release()  // Release the original; cropAndScale made a copy
+                    scaled
                 } else {
                     buffer
                 }

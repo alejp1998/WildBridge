@@ -144,9 +144,19 @@ class WebRTCSignalingServer(
 
     fun stopServer() {
         try {
-            stop(1000)
+            stop(2000)
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping server: ${e.message}")
+        }
+        // Wait for the port to actually be released (up to 2 more seconds)
+        val deadline = System.currentTimeMillis() + 2000
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                java.net.ServerSocket(port).use { it.reuseAddress = true }
+                break
+            } catch (_: Exception) {
+                Thread.sleep(100)
+            }
         }
     }
 }

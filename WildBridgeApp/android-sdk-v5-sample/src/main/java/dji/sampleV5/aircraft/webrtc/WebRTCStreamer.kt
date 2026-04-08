@@ -9,6 +9,8 @@ import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * WebRTCStreamer manages the WebRTC streaming server for the DJI drone video feed.
@@ -92,18 +94,24 @@ class WebRTCStreamer(
     }
 
     /**
-     * Stop the WebRTC streaming server and all connections
+     * Stop the WebRTC streaming server and all connections.
+     * Blocks until the signaling server port is released (up to 2 seconds).
      */
     fun stop() {
         Log.d(TAG, "Stopping WebRTC streamer...")
         
         // Close all peer connections
+        val latch = CountDownLatch(activeConnections.size)
         activeConnections.values.forEach { client ->
-            client.dispose()
+            client.dispose {
+                latch.countDown()
+            }
         }
         activeConnections.clear()
+        // Wait up to 2s for peer connections to finish disposing
+        latch.await(2, TimeUnit.SECONDS)
         
-        // Stop signaling server
+        // Stop signaling server and wait for port release
         signalingServer?.stopServer()
         signalingServer = null
         
