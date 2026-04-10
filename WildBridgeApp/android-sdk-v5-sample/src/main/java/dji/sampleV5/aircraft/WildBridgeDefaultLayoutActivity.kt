@@ -380,11 +380,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     // ==================== Video Mode Toggle (Quality / FPS) ====================
 
-    private var isFpsMode = false
+    private var isFpsMode = true
 
     private fun setupVideoModeToggle() {
         val sw = findViewById<Switch>(R.id.sw_video_mode) ?: return
-        sw.isChecked = false  // default = Quality mode
+        sw.isChecked = true  // default = FPS mode
+        sw.text = "FPS"
+        sw.setTextColor(0xFFFF9800.toInt())
         sw.setOnCheckedChangeListener { _, isChecked ->
             isFpsMode = isChecked
             sw.text = if (isChecked) "FPS" else "QUALITY"
@@ -393,7 +395,38 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
+    private fun buildWebRTCOptions(fpsMode: Boolean): WebRTCMediaOptions {
+        return if (fpsMode) {
+            WebRTCMediaOptions(
+                videoResolutionWidth = 1280,
+                videoResolutionHeight = 720,
+                fps = 30,
+                videoBitrate = 4_000_000,
+                videoCodec = "H264"
+            )
+        } else {
+            WebRTCMediaOptions(
+                videoResolutionWidth = 1280,
+                videoResolutionHeight = 720,
+                fps = 5,
+                videoBitrate = 5_000_000,
+                videoCodec = "H264"
+            )
+        }
+    }
+
     private fun restartWebRTCWithMode(fpsMode: Boolean) {
+        val mode = if (fpsMode) "FPS (30fps)" else "Quality (5fps)"
+        val existingStreamer = webRTCStreamer
+
+        if (existingStreamer != null && existingStreamer.getClientCount() > 0) {
+            Log.w(TAG, "Deferring WebRTC mode change to keep active control session stable")
+            mainHandler.post {
+                Toast.makeText(this, "$mode will apply after viewers reconnect", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
         val deviceIp = getDeviceIpAddress()
         val activity = this
         // Run stop + start off the main thread so the blocking port-release wait
@@ -403,25 +436,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             webRTCStreamer?.stop()
             webRTCStreamer = null
 
-            val options = if (fpsMode) {
-                // FPS mode: 30 fps, lower bitrate per frame
-                WebRTCMediaOptions(
-                    videoResolutionWidth = 1280,
-                    videoResolutionHeight = 720,
-                    fps = 30,
-                    videoBitrate = 4_000_000,
-                    videoCodec = "H264"
-                )
-            } else {
-                // Quality mode (default): 5 fps, high bitrate per frame
-                WebRTCMediaOptions(
-                    videoResolutionWidth = 1280,
-                    videoResolutionHeight = 720,
-                    fps = 5,
-                    videoBitrate = 5_000_000,
-                    videoCodec = "H264"
-                )
-            }
+            val options = buildWebRTCOptions(fpsMode)
 
             try {
                 webRTCStreamer = WebRTCStreamer(
@@ -449,7 +464,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 }
             }
             webRTCStreamer?.start()
-            val mode = if (fpsMode) "FPS (30fps)" else "Quality (5fps)"
             Log.i(TAG, "WebRTC restarted in $mode mode on $deviceIp:$WEBRTC_PORT")
             mainHandler.post {
                 Toast.makeText(activity, "Video: $mode", Toast.LENGTH_SHORT).show()
@@ -468,7 +482,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         detectionOverlay = findViewById(R.id.detection_overlay)
 
         val sw = findViewById<Switch>(R.id.sw_auto_sensing) ?: return
-        sw.isChecked = true   // default to "desired on"
+        sw.isChecked = false  // default to off until the operator enables it
         sw.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) startAutoSensing() else stopAutoSensing()
         }
@@ -823,13 +837,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
                     signalingPort = WEBRTC_PORT,
                     droneName = droneName,
-                    options = WebRTCMediaOptions(
-                        videoResolutionWidth = 1280,
-                        videoResolutionHeight = 720,
-                        fps = 5,
-                        videoBitrate = 5_000_000, // 5 Mbps tuned for 720p
-                        videoCodec = "H264"       // Use H264 for better hardware acceleration
-                    )
+                    options = buildWebRTCOptions(isFpsMode)
                 )
                 webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
                     override fun onServerStarted(ip: String, port: Int) {

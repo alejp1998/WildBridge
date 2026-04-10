@@ -8,8 +8,7 @@ import org.webrtc.*
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Manages a single WebRTC peer connection with a remote client.
@@ -27,7 +26,6 @@ class WebRTCClient(
     companion object {
         private const val TAG = "WebRTCClient"
         private const val METADATA_CHANNEL_LABEL = "telemetry"
-        private const val MAX_ICE_RESTARTS = 2
         private const val METADATA_BUFFER_THRESHOLD = 64 * 1024L  // 64 KB
         
         @Volatile
@@ -56,10 +54,7 @@ class WebRTCClient(
         private fun initializeFactory(context: Context) {
             val initOptions = PeerConnectionFactory.InitializationOptions.builder(context)
                 .setEnableInternalTracer(true)
-                .setFieldTrials(
-                    "WebRTC-H264HighProfile/Enabled/" +
-                    "WebRTC-SpsPpsIdrIsH264Keyframe/Enabled/"
-                )
+                .setFieldTrials("WebRTC-H264HighProfile/Enabled/")
                 .createInitializationOptions()
             PeerConnectionFactory.initialize(initOptions)
             
@@ -85,7 +80,7 @@ class WebRTCClient(
     private var metadataChannel: DataChannel? = null
     private var metadataChannelReady = false
     private val executor = Executors.newSingleThreadExecutor()
-    private val iceRestartCount = AtomicInteger(0)
+    private val isDisposing = AtomicBoolean(false)
     
     var connectionListener: PeerConnectionListener? = null
 
@@ -311,26 +306,11 @@ class WebRTCClient(
                 Log.d(TAG, "[$clientId] ICE connection state: $state")
                 when (state) {
                     PeerConnection.IceConnectionState.CONNECTED -> {
-                        iceRestartCount.set(0)
                         connectionListener?.onConnected(clientId)
                     }
-                    PeerConnection.IceConnectionState.DISCONNECTED -> {
-                        // Attempt ICE restart before giving up
-                        if (iceRestartCount.incrementAndGet() <= MAX_ICE_RESTARTS) {
-                            Log.w(TAG, "[$clientId] ICE disconnected, attempting restart ${iceRestartCount.get()}/$MAX_ICE_RESTARTS")
-                            attemptIceRestart()
-                        } else {
-                            Log.w(TAG, "[$clientId] ICE disconnected after $MAX_ICE_RESTARTS restarts, giving up")
-                            connectionListener?.onDisconnected(clientId)
-                        }
-                    }
+                    PeerConnection.IceConnectionState.DISCONNECTED,
                     PeerConnection.IceConnectionState.FAILED -> {
-                        if (iceRestartCount.incrementAndGet() <= MAX_ICE_RESTARTS) {
-                            Log.w(TAG, "[$clientId] ICE failed, attempting restart ${iceRestartCount.get()}/$MAX_ICE_RESTARTS")
-                            attemptIceRestart()
-                        } else {
-                            connectionListener?.onDisconnected(clientId)
-                        }
+                        connectionListener?.onDisconnected(clientId)
                     }
                     PeerConnection.IceConnectionState.CLOSED -> {
                         connectionListener?.onDisconnected(clientId)
@@ -488,38 +468,23 @@ class WebRTCClient(
         messageCallback(clientId, message)
     }
 
-    private fun attemptIceRestart() {
-        executor.execute {
-            try {
-                val constraints = MediaConstraints().apply {
-                    mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
-                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
-                }
-                peerConnection?.createOffer(object : SimpleSdpObserver(TAG) {
-                    override fun onCreateSuccess(sessionDescription: SessionDescription?) {
-                        sessionDescription?.let { sdp ->
-                            peerConnection?.setLocalDescription(SimpleSdpObserver(TAG), sdp)
-                            sendOffer(sdp)
-                        }
-                    }
-                }, constraints)
-                Log.d(TAG, "[$clientId] ICE restart offer created")
-            } catch (e: Exception) {
-                Log.e(TAG, "[$clientId] ICE restart failed: ${e.message}")
-                connectionListener?.onDisconnected(clientId)
-            }
-        }
-    }
-
     /**
      * Clean up resources.
      * @param onComplete optional callback invoked after disposal finishes.
      */
     fun dispose(onComplete: (() -> Unit)? = null) {
+        if (!isDisposing.compareAndSet(false, true)) {
+            onComplete?.invoke()
+            return
+        }
+
         Log.d(TAG, "Disposing WebRTCClient for: $clientId")
         
         executor.execute {
+            if (videoCapturer is DJIV5VideoCapturer) {
+                videoCapturer.metadataListener = null
+            }
+
             try {
                 videoCapturer.stopCapture()
             } catch (e: Exception) {
@@ -527,26 +492,25 @@ class WebRTCClient(
             }
             
             // Close data channel
-            metadataChannel?.close()
+            runCatching { metadataChannel?.close() }
             metadataChannel = null
+            metadataChannelReady = false
             
-            videoCapturer.dispose()
-            videoTrack?.dispose()
+            runCatching { videoCapturer.dispose() }
+            runCatching { videoTrack?.setEnabled(false) }
             videoTrack = null
-            videoSource?.dispose()
             videoSource = null
             
-            // close() is synchronous; dispose() releases native resources after.
-            // Separating them avoids the race of disposing a still-closing connection.
-            peerConnection?.close()
-            peerConnection?.dispose()
+            // Avoid aggressive native disposal here. The crash reports show libjingle
+            // aborting on its signaling thread, which is commonly triggered by
+            // re-entrant or thread-unsafe shutdown. Closing the connection is enough
+            // to stop network activity without forcing native teardown mid-callback.
+            runCatching { peerConnection?.close() }
             peerConnection = null
             
             onComplete?.invoke()
         }
         
         executor.shutdown()
-        // Give a bounded wait so callers can rely on cleanup finishing
-        executor.awaitTermination(2, TimeUnit.SECONDS)
     }
 }
