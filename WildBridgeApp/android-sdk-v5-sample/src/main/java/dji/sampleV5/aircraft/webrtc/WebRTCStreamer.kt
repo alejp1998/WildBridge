@@ -29,6 +29,7 @@ class WebRTCStreamer(
     private var signalingServer: WebRTCSignalingServer? = null
     private val activeConnections = ConcurrentHashMap<String, WebRTCClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var sharedFrameSource: SharedDJIFrameSource? = null
     
     var listener: WebRTCStreamerListener? = null
 
@@ -50,6 +51,8 @@ class WebRTCStreamer(
             Log.w(TAG, "Server already running")
             return
         }
+
+        TelemetryProvider.startListening()
         
         signalingServer = WebRTCSignalingServer(signalingPort, droneName, object : WebRTCSignalingServer.SignalingServerListener {
             override fun onServerStarted(port: Int) {
@@ -103,6 +106,12 @@ class WebRTCStreamer(
         }
         activeConnections.clear()
         
+        // Dispose shared frame source
+        sharedFrameSource?.dispose()
+        sharedFrameSource = null
+
+        TelemetryProvider.stopListening()
+        
         // Stop signaling server
         signalingServer?.stopServer()
         signalingServer = null
@@ -142,11 +151,17 @@ class WebRTCStreamer(
         return "ws://$ip:$signalingPort"
     }
 
+    private fun getOrCreateSharedSource(): SharedDJIFrameSource {
+        return sharedFrameSource ?: SharedDJIFrameSource(cameraIndex, droneName).also {
+            sharedFrameSource = it
+        }
+    }
+
     private fun createPeerConnection(clientId: String) {
         Log.d(TAG, "Creating peer connection for: $clientId")
         
-        // Create a new video capturer for this client
-        val videoCapturer = DJIV5VideoCapturer(cameraIndex, droneName = droneName)
+        // Create a lightweight handle backed by the shared frame source
+        val videoCapturer = SharedVideoCapturerHandle(clientId, getOrCreateSharedSource())
         
         val client = WebRTCClient(
             clientId = clientId,

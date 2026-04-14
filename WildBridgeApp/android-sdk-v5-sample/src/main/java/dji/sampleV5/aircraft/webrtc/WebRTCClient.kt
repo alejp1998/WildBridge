@@ -64,7 +64,7 @@ class WebRTCClient(
                 .setVideoDecoderFactory(DefaultVideoDecoderFactory(rootEglBase.eglBaseContext))
                 .setVideoEncoderFactory(DefaultVideoEncoderFactory(
                     rootEglBase.eglBaseContext, 
-                    true,  // enableIntelVp8Encoder
+                    false, // enableIntelVp8Encoder — unused, avoid probing overhead
                     true   // enableH264HighProfile
                 ))
                 .setOptions(PeerConnectionFactory.Options())
@@ -89,10 +89,12 @@ class WebRTCClient(
      * The capturer will scale the next frame to the new dimensions.
      */
     fun changeResolution(width: Int, height: Int) {
-        if (videoCapturer is DJIV5VideoCapturer) {
-            videoCapturer.changeResolution(width, height)
-            Log.d(TAG, "[$clientId] Resolution changed to ${width}x${height}")
+        when (videoCapturer) {
+            is DJIV5VideoCapturer -> videoCapturer.changeResolution(width, height)
+            is SharedVideoCapturerHandle -> videoCapturer.changeResolution(width, height)
+            else -> return
         }
+        Log.d(TAG, "[$clientId] Resolution changed to ${width}x${height}")
     }
 
     interface PeerConnectionListener {
@@ -200,17 +202,21 @@ class WebRTCClient(
         // Set up listener on the video capturer to receive frame metadata
         Log.d(TAG, "[$clientId] Setting up metadata listener on video capturer")
         
-        if (videoCapturer is DJIV5VideoCapturer) {
-            videoCapturer.metadataListener = object : DJIV5VideoCapturer.FrameMetadataListener {
-                override fun onFrameMetadata(metadata: FrameMetadata) {
-                    Log.v(TAG, "[$clientId] Metadata listener received frame: ${metadata.frameNumber}")
-                    sendMetadata(metadata)
-                }
+        val metadataCallback = object : DJIV5VideoCapturer.FrameMetadataListener {
+            override fun onFrameMetadata(metadata: FrameMetadata) {
+                Log.v(TAG, "[$clientId] Metadata listener received frame: ${metadata.frameNumber}")
+                sendMetadata(metadata)
             }
-            Log.d(TAG, "[$clientId] Metadata listener attached to video capturer")
-        } else {
-            Log.w(TAG, "[$clientId] VideoCapturer is not DJIV5VideoCapturer, cannot attach metadata listener")
         }
+        when (videoCapturer) {
+            is DJIV5VideoCapturer -> videoCapturer.metadataListener = metadataCallback
+            is SharedVideoCapturerHandle -> videoCapturer.metadataListener = metadataCallback
+            else -> {
+                Log.w(TAG, "[$clientId] VideoCapturer type not supported for metadata")
+                return
+            }
+        }
+        Log.d(TAG, "[$clientId] Metadata listener attached to video capturer")
     }
     
     /**
@@ -481,8 +487,9 @@ class WebRTCClient(
         Log.d(TAG, "Disposing WebRTCClient for: $clientId")
         
         executor.execute {
-            if (videoCapturer is DJIV5VideoCapturer) {
-                videoCapturer.metadataListener = null
+            when (videoCapturer) {
+                is DJIV5VideoCapturer -> videoCapturer.metadataListener = null
+                is SharedVideoCapturerHandle -> videoCapturer.metadataListener = null
             }
 
             try {

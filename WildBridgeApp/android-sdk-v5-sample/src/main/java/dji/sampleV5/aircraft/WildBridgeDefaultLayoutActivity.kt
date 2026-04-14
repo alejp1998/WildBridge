@@ -398,18 +398,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun buildWebRTCOptions(fpsMode: Boolean): WebRTCMediaOptions {
         return if (fpsMode) {
             WebRTCMediaOptions(
-                videoResolutionWidth = 1280,
-                videoResolutionHeight = 720,
-                fps = 30,
-                videoBitrate = 4_000_000,
+                videoResolutionWidth = 1920,
+                videoResolutionHeight = 1080,
+                fps = 15,
+                videoBitrate = 8_000_000,
                 videoCodec = "H264"
             )
         } else {
             WebRTCMediaOptions(
-                videoResolutionWidth = 1280,
-                videoResolutionHeight = 720,
+                videoResolutionWidth = 1920,
+                videoResolutionHeight = 1080,
                 fps = 5,
-                videoBitrate = 5_000_000,
+                videoBitrate = 8_000_000,
                 videoCodec = "H264"
             )
         }
