@@ -30,6 +30,7 @@ class WebRTCStreamer(
     private val activeConnections = ConcurrentHashMap<String, WebRTCClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sharedFrameSource: SharedDJIFrameSource? = null
+    private var whipPublisher: WhipPublisher? = null
     
     var listener: WebRTCStreamerListener? = null
 
@@ -100,6 +101,10 @@ class WebRTCStreamer(
     fun stop() {
         Log.d(TAG, "Stopping WebRTC streamer...")
         
+        // Stop WHIP publisher if active
+        whipPublisher?.stop()
+        whipPublisher = null
+        
         // Close all peer connections
         activeConnections.values.forEach { client ->
             client.dispose()
@@ -121,6 +126,55 @@ class WebRTCStreamer(
         }
         
         Log.d(TAG, "WebRTC streamer stopped")
+    }
+
+    /**
+     * Start publishing video via WHIP to a mediamtx relay server.
+     * This replaces the signaling server approach — the phone pushes
+     * its stream once and mediamtx fans it out to all consumers.
+     *
+     * @param whipUrl Full WHIP endpoint URL, e.g. "http://192.168.x.y:8889/drone_1/whip"
+     */
+    fun startWhip(whipUrl: String) {
+        Log.d(TAG, "Starting WHIP publisher to $whipUrl")
+
+        if (whipPublisher != null) {
+            Log.w(TAG, "WHIP publisher already running")
+            return
+        }
+
+        TelemetryProvider.startListening()
+
+        // Use a SharedVideoCapturerHandle backed by the shared DJI frame source.
+        // This is the same mechanism used for per-client WebRTC but only one instance.
+        val capturer = SharedVideoCapturerHandle("whip", getOrCreateSharedSource())
+
+        whipPublisher = WhipPublisher(
+            context = context,
+            videoCapturer = capturer,
+            options = options,
+            whipUrl = whipUrl
+        ).apply {
+            this.listener = object : WhipPublisher.WhipListener {
+                override fun onPublishing() {
+                    val ip = getLocalIpAddress() ?: "Unknown"
+                    Log.i(TAG, "WHIP publishing from $ip to $whipUrl")
+                    mainHandler.post {
+                        this@WebRTCStreamer.listener?.onServerStarted(ip, 0)
+                    }
+                }
+                override fun onDisconnected() {
+                    Log.w(TAG, "WHIP connection lost")
+                }
+                override fun onError(error: String) {
+                    Log.e(TAG, "WHIP error: $error")
+                    mainHandler.post {
+                        this@WebRTCStreamer.listener?.onServerError("WHIP: $error")
+                    }
+                }
+            }
+            start()
+        }
     }
 
     /**

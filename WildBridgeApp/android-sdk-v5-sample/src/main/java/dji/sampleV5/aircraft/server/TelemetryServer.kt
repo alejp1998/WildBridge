@@ -18,6 +18,11 @@ class TelemetryServer(
     private var isRunning = false
     private val clients = ConcurrentHashMap<Socket, PrintWriter>()
 
+    /** Callback invoked (once) when the first client connects. Receives the client's IP address. */
+    var onFirstClientConnected: ((clientIp: String) -> Unit)? = null
+    @Volatile
+    private var firstClientNotified = false
+
     fun start() {
         if (isRunning) return
 
@@ -33,9 +38,15 @@ class TelemetryServer(
                 while (isRunning && !serverSocket!!.isClosed) {
                     try {
                         val clientSocket = serverSocket!!.accept()
-                        Log.i("TelemetryServer", "Client connected: ${clientSocket.inetAddress.hostAddress}")
+                        val clientIp = clientSocket.inetAddress.hostAddress ?: "unknown"
+                        Log.i("TelemetryServer", "Client connected: $clientIp")
                         val writer = PrintWriter(clientSocket.getOutputStream(), true)
                         clients[clientSocket] = writer
+                        // Notify once when the first client (bridge) connects
+                        if (!firstClientNotified) {
+                            firstClientNotified = true
+                            onFirstClientConnected?.invoke(clientIp)
+                        }
                     } catch (e: Exception) {
                         if (isRunning) {
                             Log.e("TelemetryServer", "Error accepting connection: ${e.message}")

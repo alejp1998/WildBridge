@@ -113,6 +113,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private const val HTTP_PORT = 8080
         private const val TELEMETRY_PORT = 8081
         private const val WEBRTC_PORT = 8082
+        private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val DISCOVERY_PORT = 30000
         private const val DISCOVERY_MSG = "DISCOVER_WILDBRIDGE"
         private const val DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
@@ -133,6 +134,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var httpServer: SimpleHttpServer? = null
     private var telemetryServer: TelemetryServer? = null
     private var webRTCStreamer: WebRTCStreamer? = null
+    @Volatile private var lastWhipUrl: String? = null  // Remembered for FPS/Quality mode restarts
     
     // Discovery (UDP broadcast/multicast)
     private var discoverySocket: DatagramSocket? = null
@@ -416,23 +418,20 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun restartWebRTCWithMode(fpsMode: Boolean) {
-        val mode = if (fpsMode) "FPS (30fps)" else "Quality (5fps)"
-        val existingStreamer = webRTCStreamer
+        val mode = if (fpsMode) "FPS" else "Quality"
+        val whipUrl = lastWhipUrl
 
-        if (existingStreamer != null && existingStreamer.getClientCount() > 0) {
-            Log.w(TAG, "Deferring WebRTC mode change to keep active control session stable")
+        if (whipUrl == null) {
+            Log.w(TAG, "Cannot restart WebRTC — WHIP URL not known yet (bridge hasn't connected)")
             mainHandler.post {
-                Toast.makeText(this, "$mode will apply after viewers reconnect", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "$mode will apply when bridge reconnects", Toast.LENGTH_SHORT).show()
             }
             return
         }
 
-        val deviceIp = getDeviceIpAddress()
         val activity = this
-        // Run stop + start off the main thread so the blocking port-release wait
-        // doesn't freeze the UI or cause an ANR.
         Thread {
-            // Stop existing streamer (blocks until port is released)
+            // Stop existing streamer (releases shared frame source + WHIP publisher)
             webRTCStreamer?.stop()
             webRTCStreamer = null
 
@@ -446,32 +445,46 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     droneName = droneName,
                     options = options
                 )
-            webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
-                override fun onServerStarted(ip: String, port: Int) {
-                    Log.i(TAG, "WebRTC server restarted (${if (fpsMode) "FPS" else "Quality"} mode) at ws://$ip:$port")
+                webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
+                    override fun onServerStarted(ip: String, port: Int) {
+                        Log.i(TAG, "WHIP restarted ($mode mode)")
+                    }
+                    override fun onServerStopped() {}
+                    override fun onServerError(error: String) {
+                        Log.e(TAG, "WebRTC error: $error")
+                    }
+                    override fun onClientConnected(clientId: String, totalClients: Int) {}
+                    override fun onClientDisconnected(clientId: String, totalClients: Int) {}
                 }
-                override fun onServerStopped() {
-                    Log.i(TAG, "WebRTC server stopped")
+                // Re-start WHIP with the same bridge URL
+                webRTCStreamer?.startWhip(whipUrl)
+                Log.i(TAG, "WHIP restarted in $mode mode")
+                mainHandler.post {
+                    Toast.makeText(activity, "Video: $mode", Toast.LENGTH_SHORT).show()
                 }
-                override fun onServerError(error: String) {
-                    Log.e(TAG, "WebRTC error: $error")
-                }
-                override fun onClientConnected(clientId: String, totalClients: Int) {
-                    Log.i(TAG, "WebRTC client connected: $clientId (total: $totalClients)")
-                }
-                override fun onClientDisconnected(clientId: String, totalClients: Int) {
-                    Log.i(TAG, "WebRTC client disconnected: $clientId (total: $totalClients)")
-                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restarting WebRTC: ${e.message}")
             }
-            webRTCStreamer?.start()
-            Log.i(TAG, "WebRTC restarted in $mode mode on $deviceIp:$WEBRTC_PORT")
-            mainHandler.post {
-                Toast.makeText(activity, "Video: $mode", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error restarting WebRTC: ${e.message}")
+        }.start()
+    }
+
+    /**
+     * Start WHIP publishing on the existing WebRTC streamer.
+     * Called automatically when the bridge connects to the telemetry server.
+     */
+    private fun startWhipPublishing(whipUrl: String) {
+        lastWhipUrl = whipUrl  // Remember for FPS/Quality mode restarts
+        val streamer = webRTCStreamer
+        if (streamer == null) {
+            Log.w(TAG, "Cannot start WHIP — WebRTCStreamer not initialized yet")
+            return
         }
-        }.start()  // end Thread
+        try {
+            streamer.startWhip(whipUrl)
+            Log.i(TAG, "WHIP publishing started: $whipUrl")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start WHIP publishing: ${e.message}", e)
+        }
     }
 
     // ==================== End Video Mode Toggle ====================
@@ -820,6 +833,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         if (!isPortInUse(TELEMETRY_PORT)) {
             try {
                 telemetryServer = TelemetryServer(TELEMETRY_PORT, ::getTelemetryJson)
+                telemetryServer?.onFirstClientConnected = { clientIp ->
+                    val whipUrl = "http://$clientIp:$MEDIAMTX_WHIP_PORT/$droneName/whip"
+                    Log.i(TAG, "First telemetry client from $clientIp — starting WHIP: $whipUrl")
+                    Thread { startWhipPublishing(whipUrl) }.start()
+                }
                 telemetryServer?.start()
                 Log.i(TAG, "Telemetry server started on $deviceIp:$TELEMETRY_PORT")
             } catch (e: Exception) {
@@ -829,40 +847,40 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             Log.w(TAG, "Telemetry port $TELEMETRY_PORT already in use")
         }
 
-        // Start WebRTC Server
-        if (!isPortInUse(WEBRTC_PORT)) {
-            try {
-                webRTCStreamer = WebRTCStreamer(
-                    context = this,
-                    cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
-                    signalingPort = WEBRTC_PORT,
-                    droneName = droneName,
-                    options = buildWebRTCOptions(isFpsMode)
-                )
-                webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
-                    override fun onServerStarted(ip: String, port: Int) {
-                        Log.i(TAG, "WebRTC server started at ws://$ip:$port")
-                    }
-                    override fun onServerStopped() {
-                        Log.i(TAG, "WebRTC server stopped")
-                    }
-                    override fun onServerError(error: String) {
-                        Log.e(TAG, "WebRTC error: $error")
-                    }
-                    override fun onClientConnected(clientId: String, totalClients: Int) {
-                        Log.i(TAG, "WebRTC client connected: $clientId (total: $totalClients)")
-                    }
-                    override fun onClientDisconnected(clientId: String, totalClients: Int) {
-                        Log.i(TAG, "WebRTC client disconnected: $clientId (total: $totalClients)")
-                    }
+        // WebRTC video via WHIP — create the streamer (shared frame source)
+        // but don't start the legacy signaling server on port 8082.
+        // WHIP publishing starts automatically when bridge connects to telemetry.
+        try {
+            webRTCStreamer = WebRTCStreamer(
+                context = this,
+                cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
+                signalingPort = WEBRTC_PORT,
+                droneName = droneName,
+                options = buildWebRTCOptions(isFpsMode)
+            )
+            webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
+                override fun onServerStarted(ip: String, port: Int) {
+                    Log.i(TAG, "WHIP publishing from $ip")
                 }
-                webRTCStreamer?.start()
-                Log.i(TAG, "WebRTC server started on $deviceIp:$WEBRTC_PORT")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting WebRTC server: ${e.message}")
+                override fun onServerStopped() {
+                    Log.i(TAG, "WebRTC streamer stopped")
+                }
+                override fun onServerError(error: String) {
+                    Log.e(TAG, "WebRTC error: $error")
+                }
+                override fun onClientConnected(clientId: String, totalClients: Int) {}
+                override fun onClientDisconnected(clientId: String, totalClients: Int) {}
             }
-        } else {
-            Log.w(TAG, "WebRTC port $WEBRTC_PORT already in use")
+            Log.i(TAG, "WebRTC streamer ready (WHIP starts on first telemetry client)")
+
+            // If the telemetry callback already fired before streamer was ready, start now
+            val pendingUrl = lastWhipUrl
+            if (pendingUrl != null) {
+                Log.i(TAG, "Deferred WHIP start: $pendingUrl")
+                Thread { startWhipPublishing(pendingUrl) }.start()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating WebRTC streamer: ${e.message}")
         }
     }
 
@@ -873,7 +891,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             IP: $deviceIp
             HTTP Commands: $HTTP_PORT
             Telemetry: $TELEMETRY_PORT
-            WebRTC Video: $WEBRTC_PORT
+            Video: WHIP (auto on bridge connect)
         """.trimIndent()
         
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
