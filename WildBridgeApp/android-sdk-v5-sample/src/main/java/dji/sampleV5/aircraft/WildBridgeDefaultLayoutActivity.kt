@@ -296,9 +296,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Setup Manual Override checkbox
         setupManualOverrideCheckbox()
 
-        // Setup Video Mode toggle (Quality vs FPS)
-        setupVideoModeToggle()
-
         // Setup AI Detection (AutoSensing) toggle & overlay
         setupAutoSensingToggle()
 
@@ -380,92 +377,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     // ==================== End Mode Toggle ====================
 
-    // ==================== Video Mode Toggle (Quality / FPS) ====================
-
-    private var isFpsMode = true
-
-    private fun setupVideoModeToggle() {
-        val sw = findViewById<Switch>(R.id.sw_video_mode) ?: return
-        sw.isChecked = true  // default = FPS mode
-        sw.text = "FPS"
-        sw.setTextColor(0xFFFF9800.toInt())
-        sw.setOnCheckedChangeListener { _, isChecked ->
-            isFpsMode = isChecked
-            sw.text = if (isChecked) "FPS" else "QUALITY"
-            sw.setTextColor(if (isChecked) 0xFFFF9800.toInt() else 0xFF00BCD4.toInt())
-            restartWebRTCWithMode(isChecked)
-        }
-    }
-
-    private fun buildWebRTCOptions(fpsMode: Boolean): WebRTCMediaOptions {
-        return if (fpsMode) {
-            WebRTCMediaOptions(
-                videoResolutionWidth = 1920,
-                videoResolutionHeight = 1080,
-                fps = 15,
-                videoBitrate = 8_000_000,
-                videoCodec = "H264"
-            )
-        } else {
-            WebRTCMediaOptions(
-                videoResolutionWidth = 1920,
-                videoResolutionHeight = 1080,
-                fps = 5,
-                videoBitrate = 8_000_000,
-                videoCodec = "H264"
-            )
-        }
-    }
-
-    private fun restartWebRTCWithMode(fpsMode: Boolean) {
-        val mode = if (fpsMode) "FPS" else "Quality"
-        val whipUrl = lastWhipUrl
-
-        if (whipUrl == null) {
-            Log.w(TAG, "Cannot restart WebRTC — WHIP URL not known yet (bridge hasn't connected)")
-            mainHandler.post {
-                Toast.makeText(this, "$mode will apply when bridge reconnects", Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-
-        val activity = this
-        Thread {
-            // Stop existing streamer (releases shared frame source + WHIP publisher)
-            webRTCStreamer?.stop()
-            webRTCStreamer = null
-
-            val options = buildWebRTCOptions(fpsMode)
-
-            try {
-                webRTCStreamer = WebRTCStreamer(
-                    context = activity,
-                    cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
-                    signalingPort = WEBRTC_PORT,
-                    droneName = droneName,
-                    options = options
-                )
-                webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
-                    override fun onServerStarted(ip: String, port: Int) {
-                        Log.i(TAG, "WHIP restarted ($mode mode)")
-                    }
-                    override fun onServerStopped() {}
-                    override fun onServerError(error: String) {
-                        Log.e(TAG, "WebRTC error: $error")
-                    }
-                    override fun onClientConnected(clientId: String, totalClients: Int) {}
-                    override fun onClientDisconnected(clientId: String, totalClients: Int) {}
-                }
-                // Re-start WHIP with the same bridge URL
-                webRTCStreamer?.startWhip(whipUrl)
-                Log.i(TAG, "WHIP restarted in $mode mode")
-                mainHandler.post {
-                    Toast.makeText(activity, "Video: $mode", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error restarting WebRTC: ${e.message}")
-            }
-        }.start()
+    private fun buildWebRTCOptions(): WebRTCMediaOptions {
+        return WebRTCMediaOptions(
+            videoResolutionWidth = 1920,
+            videoResolutionHeight = 1080,
+            fps = 15,
+            videoBitrate = 8_000_000,
+            videoCodec = "H264"
+        )
     }
 
     /**
@@ -856,7 +775,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
                 signalingPort = WEBRTC_PORT,
                 droneName = droneName,
-                options = buildWebRTCOptions(isFpsMode)
+                options = buildWebRTCOptions()
             )
             webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
                 override fun onServerStarted(ip: String, port: Int) {

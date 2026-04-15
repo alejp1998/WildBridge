@@ -198,9 +198,14 @@ class WhipPublisher(
 
         peerConnection!!.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
+                // Force H264 and set short keyframe interval for loss recovery
+                val mungedSdp = SessionDescription(
+                    sdp.type,
+                    SdpUtils.mungeForH264(sdp.description)
+                )
                 peerConnection!!.setLocalDescription(object : SdpObserver {
                     override fun onSetSuccess() {
-                        localSdp = sdp
+                        localSdp = mungedSdp
                         offerLatch.countDown()
                     }
                     override fun onSetFailure(err: String) {
@@ -209,7 +214,7 @@ class WhipPublisher(
                     }
                     override fun onCreateSuccess(s: SessionDescription?) {}
                     override fun onCreateFailure(s: String?) {}
-                }, sdp)
+                }, mungedSdp)
             }
             override fun onCreateFailure(err: String) {
                 Log.e(TAG, "createOffer failed: $err")

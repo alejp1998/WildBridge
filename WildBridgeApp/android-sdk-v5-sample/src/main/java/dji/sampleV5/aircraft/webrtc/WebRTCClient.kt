@@ -400,8 +400,12 @@ class WebRTCClient(
         peerConnection?.createAnswer(object : SimpleSdpObserver(TAG) {
             override fun onCreateSuccess(sessionDescription: SessionDescription?) {
                 sessionDescription?.let { sdp ->
-                    peerConnection?.setLocalDescription(SimpleSdpObserver(TAG), sdp)
-                    sendAnswer(sdp)
+                    val mungedSdp = SessionDescription(
+                        sdp.type,
+                        SdpUtils.mungeForH264(sdp.description)
+                    )
+                    peerConnection?.setLocalDescription(SimpleSdpObserver(TAG), mungedSdp)
+                    sendAnswer(mungedSdp)
                 }
             }
         }, constraints)
@@ -440,8 +444,12 @@ class WebRTCClient(
             peerConnection?.createOffer(object : SimpleSdpObserver(TAG) {
                 override fun onCreateSuccess(sessionDescription: SessionDescription?) {
                     sessionDescription?.let { sdp ->
-                        peerConnection?.setLocalDescription(SimpleSdpObserver(TAG), sdp)
-                        sendOffer(sdp)
+                        val mungedSdp = SessionDescription(
+                            sdp.type,
+                            SdpUtils.mungeForH264(sdp.description)
+                        )
+                        peerConnection?.setLocalDescription(SimpleSdpObserver(TAG), mungedSdp)
+                        sendOffer(mungedSdp)
                     }
                 }
             }, constraints)
