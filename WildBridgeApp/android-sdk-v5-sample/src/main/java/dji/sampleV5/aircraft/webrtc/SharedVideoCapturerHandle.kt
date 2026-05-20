@@ -6,10 +6,8 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 
 /**
- * Lightweight per-client [VideoCapturer] proxy that delegates to a
- * [SharedDJIFrameSource].  Each [WebRTCClient] receives its own handle
- * while the expensive DJI frame listener and NV21 scaling run only once
- * inside the shared source.
+ * Lightweight [VideoCapturer] proxy that delegates to a [SharedDJIFrameSource]
+ * so the expensive DJI frame listener and NV21 scaling run only once.
  */
 class SharedVideoCapturerHandle(
     private val clientId: String,
@@ -44,6 +42,16 @@ class SharedVideoCapturerHandle(
 
     fun changeFrameRate(fps: Int) {
         source.changeFrameRate(fps)
+    }
+
+    fun totalOutputFrames(): Long = source.totalOutputFrames()
+
+    fun waitForOutputFrameAfter(frameCount: Long, timeoutMs: Long): Boolean {
+        return source.waitForOutputFrameAfter(frameCount, timeoutMs)
+    }
+
+    fun recoverCapture(reason: String) {
+        source.recoverCapture(reason)
     }
 
     override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {

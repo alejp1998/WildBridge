@@ -20,7 +20,9 @@ import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.hardware.Sensor
 import android.content.res.ColorStateList
+import android.graphics.SurfaceTexture
 import android.widget.CheckBox
+import android.media.MediaPlayer
 import android.widget.ImageButton
 import android.widget.PopupMenu
 import android.widget.Switch
@@ -28,6 +30,9 @@ import android.widget.ToggleButton
 import android.widget.EditText
 import android.view.Menu
 import android.view.MenuItem
+import android.view.Surface
+import android.view.TextureView
+import android.view.ViewGroup
 import androidx.appcompat.app.AlertDialog
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -113,7 +118,7 @@ import android.net.nsd.NsdServiceInfo
  * Extends the DJI DefaultLayoutActivity to add:
  * - HTTP Command Server (port 8080) for drone control
  * - Telemetry Server (port 8081) for real-time telemetry data
- * - WebRTC Server (port 8082) for video streaming
+ * - WHIP publishing for WebRTC video streaming through MediaMTX
  * - mDNS/Bonjour service advertising for automatic discovery
  */
 class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
@@ -122,11 +127,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private const val TAG = "WildBridgeDefaultLayout"
         private const val HTTP_PORT = 8080
         private const val TELEMETRY_PORT = 8081
-        private const val WEBRTC_PORT = 8082
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
         private const val PREF_MEDIAMTX_SERVER = "mediamtx_server"
         private const val PREF_WEBRTC_FPS = "webrtc_fps"
+        private const val PREF_WEBRTC_RESOLUTION = "webrtc_resolution"
+        private const val PREF_MOCK_VIDEO_ENABLED = "mock_video_enabled"
         private const val DEFAULT_WEBRTC_FPS = 10
         private const val DEFAULT_DRONE_NAME = "drone_1"
         private const val DISCOVERY_PORT = 30000
@@ -138,6 +144,25 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // mDNS/Zeroconf service type
         private const val MDNS_SERVICE_TYPE = "_wildbridge._tcp."
         private val WEBRTC_FPS_OPTIONS = intArrayOf(5, 10, 15, 20, 25, 30)
+    }
+
+    private enum class StreamResolutionPreset(
+        val prefValue: String,
+        val menuLabel: String,
+        val width: Int,
+        val height: Int,
+        val bitrate: Int
+    ) {
+        AUTO("auto", "Auto / native", 0, 0, 6_000_000),
+        FULL_HD("1080p", "1080p", 1920, 1080, 8_000_000),
+        HD("720p", "720p", 1280, 720, 2_000_000),
+        SD("480p", "480p", 640, 480, 1_500_000);
+
+        companion object {
+            fun fromPref(value: String?): StreamResolutionPreset {
+                return entries.firstOrNull { it.prefValue == value } ?: AUTO
+            }
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -176,6 +201,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             phoneLocation = location
+            refreshMockTelemetryMode()
         }
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         override fun onProviderEnabled(provider: String) {}
@@ -187,6 +213,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var wifiManager: WifiManager? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var batteryManager: BatteryManager? = null
+        private var mockPreviewPlayer: MediaPlayer? = null
+    @Volatile private var lastWebRTCMetrics = WebRTCStreamMetrics()
     
     private var phoneHeading: Double = 0.0
     private var phonePressure: Float = 0.0f
@@ -219,6 +247,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     // ==================== AutoSensing (AI Detection) ====================
     private var isAutoSensingActive = false
+    private var isAutoSensingListenerRegistered = false
     @Volatile private var currentDetectedTargets: List<DetectedTarget> = emptyList()
     private var detectionOverlay: DetectionOverlayView? = null
 
@@ -296,6 +325,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     @Volatile private var cachedTelemetryJson: String = "{}"
 
     private val productTypeKey: DJIKey<ProductType> = ProductKey.KeyProductType.create()
+    private val flightControllerConnectionKey: DJIKey<Boolean> = FlightControllerKey.KeyConnection.create()
     private val cameraModeKey: DJIKey<CameraMode> = KeyTools.createKey(CameraKey.KeyCameraMode, ComponentIndexType.LEFT_OR_MAIN)
     private val cameraStorageLocationKey: DJIKey<CameraStorageLocation> = KeyTools.createKey(CameraKey.KeyCameraStorageLocation, ComponentIndexType.LEFT_OR_MAIN)
     private val cameraStorageInfosKey: DJIKey<CameraStorageInfos> = KeyTools.createKey(CameraKey.KeyCameraStorageInfos, ComponentIndexType.LEFT_OR_MAIN)
@@ -310,6 +340,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         val dialogText: String
             get() = "$label: $summary"
     }
+
+    @Volatile
+    private var aircraftConnected = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -338,6 +371,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
         // Setup AI Detection (AutoSensing) toggle & overlay
         setupAutoSensingToggle()
+        setupAircraftConnectionListener()
+        setupMockVideoToggle()
+        setupMockVideoPreview()
 
         setupDetectedDroneProfileListener()
         updateWebRTCMetricsView(WebRTCStreamMetrics())
@@ -424,12 +460,177 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     // ==================== End Mode Toggle ====================
 
     private fun buildWebRTCOptions(): WebRTCMediaOptions {
-        return WebRTCMediaOptions.hd().copy(fps = getWebRTCFps())
+        val preset = getWebRTCResolutionPreset()
+        return if (preset == StreamResolutionPreset.AUTO) {
+            WebRTCMediaOptions.native().copy(fps = getWebRTCFps())
+        } else {
+            WebRTCMediaOptions(
+                videoResolutionWidth = preset.width,
+                videoResolutionHeight = preset.height,
+                fps = getWebRTCFps(),
+                videoBitrate = preset.bitrate,
+                videoCodec = "H264"
+            )
+        }
     }
 
     private fun getWebRTCFps(): Int {
         val storedFps = sharedPreferences.getInt(PREF_WEBRTC_FPS, DEFAULT_WEBRTC_FPS)
         return if (WEBRTC_FPS_OPTIONS.contains(storedFps)) storedFps else DEFAULT_WEBRTC_FPS
+    }
+
+    private fun getWebRTCResolutionPreset(): StreamResolutionPreset {
+        return StreamResolutionPreset.fromPref(
+            sharedPreferences.getString(PREF_WEBRTC_RESOLUTION, StreamResolutionPreset.AUTO.prefValue)
+        )
+    }
+
+    private fun isMockVideoEnabled(): Boolean {
+        return shouldAllowMockVideo() && sharedPreferences.getBoolean(PREF_MOCK_VIDEO_ENABLED, false)
+    }
+
+    private fun shouldAllowMockVideo(): Boolean = !aircraftConnected
+
+    private fun setupAircraftConnectionListener() {
+        aircraftConnected = flightControllerConnectionKey.get(true)
+        applyAircraftConnectionState(aircraftConnected)
+        KeyManager.getInstance().listen(flightControllerConnectionKey, this) { _, newValue ->
+            mainHandler.post {
+                applyAircraftConnectionState(newValue == true)
+            }
+        }
+    }
+
+    private fun applyAircraftConnectionState(isConnected: Boolean) {
+        aircraftConnected = isConnected
+        if (isConnected && sharedPreferences.getBoolean(PREF_MOCK_VIDEO_ENABLED, false)) {
+            sharedPreferences.edit().putBoolean(PREF_MOCK_VIDEO_ENABLED, false).apply()
+            webRTCStreamer?.setMockVideoEnabled(false)
+        }
+        updateMockVideoVisibility()
+        refreshMockTelemetryMode()
+        invalidateOptionsMenu()
+    }
+
+    private fun setupMockVideoToggle() {
+        val switch = findViewById<Switch>(R.id.sw_mock_video) ?: return
+        switch.setOnCheckedChangeListener(null)
+        switch.isChecked = isMockVideoEnabled()
+        updateMockVideoToggleUi(switch.isChecked)
+        updateMockVideoVisibility()
+        switch.setOnCheckedChangeListener { _, isChecked ->
+            if (!shouldAllowMockVideo()) {
+                switch.isChecked = false
+                return@setOnCheckedChangeListener
+            }
+            sharedPreferences.edit().putBoolean(PREF_MOCK_VIDEO_ENABLED, isChecked).apply()
+            updateMockVideoToggleUi(isChecked)
+            webRTCStreamer?.setMockVideoEnabled(isChecked)
+            refreshMockTelemetryMode()
+            val label = if (isChecked) "Mock MP4 video enabled" else "DJI camera video enabled"
+            Toast.makeText(this, label, Toast.LENGTH_SHORT).show()
+            Log.i(TAG, label)
+        }
+    }
+
+    private fun updateMockVideoVisibility() {
+        findViewById<Switch>(R.id.sw_mock_video)?.let { switch ->
+            val allowed = shouldAllowMockVideo()
+            switch.visibility = if (allowed) android.view.View.VISIBLE else android.view.View.GONE
+            switch.isChecked = if (allowed) isMockVideoEnabled() else false
+            updateMockVideoToggleUi(switch.isChecked)
+        }
+        updateMockPreviewVisibility()
+    }
+
+    private fun setupMockVideoPreview() {
+        findViewById<TextureView>(R.id.mock_video_preview)?.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                updateMockPreviewVisibility()
+            }
+
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                stopMockVideoPreview()
+                return true
+            }
+
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+        }
+        updateMockPreviewVisibility()
+    }
+
+    private fun updateMockPreviewVisibility() {
+        val preview = findViewById<TextureView>(R.id.mock_video_preview)
+        val label = findViewById<TextView>(R.id.mock_video_preview_label)
+        val shouldShow = shouldAllowMockVideo() && isMockVideoEnabled()
+        preview?.visibility = if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
+        label?.visibility = if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
+        if (shouldShow && preview?.isAvailable == true) {
+            startMockVideoPreview(preview.surfaceTexture ?: return)
+        } else if (!shouldShow) {
+            stopMockVideoPreview()
+        }
+    }
+
+    private fun startMockVideoPreview(surfaceTexture: SurfaceTexture) {
+        if (!(shouldAllowMockVideo() && isMockVideoEnabled())) return
+        if (mockPreviewPlayer != null) {
+            runCatching { mockPreviewPlayer?.start() }
+            return
+        }
+
+        try {
+            val descriptor = assets.openFd("mock_video/jellyfish_1080_10s_5mb.mp4")
+            val surface = Surface(surfaceTexture)
+            mockPreviewPlayer = MediaPlayer().apply {
+                setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+                setSurface(surface)
+                isLooping = true
+                setOnPreparedListener { player -> player.start() }
+                setOnErrorListener { _, what, extra ->
+                    Log.e(TAG, "Mock preview player error: what=$what extra=$extra")
+                    true
+                }
+                prepareAsync()
+            }
+            descriptor.close()
+            surface.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start mock preview: ${e.message}", e)
+            stopMockVideoPreview()
+        }
+    }
+
+    private fun stopMockVideoPreview() {
+        mockPreviewPlayer?.let { player ->
+            runCatching {
+                player.stop()
+            }
+            runCatching {
+                player.reset()
+                player.release()
+            }
+        }
+        mockPreviewPlayer = null
+    }
+
+    private fun updateMockVideoToggleUi(isEnabled: Boolean) {
+        findViewById<Switch>(R.id.sw_mock_video)?.let { switch ->
+            switch.text = if (isEnabled) "MOCK VIDEO" else "DJI VIDEO"
+            switch.setTextColor(if (isEnabled) 0xFFFFD166.toInt() else 0xFFDDDDDD.toInt())
+        }
+    }
+
+    private fun refreshMockTelemetryMode() {
+        TelemetryProvider.configureMockTelemetry(
+            enabled = isMockVideoEnabled() && shouldAllowMockVideo(),
+            baseLatitude = phoneLocation?.latitude,
+            baseLongitude = phoneLocation?.longitude,
+            baseAltitude = phoneLocation?.altitude
+        )
+        cachedTelemetryJson = buildTelemetryJson()
     }
 
     private fun setupDetectedDroneProfileListener() {
@@ -453,7 +654,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun updateWebRTCMetricsView(metrics: WebRTCStreamMetrics) {
+        lastWebRTCMetrics = metrics
         findViewById<TextView>(R.id.text_webrtc_metrics)?.text = metrics.compactLabel()
+    }
+
+    private fun WebRTCStreamMetrics.toTelemetryJson(): String {
+        fun escapeJson(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
+        val lastErrorJson = lastError?.let { "\"${escapeJson(it)}\"" } ?: "null"
+        return """{"sourceWidth":$sourceWidth,"sourceHeight":$sourceHeight,"outputWidth":$outputWidth,"outputHeight":$outputHeight,"requestedWidth":$requestedWidth,"requestedHeight":$requestedHeight,"targetFps":$targetFps,"inputFps":$inputFps,"outputFps":$outputFps,"droppedFps":$droppedFps,"averageFrameProcessingMs":$averageFrameProcessingMs,"totalFrames":$totalFrames,"totalDroppedFrames":$totalDroppedFrames,"processingErrors":$processingErrors,"observerCount":$observerCount,"activeCamera":"${escapeJson(activeCamera)}","status":"${escapeJson(status)}","configuredFps":$configuredFps,"saturationState":"${escapeJson(saturationState)}","scaleMode":"${escapeJson(scaleMode)}","recoveryCount":$recoveryCount,"lastError":$lastErrorJson}"""
     }
 
     /**
@@ -495,13 +703,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun startAutoSensing() {
         if (isAutoSensingActive) return
         try {
-            IntelligentFlightManager.getInstance().addAutoSensingInfoListener(autoSensingInfoListener)
-            IntelligentFlightManager.getInstance().startAutoSensing(object : CommonCallbacks.CompletionCallback {
+            val manager = IntelligentFlightManager.getInstance()
+            if (!isAutoSensingListenerRegistered) {
+                manager.addAutoSensingInfoListener(autoSensingInfoListener)
+                isAutoSensingListenerRegistered = true
+            }
+            manager.startAutoSensing(object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
                     isAutoSensingActive = true
                     Log.i(TAG, "AutoSensing started")
                 }
                 override fun onFailure(error: IDJIError) {
+                    isAutoSensingActive = false
+                    removeAutoSensingListener()
                     Log.e(TAG, "AutoSensing start failed: ${error.description()}")
                 }
             })
@@ -511,24 +725,43 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun stopAutoSensing() {
-        if (!isAutoSensingActive) return
+        clearAutoSensingState()
+        if (!isAutoSensingActive) {
+            removeAutoSensingListener()
+            return
+        }
         try {
             IntelligentFlightManager.getInstance().stopAutoSensing(object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
-                    isAutoSensingActive = false
-                    currentDetectedTargets = emptyList()
-                    TelemetryProvider.currentDetectedTargets = emptyList()
-                    mainHandler.post { detectionOverlay?.clearTargets() }
                     Log.i(TAG, "AutoSensing stopped")
                 }
                 override fun onFailure(error: IDJIError) {
                     Log.e(TAG, "AutoSensing stop failed: ${error.description()}")
                 }
             })
-            IntelligentFlightManager.getInstance().removeAutoSensingInfoListener(autoSensingInfoListener)
         } catch (e: Exception) {
             Log.e(TAG, "AutoSensing stop exception: ${e.message}")
+        } finally {
+            isAutoSensingActive = false
+            removeAutoSensingListener()
         }
+    }
+
+    private fun removeAutoSensingListener() {
+        if (!isAutoSensingListenerRegistered) return
+        try {
+            IntelligentFlightManager.getInstance().removeAutoSensingInfoListener(autoSensingInfoListener)
+        } catch (e: Exception) {
+            Log.e(TAG, "AutoSensing listener removal exception: ${e.message}")
+        } finally {
+            isAutoSensingListenerRegistered = false
+        }
+    }
+
+    private fun clearAutoSensingState() {
+        currentDetectedTargets = emptyList()
+        TelemetryProvider.currentDetectedTargets = emptyList()
+        mainHandler.post { detectionOverlay?.clearTargets() }
     }
 
     // ==================== End AutoSensing Toggle ====================
@@ -635,8 +868,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             menu.add(0, 1, 0, "Change Drone Name")
             menu.add(0, 2, 1, "Set WHIP Server")
             menu.add(0, 5, 2, "WebRTC FPS: ${getWebRTCFps()}")
-            menu.add(0, 3, 3, "Format ${sdCardStatus.menuLabel}")
-            menu.add(0, 4, 4, "Format ${internalStatus.menuLabel}")
+            menu.add(0, 7, 3, "WebRTC Resolution: ${getWebRTCResolutionPreset().menuLabel}")
+            var nextOrder = 3
+            if (shouldAllowMockVideo()) {
+                menu.add(0, 6, nextOrder++, "Mock Video: ${if (isMockVideoEnabled()) "On" else "Off"}")
+            }
+            menu.add(0, 3, nextOrder++, "Format ${sdCardStatus.menuLabel}")
+            menu.add(0, 4, nextOrder, "Format ${internalStatus.menuLabel}")
             setOnMenuItemClickListener { item -> handleWildBridgeMenuItem(item.itemId) }
             show()
         }
@@ -813,6 +1051,30 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 webRTCStreamer?.changeMediaOptions(buildWebRTCOptions())
                 Toast.makeText(this, "WebRTC FPS: $selectedFps", Toast.LENGTH_SHORT).show()
                 Log.i(TAG, "WebRTC frame rate set to $selectedFps fps")
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showWebRTCResolutionDialog() {
+        val presets = StreamResolutionPreset.entries.toTypedArray()
+        val labels = presets.map {
+            if (it.width > 0 && it.height > 0) "${it.menuLabel} (${it.width}x${it.height})" else it.menuLabel
+        }.toTypedArray()
+        val checkedIndex = presets.indexOf(getWebRTCResolutionPreset()).coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("WebRTC resolution")
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                val selectedPreset = presets[which]
+                sharedPreferences.edit().putString(PREF_WEBRTC_RESOLUTION, selectedPreset.prefValue).apply()
+                webRTCStreamer?.changeMediaOptions(buildWebRTCOptions())
+                Toast.makeText(this, "WebRTC resolution: ${selectedPreset.menuLabel}", Toast.LENGTH_SHORT).show()
+                Log.i(
+                    TAG,
+                    "WebRTC resolution set to ${if (selectedPreset.width > 0 && selectedPreset.height > 0) "${selectedPreset.width}x${selectedPreset.height}" else "native source"}"
+                )
                 dialog.dismiss()
             }
             .setNegativeButton("Cancel", null)
@@ -1042,16 +1304,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             Log.w(TAG, "Telemetry port $TELEMETRY_PORT already in use")
         }
 
-        // WebRTC video via WHIP — create the streamer (shared frame source)
-        // but don't start the legacy signaling server on port 8082.
+        // WebRTC video via WHIP — create the shared frame source/publisher.
         // WHIP publishing starts automatically when bridge connects to telemetry.
         try {
             webRTCStreamer = WebRTCStreamer(
                 context = applicationContext,
                 cameraIndex = ComponentIndexType.LEFT_OR_MAIN,
-                signalingPort = WEBRTC_PORT,
                 droneName = droneName,
-                options = buildWebRTCOptions()
+                options = buildWebRTCOptions(),
+                mockVideoEnabled = isMockVideoEnabled()
             )
             webRTCStreamer?.listener = object : WebRTCStreamer.WebRTCStreamerListener {
                 override fun onServerStarted(ip: String, port: Int) {
@@ -1063,9 +1324,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 override fun onServerError(error: String) {
                     Log.e(TAG, "WebRTC error: $error")
                 }
-                override fun onClientConnected(clientId: String, totalClients: Int) {}
-                override fun onClientDisconnected(clientId: String, totalClients: Int) {}
                 override fun onMetrics(metrics: WebRTCStreamMetrics) {
+                    lastWebRTCMetrics = metrics
+                    rebuildTelemetryCache()
                     mainHandler.post { updateWebRTCMetricsView(metrics) }
                 }
             }
@@ -1097,58 +1358,79 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        
-        // Stop AutoSensing
-        stopAutoSensing()
-        
-        // Stop all servers
-        httpServer?.stop()
-        telemetryServer?.onFirstClientConnected = null
-        telemetryServer?.stop()
-        webRTCStreamer?.listener = null
-        webRTCStreamer?.stop()
-        stopDiscoveryServer()
-        httpServer = null
-        telemetryServer = null
-        webRTCStreamer = null
-        
-        // Unregister mDNS service
-        unregisterMdnsService()
-        
-        // Stop location updates
-        locationManager?.removeUpdates(locationListener)
-        
-        // Stop sensor updates
-        sensorManager?.unregisterListener(sensorListener)
-        
-        // Release Multicast Lock
-        if (multicastLock?.isHeld == true) {
-            multicastLock?.release()
+        detachDefaultLayoutHsiWidgets()
+
+        try {
+            // Stop AutoSensing
+            stopAutoSensing()
+
+            stopMockVideoPreview()
+
+            // Stop all servers
+            httpServer?.stop()
+            telemetryServer?.onFirstClientConnected = null
+            telemetryServer?.stop()
+            webRTCStreamer?.listener = null
+            webRTCStreamer?.stop()
+            stopDiscoveryServer()
+            httpServer = null
+            telemetryServer = null
+            webRTCStreamer = null
+
+            // Unregister mDNS service
+            unregisterMdnsService()
+
+            // Stop location updates
+            locationManager?.removeUpdates(locationListener)
+
+            // Stop sensor updates
+            sensorManager?.unregisterListener(sensorListener)
+
+            // Release Multicast Lock
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+            }
+
+            // Cancel key listeners
+            KeyManager.getInstance().cancelListen(this)
+
+            // Clean up DroneController listeners and resources
+            DroneController.manualOverrideListener = null
+            DroneController.droneStatusListener = null
+            DroneController.destroy()
+
+            // Close the active flight log if the app is killed mid-flight
+            WildBridgeFlightLogger.endSession("app_stopped")
+
+            mainHandler.removeCallbacksAndMessages(null)
+
+            Log.i(TAG, "All servers stopped")
+        } finally {
+            super.onDestroy()
         }
-        
-        // Cancel key listeners
-        KeyManager.getInstance().cancelListen(this)
-        
-        // Clean up DroneController listeners and resources
-        DroneController.manualOverrideListener = null
-        DroneController.droneStatusListener = null
-        DroneController.destroy()
+    }
 
-        // Close the active flight log if the app is killed mid-flight
-        WildBridgeFlightLogger.endSession("app_stopped")
-
-        mainHandler.removeCallbacksAndMessages(null)
-
-        Log.i(TAG, "All servers stopped")
+    private fun detachDefaultLayoutHsiWidgets() {
+        try {
+            val hsiWidget = horizontalSituationIndicatorWidget ?: return
+            val parent = hsiWidget.parent as? ViewGroup ?: return
+            parent.removeView(hsiWidget)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to detach HSI widgets during destroy: ${e.message}")
+        }
     }
     
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Change Drone Name")
         menu.add(0, 2, 1, "Set WHIP Server")
         menu.add(0, 5, 2, "WebRTC FPS: ${getWebRTCFps()}")
-        menu.add(0, 3, 3, "Format Drone SD Card")
-        menu.add(0, 4, 4, "Format Drone Internal Storage")
+        menu.add(0, 7, 3, "WebRTC Resolution: ${getWebRTCResolutionPreset().menuLabel}")
+        var nextOrder = 3
+        if (shouldAllowMockVideo()) {
+            menu.add(0, 6, nextOrder++, "Mock Video: ${if (isMockVideoEnabled()) "On" else "Off"}")
+        }
+        menu.add(0, 3, nextOrder++, "Format Drone SD Card")
+        menu.add(0, 4, nextOrder, "Format Drone Internal Storage")
         return super.onCreateOptionsMenu(menu)
     }
     
@@ -1168,6 +1450,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             }
             5 -> {
                 showWebRTCFpsDialog()
+                true
+            }
+            7 -> {
+                showWebRTCResolutionDialog()
+                true
+            }
+            6 -> {
+                if (!shouldAllowMockVideo()) return true
+                val nextValue = !isMockVideoEnabled()
+                sharedPreferences.edit().putBoolean(PREF_MOCK_VIDEO_ENABLED, nextValue).apply()
+                findViewById<Switch>(R.id.sw_mock_video)?.isChecked = nextValue
+                webRTCStreamer?.setMockVideoEnabled(nextValue)
+                refreshMockTelemetryMode()
                 true
             }
             3 -> {
@@ -1344,7 +1639,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 setAttribute("serial", droneSerialNumber)
                 setAttribute("http", HTTP_PORT.toString())
                 setAttribute("telemetry", TELEMETRY_PORT.toString())
-                setAttribute("webrtc", WEBRTC_PORT.toString())
+                setAttribute("video", "whip")
             }
             
             isMdnsRegistrationRequested = true
@@ -1518,6 +1813,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun buildTelemetryJson(): String {
+        if (TelemetryProvider.isMockTelemetryEnabled()) {
+            val mock = TelemetryProvider.currentMockTelemetry(droneName)
+            val phoneLat = phoneLocation?.latitude ?: 0.0
+            val phoneLon = phoneLocation?.longitude ?: 0.0
+            val phoneBattery = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+            val wifiRssi = wifiManager?.connectionInfo?.rssi ?: -100
+            val phoneLocationJson = """{"latitude":$phoneLat,"longitude":$phoneLon,"heading":$phoneHeading,"pressure":$phonePressure,"battery":$phoneBattery,"wifiRssi":$wifiRssi}"""
+            val webRtcJson = lastWebRTCMetrics.toTelemetryJson()
+
+            return """{"droneName":"$droneName","speed":${mock.velocity},"heading":${mock.heading},"attitude":${mock.attitude},"location":${mock.location},"phoneLocation":$phoneLocationJson,"webRtc":$webRtcJson,"gimbalAttitude":${mock.gimbalAttitude},"gimbalJointAttitude":${mock.gimbalAttitude},"zoomFl":24,"hybridFl":24,"opticalFl":24,"zoomRatio":1.0,"batteryLevel":${mock.batteryPercent},"satelliteCount":${mock.satelliteCount},"homeLocation":{"latitude":${mock.location.latitude},"longitude":${mock.location.longitude}},"distanceToHome":0.0,"waypointReached":false,"intermediaryWaypointReached":false,"yawReached":true,"altitudeReached":true,"isRecording":true,"homeSet":true,"remainingFlightTime":1320,"timeNeededToGoHome":45,"timeNeededToLand":18,"totalTime":63,"maxRadiusCanFlyAndGoHome":900,"remainingCharge":${mock.batteryPercent},"batteryNeededToLand":12,"batteryNeededToGoHome":18,"seriousLowBatteryThreshold":10,"lowBatteryThreshold":20,"flightMode":"${mock.flightMode}","isManualOverrideActive":false,"autoSensingActive":$isAutoSensingActive,"detectedTargets":${DetectedTarget.listToJsonArray(currentDetectedTargets)}}"""
+        }
+
         val goHomeInfo = goHomeAssessmentProcessor.value
         val speed = getSpeed()
         val heading = getHeading()
@@ -1563,8 +1870,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         val wifiRssi = wifiManager?.connectionInfo?.rssi ?: -100
         
         val phoneLocationJson = """{"latitude":$phoneLat,"longitude":$phoneLon,"heading":$phoneHeading,"pressure":$phonePressure,"battery":$phoneBattery,"wifiRssi":$wifiRssi}"""
+        val webRtcJson = lastWebRTCMetrics.toTelemetryJson()
 
-        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode","isManualOverrideActive":${DroneController.isManualOverrideActive},"autoSensingActive":$isAutoSensingActive,"detectedTargets":${DetectedTarget.listToJsonArray(currentDetectedTargets)}}"""
+        return """{"droneName":"$droneName","speed":$speed,"heading":$heading,"attitude":$attitude,"location":$location,"phoneLocation":$phoneLocationJson,"webRtc":$webRtcJson,"gimbalAttitude":$gimbalAttitude,"gimbalJointAttitude":$gimbalJointAttitude,"zoomFl":$zoomFl,"hybridFl":$hybridFl,"opticalFl":$opticalFl,"zoomRatio":$zoomRatio,"batteryLevel":$batteryLevel,"satelliteCount":$satelliteCount,"homeLocation":$homeLocation,"distanceToHome":$distanceToHome,"waypointReached":$waypointReached,"intermediaryWaypointReached":$intermediaryWaypointReached,"yawReached":$yawReached,"altitudeReached":$altitudeReached,"isRecording":$isRecording,"homeSet":$homeSet,"remainingFlightTime":$remainingFlightTime,"timeNeededToGoHome":$timeNeededToGoHome,"timeNeededToLand":$timeNeededToLand,"totalTime":$totalTime,"maxRadiusCanFlyAndGoHome":$maxRadiusCanFlyAndGoHome,"remainingCharge":$remainingCharge,"batteryNeededToLand":$batteryNeededToLand,"batteryNeededToGoHome":$batteryNeededToGoHome,"seriousLowBatteryThreshold":$seriousLowBatteryThreshold,"lowBatteryThreshold":$lowBatteryThreshold,"flightMode":"$flightMode","isManualOverrideActive":${DroneController.isManualOverrideActive},"autoSensingActive":$isAutoSensingActive,"detectedTargets":${DetectedTarget.listToJsonArray(currentDetectedTargets)}}"""
     }
 
     // ==================== HTTP Server ====================
@@ -1666,7 +1974,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             return when (uri) {
                 "/config" -> {
                     val deviceIp = getDeviceIpAddress() ?: "unknown"
-                    """{"droneName":"$droneName","ipAddress":"$deviceIp","httpPort":$HTTP_PORT,"telemetryPort":$TELEMETRY_PORT,"webrtcPort":$WEBRTC_PORT}"""
+                    """{"droneName":"$droneName","ipAddress":"$deviceIp","httpPort":$HTTP_PORT,"telemetryPort":$TELEMETRY_PORT,"videoMode":"whip"}"""
                 }
                 else -> "Use POST for commands. Telemetry available on port $TELEMETRY_PORT. Config available at GET /config"
             }
