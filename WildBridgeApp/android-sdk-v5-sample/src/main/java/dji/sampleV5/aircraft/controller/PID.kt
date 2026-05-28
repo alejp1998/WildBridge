@@ -1,4 +1,5 @@
-package dji.sampleV5.moduleaircraft.controller
+package dji.sampleV5.aircraft.controller
+
 import kotlin.math.max
 import kotlin.math.min
 
@@ -6,11 +7,11 @@ import kotlin.math.min
  * This class implements the PID functionality with anti-windup
  */
 class PID(
-        private val kp: Double,
-        private val ki: Double,
-        private val kd: Double,
-        private val dt: Double,
-        private val outputLimits: Pair<Double?, Double?>
+    private val kp: Double,
+    private val ki: Double,
+    private val kd: Double,
+    private val dt: Double,
+    private val outputLimits: Pair<Double?, Double?>
 ) {
     private var integral = 0.0
     private var previousError = 0.0
@@ -35,8 +36,7 @@ class PID(
         val outputUnclamped = output + ki * integral
 
         // Anti-windup: Only update integral if output is not saturated
-        val i = if ((minOutput == null || outputUnclamped > minOutput) &&
-                (maxOutput == null || outputUnclamped < maxOutput)) {
+        val i = if (acceptsIntegralTerm(outputUnclamped)) {
             ki * integral
         } else {
             0.0
@@ -50,5 +50,12 @@ class PID(
         if (maxOutput != null) output = min(maxOutput, output)
 
         return output
+    }
+
+    private fun acceptsIntegralTerm(output: Double): Boolean {
+        val (minOutput, maxOutput) = outputLimits
+        val aboveMin = minOutput?.let { output > it } ?: true
+        val belowMax = maxOutput?.let { output < it } ?: true
+        return aboveMin && belowMax
     }
 }

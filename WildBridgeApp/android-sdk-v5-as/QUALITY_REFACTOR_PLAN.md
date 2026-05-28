@@ -33,6 +33,7 @@ Focused refactors completed so far:
 - `SdpUtils`: now pure Kotlin, covered by unit tests, and no longer appears in the WildBridge Detekt findings.
 - `AdaptiveFrameRatePolicy`: extracted from `WebRTCStreamer`, covered by unit tests, and removed the `maybeAdaptFrameRate` complexity findings from `WebRTCStreamer`.
 - `LetterboxTransform`: extracted from `YoloTfliteDetector`, covered by unit tests, and removed the detector's coordinate-mapping Detekt findings.
+- `PID`: anti-windup limit checks are now explicit, covered by unit tests, and no longer appear in the WildBridge Detekt findings.
 
 Reports to inspect:
 
@@ -165,6 +166,11 @@ What we should do:
 - Remove unused private formation/collision code if it is truly dead, or wire it intentionally if it is planned behavior.
 - Keep DJI SDK calls in adapter-like boundaries.
 - Add tests around PID, target-position math, and any collision-risk calculation before changing behavior.
+
+Done already:
+
+- PID output-limit and anti-windup behavior is covered by `PIDTest`.
+- `PID` now uses the package matching its source path, and the old package import was removed from `DroneController`.
 
 ### 5. Silent Or Generic Error Handling
 

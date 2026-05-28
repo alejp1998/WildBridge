@@ -11,7 +11,6 @@ import dji.v5.manager.aircraft.virtualstick.Stick
 import dji.sdk.keyvalue.value.common.EmptyMsg
 import dji.sdk.keyvalue.value.flightcontroller.*
 import dji.sampleV5.aircraft.util.ToastUtils
-import dji.sampleV5.moduleaircraft.controller.PID
 import dji.sdk.keyvalue.key.DJIKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.value.common.LocationCoordinate3D
