@@ -10,7 +10,6 @@ import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
-import kotlin.math.min
 
 class YoloTfliteDetector(
     private val modelBuffer: ByteBuffer,
@@ -20,6 +19,7 @@ class YoloTfliteDetector(
 
     companion object {
         private const val CHANNELS = 3
+        private const val MIN_OUTPUT_VALUES = 6
 
         fun fromUri(
             context: Context,
@@ -52,7 +52,7 @@ class YoloTfliteDetector(
     private val inputQuantization = inputTensor.quantizationParams()
     private val outputQuantization = outputTensor.quantizationParams()
     private val outputBoxes = outputShape.getOrNull(1) ?: 300
-    private val outputValues = outputShape.getOrNull(2) ?: 6
+    private val outputValues = outputShape.getOrNull(2) ?: MIN_OUTPUT_VALUES
 
     private val inputBuffer: ByteBuffer = ByteBuffer
         .allocateDirect(1 * inputWidth * inputHeight * CHANNELS * bytesPerElement(inputDataType))
@@ -61,28 +61,31 @@ class YoloTfliteDetector(
         .allocateDirect(outputShape.fold(1) { total, dim -> total * dim } * bytesPerElement(outputDataType))
         .order(ByteOrder.nativeOrder())
 
-    fun detectNv21(frameData: ByteArray, offset: Int, length: Int, frameWidth: Int, frameHeight: Int): List<DetectedTarget> {
+    fun detectNv21(
+        frameData: ByteArray,
+        offset: Int,
+        length: Int,
+        frameWidth: Int,
+        frameHeight: Int
+    ): List<DetectedTarget> {
         if (frameWidth <= 0 || frameHeight <= 0 || length < frameWidth * frameHeight) return emptyList()
 
-        val scale = min(inputWidth.toFloat() / frameWidth.toFloat(), inputHeight.toFloat() / frameHeight.toFloat())
-        val resizedWidth = (frameWidth * scale).toInt().coerceAtLeast(1)
-        val resizedHeight = (frameHeight * scale).toInt().coerceAtLeast(1)
-        val padX = (inputWidth - resizedWidth) / 2
-        val padY = (inputHeight - resizedHeight) / 2
+        val transform = LetterboxTransform(inputWidth, inputHeight, frameWidth, frameHeight)
+        val nv21Frame = Nv21Frame(frameData, offset, length, frameWidth, frameHeight)
 
         inputBuffer.rewind()
         for (modelY in 0 until inputHeight) {
             for (modelX in 0 until inputWidth) {
-                if (modelX < padX || modelX >= padX + resizedWidth || modelY < padY || modelY >= padY + resizedHeight) {
+                if (!transform.containsModelPixel(modelX, modelY)) {
                     putInputValue(114f / 255f)
                     putInputValue(114f / 255f)
                     putInputValue(114f / 255f)
                     continue
                 }
 
-                val sourceX = ((modelX - padX) / scale).toInt().coerceIn(0, frameWidth - 1)
-                val sourceY = ((modelY - padY) / scale).toInt().coerceIn(0, frameHeight - 1)
-                val rgb = nv21ToRgb(frameData, offset, length, frameWidth, frameHeight, sourceX, sourceY)
+                val sourceX = transform.sourceX(modelX)
+                val sourceY = transform.sourceY(modelY)
+                val rgb = YuvColorConverter.nv21ToRgb(nv21Frame, sourceX, sourceY)
                 putInputValue(rgb.red / 255f)
                 putInputValue(rgb.green / 255f)
                 putInputValue(rgb.blue / 255f)
@@ -94,39 +97,7 @@ class YoloTfliteDetector(
         interpreter.run(inputBuffer, outputBuffer)
         outputBuffer.rewind()
 
-        val targets = mutableListOf<DetectedTarget>()
-        for (i in 0 until outputBoxes) {
-            if (outputValues < 6) break
-            val rowOffset = i * outputValues
-            val score = getOutputValue(rowOffset + 4)
-            if (score < confidenceThreshold) continue
-
-            val classIndex = getOutputValue(rowOffset + 5).toInt().coerceAtLeast(0)
-            val label = labels.getOrElse(classIndex) { "class_$classIndex" }.uppercase()
-            val x1 = toInputCoordinate(getOutputValue(rowOffset))
-            val y1 = toInputCoordinate(getOutputValue(rowOffset + 1))
-            val x2 = toInputCoordinate(getOutputValue(rowOffset + 2))
-            val y2 = toInputCoordinate(getOutputValue(rowOffset + 3))
-
-            val left = ((x1 - padX) / scale).coerceIn(0f, frameWidth.toFloat()) / frameWidth.toFloat()
-            val top = ((y1 - padY) / scale).coerceIn(0f, frameHeight.toFloat()) / frameHeight.toFloat()
-            val right = ((x2 - padX) / scale).coerceIn(0f, frameWidth.toFloat()) / frameWidth.toFloat()
-            val bottom = ((y2 - padY) / scale).coerceIn(0f, frameHeight.toFloat()) / frameHeight.toFloat()
-            if (right <= left || bottom <= top) continue
-
-            targets.add(
-                DetectedTarget(
-                    index = i,
-                    type = "EDGE_$label",
-                    left = left.toDouble(),
-                    top = top.toDouble(),
-                    right = right.toDouble(),
-                    bottom = bottom.toDouble(),
-                    confidence = score.toDouble()
-                )
-            )
-        }
-        return targets
+        return collectTargets(transform)
     }
 
     fun detectYuv420(image: Image): List<DetectedTarget> {
@@ -134,11 +105,7 @@ class YoloTfliteDetector(
         val frameHeight = image.height
         if (frameWidth <= 0 || frameHeight <= 0 || image.planes.size < 3) return emptyList()
 
-        val scale = min(inputWidth.toFloat() / frameWidth.toFloat(), inputHeight.toFloat() / frameHeight.toFloat())
-        val resizedWidth = (frameWidth * scale).toInt().coerceAtLeast(1)
-        val resizedHeight = (frameHeight * scale).toInt().coerceAtLeast(1)
-        val padX = (inputWidth - resizedWidth) / 2
-        val padY = (inputHeight - resizedHeight) / 2
+        val transform = LetterboxTransform(inputWidth, inputHeight, frameWidth, frameHeight)
 
         val yPlane = image.planes[0]
         val uPlane = image.planes[1]
@@ -146,16 +113,16 @@ class YoloTfliteDetector(
         inputBuffer.rewind()
         for (modelY in 0 until inputHeight) {
             for (modelX in 0 until inputWidth) {
-                if (modelX < padX || modelX >= padX + resizedWidth || modelY < padY || modelY >= padY + resizedHeight) {
+                if (!transform.containsModelPixel(modelX, modelY)) {
                     putInputValue(114f / 255f)
                     putInputValue(114f / 255f)
                     putInputValue(114f / 255f)
                     continue
                 }
 
-                val sourceX = ((modelX - padX) / scale).toInt().coerceIn(0, frameWidth - 1)
-                val sourceY = ((modelY - padY) / scale).toInt().coerceIn(0, frameHeight - 1)
-                val rgb = yuv420ToRgb(yPlane, uPlane, vPlane, sourceX, sourceY)
+                val sourceX = transform.sourceX(modelX)
+                val sourceY = transform.sourceY(modelY)
+                val rgb = YuvColorConverter.yuv420ToRgb(yPlane, uPlane, vPlane, sourceX, sourceY)
                 putInputValue(rgb.red / 255f)
                 putInputValue(rgb.green / 255f)
                 putInputValue(rgb.blue / 255f)
@@ -167,21 +134,20 @@ class YoloTfliteDetector(
         interpreter.run(inputBuffer, outputBuffer)
         outputBuffer.rewind()
 
-        return collectTargets(frameWidth, frameHeight, scale, padX, padY)
+        return collectTargets(transform)
     }
 
     override fun close() {
         interpreter.close()
     }
 
-    private fun toInputCoordinate(value: Float): Float {
-        return if (value <= 1.5f) value * inputWidth else value
-    }
-
     private fun putInputValue(value: Float) {
         when (inputDataType) {
             DataType.FLOAT32 -> inputBuffer.putFloat(value)
-            DataType.UINT8, DataType.INT8 -> inputBuffer.put(quantize(value, inputDataType, inputQuantization.scale, inputQuantization.zeroPoint))
+            DataType.UINT8,
+            DataType.INT8 -> inputBuffer.put(
+                quantize(value, inputDataType, inputQuantization.scale, inputQuantization.zeroPoint)
+            )
             else -> throw IllegalArgumentException("Unsupported input tensor type: $inputDataType")
         }
     }
@@ -190,8 +156,16 @@ class YoloTfliteDetector(
         val byteIndex = index * bytesPerElement(outputDataType)
         return when (outputDataType) {
             DataType.FLOAT32 -> outputBuffer.getFloat(byteIndex)
-            DataType.UINT8 -> dequantize(outputBuffer.get(byteIndex).toInt() and 0xFF, outputQuantization.scale, outputQuantization.zeroPoint)
-            DataType.INT8 -> dequantize(outputBuffer.get(byteIndex).toInt(), outputQuantization.scale, outputQuantization.zeroPoint)
+            DataType.UINT8 -> dequantize(
+                outputBuffer.get(byteIndex).toInt() and 0xFF,
+                outputQuantization.scale,
+                outputQuantization.zeroPoint
+            )
+            DataType.INT8 -> dequantize(
+                outputBuffer.get(byteIndex).toInt(),
+                outputQuantization.scale,
+                outputQuantization.zeroPoint
+            )
             else -> throw IllegalArgumentException("Unsupported output tensor type: $outputDataType")
         }
     }
@@ -218,48 +192,69 @@ class YoloTfliteDetector(
         }
     }
 
-    private data class Rgb(val red: Float, val green: Float, val blue: Float)
+    private fun collectTargets(transform: LetterboxTransform): List<DetectedTarget> {
+        if (outputValues < MIN_OUTPUT_VALUES) return emptyList()
 
-    private fun collectTargets(frameWidth: Int, frameHeight: Int, scale: Float, padX: Int, padY: Int): List<DetectedTarget> {
         val targets = mutableListOf<DetectedTarget>()
         for (i in 0 until outputBoxes) {
-            if (outputValues < 6) break
             val rowOffset = i * outputValues
             val score = getOutputValue(rowOffset + 4)
-            if (score < confidenceThreshold) continue
-
-            val classIndex = getOutputValue(rowOffset + 5).toInt().coerceAtLeast(0)
-            val label = labels.getOrElse(classIndex) { "class_$classIndex" }.uppercase()
-            val x1 = toInputCoordinate(getOutputValue(rowOffset))
-            val y1 = toInputCoordinate(getOutputValue(rowOffset + 1))
-            val x2 = toInputCoordinate(getOutputValue(rowOffset + 2))
-            val y2 = toInputCoordinate(getOutputValue(rowOffset + 3))
-
-            val left = ((x1 - padX) / scale).coerceIn(0f, frameWidth.toFloat()) / frameWidth.toFloat()
-            val top = ((y1 - padY) / scale).coerceIn(0f, frameHeight.toFloat()) / frameHeight.toFloat()
-            val right = ((x2 - padX) / scale).coerceIn(0f, frameWidth.toFloat()) / frameWidth.toFloat()
-            val bottom = ((y2 - padY) / scale).coerceIn(0f, frameHeight.toFloat()) / frameHeight.toFloat()
-            if (right <= left || bottom <= top) continue
-
-            targets.add(
-                DetectedTarget(
-                    index = i,
-                    type = "EDGE_$label",
-                    left = left.toDouble(),
-                    top = top.toDouble(),
-                    right = right.toDouble(),
-                    bottom = bottom.toDouble(),
-                    confidence = score.toDouble()
-                )
-            )
+            if (score >= confidenceThreshold) {
+                val classIndex = getOutputValue(rowOffset + 5).toInt().coerceAtLeast(0)
+                val label = labels.getOrElse(classIndex) { "class_$classIndex" }.uppercase()
+                transform.toFrameBox(
+                    x1 = getOutputValue(rowOffset),
+                    y1 = getOutputValue(rowOffset + 1),
+                    x2 = getOutputValue(rowOffset + 2),
+                    y2 = getOutputValue(rowOffset + 3)
+                )?.let { box ->
+                    targets.add(
+                        DetectedTarget(
+                            index = i,
+                            type = "EDGE_$label",
+                            left = box.left.toDouble(),
+                            top = box.top.toDouble(),
+                            right = box.right.toDouble(),
+                            bottom = box.bottom.toDouble(),
+                            confidence = score.toDouble()
+                        )
+                    )
+                }
+            }
         }
         return targets
     }
+}
 
-    private fun yuv420ToRgb(yPlane: Image.Plane, uPlane: Image.Plane, vPlane: Image.Plane, x: Int, y: Int): Rgb {
+private data class Nv21Frame(
+    val data: ByteArray,
+    val offset: Int,
+    val length: Int,
+    val width: Int,
+    val height: Int
+)
+
+private data class Rgb(val red: Float, val green: Float, val blue: Float)
+
+private object YuvColorConverter {
+    fun yuv420ToRgb(yPlane: Image.Plane, uPlane: Image.Plane, vPlane: Image.Plane, x: Int, y: Int): Rgb {
         val yValue = planeValue(yPlane, x, y)
         val uValue = planeValue(uPlane, x / 2, y / 2) - 128
         val vValue = planeValue(vPlane, x / 2, y / 2) - 128
+        return yuvToRgb(yValue, uValue, vValue)
+    }
+
+    fun nv21ToRgb(frame: Nv21Frame, x: Int, y: Int): Rgb {
+        val frameSize = frame.width * frame.height
+        val yIndex = frame.offset + y * frame.width + x
+        val uvIndex = frame.offset + frameSize + (y / 2) * frame.width + (x and 1.inv())
+        if (yIndex >= frame.offset + frame.length || uvIndex + 1 >= frame.offset + frame.length) {
+            return Rgb(114f, 114f, 114f)
+        }
+
+        val yValue = frame.data[yIndex].toInt() and 0xFF
+        val vValue = (frame.data[uvIndex].toInt() and 0xFF) - 128
+        val uValue = (frame.data[uvIndex + 1].toInt() and 0xFF) - 128
         return yuvToRgb(yValue, uValue, vValue)
     }
 
@@ -269,18 +264,6 @@ class YoloTfliteDetector(
         return if (index in 0 until buffer.limit()) buffer.get(index).toInt() and 0xFF else 114
     }
 
-    private fun nv21ToRgb(data: ByteArray, offset: Int, length: Int, width: Int, height: Int, x: Int, y: Int): Rgb {
-        val frameSize = width * height
-        val yIndex = offset + y * width + x
-        val uvIndex = offset + frameSize + (y / 2) * width + (x and 1.inv())
-        if (yIndex >= offset + length || uvIndex + 1 >= offset + length) return Rgb(114f, 114f, 114f)
-
-        val yValue = data[yIndex].toInt() and 0xFF
-        val vValue = (data[uvIndex].toInt() and 0xFF) - 128
-        val uValue = (data[uvIndex + 1].toInt() and 0xFF) - 128
-        return yuvToRgb(yValue, uValue, vValue)
-    }
-
     private fun yuvToRgb(yValue: Int, uValue: Int, vValue: Int): Rgb {
         val c = max(0, yValue - 16)
         val red = ((298 * c + 409 * vValue + 128) shr 8).coerceIn(0, 255)
@@ -288,5 +271,4 @@ class YoloTfliteDetector(
         val blue = ((298 * c + 516 * uValue + 128) shr 8).coerceIn(0, 255)
         return Rgb(red.toFloat(), green.toFloat(), blue.toFloat())
     }
-
 }

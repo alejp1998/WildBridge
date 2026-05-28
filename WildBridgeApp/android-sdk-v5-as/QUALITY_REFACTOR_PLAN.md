@@ -32,6 +32,7 @@ Focused refactors completed so far:
 
 - `SdpUtils`: now pure Kotlin, covered by unit tests, and no longer appears in the WildBridge Detekt findings.
 - `AdaptiveFrameRatePolicy`: extracted from `WebRTCStreamer`, covered by unit tests, and removed the `maybeAdaptFrameRate` complexity findings from `WebRTCStreamer`.
+- `LetterboxTransform`: extracted from `YoloTfliteDetector`, covered by unit tests, and removed the detector's coordinate-mapping Detekt findings.
 
 Reports to inspect:
 
@@ -131,6 +132,11 @@ What we should do:
 - Extract image conversion helpers from detection orchestration.
 - Add tests for coordinate conversion and post-processing where possible.
 - Keep Android/image APIs at the boundary and pure math in testable functions.
+
+Done already:
+
+- Letterbox coordinate mapping was extracted into `LetterboxTransform` and covered by `LetterboxTransformTest`.
+- YUV conversion helpers were moved out of `YoloTfliteDetector`, reducing the detector's function count and removing its current Detekt findings.
 
 ### 4. Drone Control And Formation Logic
 
