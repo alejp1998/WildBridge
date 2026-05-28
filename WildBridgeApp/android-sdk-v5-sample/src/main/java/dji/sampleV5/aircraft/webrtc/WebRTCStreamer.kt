@@ -23,11 +23,7 @@ class WebRTCStreamer(
 
     companion object {
         private const val TAG = "WebRTCStreamer"
-        private const val SATURATION_PROCESSING_RATIO = 0.75
-        private const val SATURATION_WINDOWS_TO_THROTTLE = 2
-        private const val STABLE_WINDOWS_TO_RELAX = 8
         private const val RECOVERY_COOLDOWN_MS = 15_000L
-        private val ADAPTIVE_FPS_STEPS = intArrayOf(30, 25, 20, 15, 12, 10, 8, 6, 5)
     }
 
     private val appContext = context.applicationContext
@@ -47,19 +43,15 @@ class WebRTCStreamer(
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sharedFrameSource: SharedDJIFrameSource? = null
     private var whipPublisher: WhipPublisher? = null
+    private val frameRatePolicy = AdaptiveFrameRatePolicy(options.fps)
     @Volatile private var selectedOptions: WebRTCMediaOptions = options
     @Volatile private var currentSourceMode: VideoSourceMode = if (mockVideoEnabled) VideoSourceMode.MOCK else VideoSourceMode.DJI
     @Volatile private var currentOptions: WebRTCMediaOptions = optionsForSource(options, currentSourceMode)
     @Volatile private var currentWhipUrl: String? = null
     @Volatile private var localPreviewSink: VideoSink? = null
     private var badMetricsWindows = 0
-    private var saturationWindows = 0
-    private var stableWindows = 0
     private var recoveryCount = 0
     private var lastRecoveryAtMs = 0L
-    private var desiredFps = options.fps.coerceIn(1, 60)
-    private var effectiveFps = desiredFps
-    @Volatile private var saturationState = "ok"
     
     var listener: WebRTCStreamerListener? = null
 
@@ -117,9 +109,7 @@ class WebRTCStreamer(
         currentSourceMode = mode
         currentOptions = optionsForSource(selectedOptions, mode)
         badMetricsWindows = 0
-        saturationWindows = 0
-        stableWindows = 0
-        saturationState = "ok"
+        frameRatePolicy.reset()
         recoveryCount = 0
 
         logWhipLifecycle(
@@ -163,7 +153,7 @@ class WebRTCStreamer(
         logWhipLifecycle(
             event = "whip_start_requested",
             whipUrl = whipUrl,
-            detail = "fps=$effectiveFps target=${resolutionLabelForOptions(currentOptions)}"
+            detail = "fps=${frameRatePolicy.effectiveFps} target=${resolutionLabelForOptions(currentOptions)}"
         )
 
         whipPublisher?.let { existingPublisher ->
@@ -273,22 +263,14 @@ class WebRTCStreamer(
     fun changeMediaOptions(options: WebRTCMediaOptions) {
         selectedOptions = options
         currentOptions = optionsForSource(options, currentSourceMode)
-        desiredFps = currentOptions.fps.coerceIn(1, 60)
-        effectiveFps = desiredFps
-        saturationWindows = 0
-        stableWindows = 0
-        saturationState = "ok"
+        frameRatePolicy.reset(currentOptions.fps)
         changeResolution(currentOptions.videoResolutionWidth, currentOptions.videoResolutionHeight)
-        applyFrameRate(effectiveFps, "media options updated")
+        applyFrameRate(frameRatePolicy.effectiveFps, "media options updated")
     }
 
     fun changeFrameRate(fps: Int) {
         val boundedFps = fps.coerceIn(1, 60)
-        desiredFps = boundedFps
-        effectiveFps = boundedFps
-        saturationWindows = 0
-        stableWindows = 0
-        saturationState = "ok"
+        frameRatePolicy.reset(boundedFps)
         applyFrameRate(boundedFps, "manual change")
     }
 
@@ -329,8 +311,8 @@ class WebRTCStreamer(
         val enriched = metrics.copy(
             recoveryCount = recoveryCount,
             status = if (whipPublisher != null) metrics.status else "idle",
-            configuredFps = desiredFps,
-            saturationState = saturationState,
+            configuredFps = frameRatePolicy.desiredFps,
+            saturationState = frameRatePolicy.saturationState,
             scaleMode = if (currentOptions.usesSourceResolution) "native" else "fixed"
         )
         if (currentSourceMode == VideoSourceMode.DJI) maybeRecoverStreaming(enriched)
@@ -338,69 +320,12 @@ class WebRTCStreamer(
     }
 
     private fun maybeAdaptFrameRate(metrics: WebRTCStreamMetrics) {
-        if (metrics.observerCount == 0 || metrics.targetFps <= 0) {
-            saturationWindows = 0
-            stableWindows = 0
-            saturationState = "ok"
-            return
+        val decision = frameRatePolicy.evaluate(metrics)
+        val nextFps = decision.frameRateToApply ?: return
+        decision.lifecycleEvent?.let { event ->
+            logWhipLifecycle(event = event, detail = decision.lifecycleDetail)
         }
-
-        val frameBudgetMs = 1000.0 / metrics.targetFps.toDouble()
-        val processingSaturated = metrics.averageFrameProcessingMs >= frameBudgetMs * SATURATION_PROCESSING_RATIO
-        val sourceFlowing = metrics.inputFps >= maxOf(2.0, metrics.targetFps * 0.6)
-        val outputLagging = sourceFlowing && metrics.outputFps < metrics.targetFps * 0.5
-        val processingErrorsActive = metrics.processingErrors > 0
-        val saturated = processingSaturated || (outputLagging && processingErrorsActive)
-
-        if (saturated) {
-            saturationWindows += 1
-            stableWindows = 0
-            saturationState = if (processingSaturated) "hot" else "error"
-            if (saturationWindows >= SATURATION_WINDOWS_TO_THROTTLE) {
-                val nextFps = nextLowerAdaptiveFps(effectiveFps)
-                if (nextFps < effectiveFps) {
-                    effectiveFps = nextFps
-                    saturationWindows = 0
-                    logWhipLifecycle(
-                        event = "adaptive_fps_lowered",
-                        detail = "fps ${metrics.targetFps} -> $effectiveFps proc=${metrics.averageFrameProcessingMs.format1()}ms budget=${frameBudgetMs.format1()}ms out=${metrics.outputFps.format1()} in=${metrics.inputFps.format1()} err=${metrics.processingErrors}"
-                    )
-                    applyFrameRate(effectiveFps, "processing saturation")
-                }
-            }
-            return
-        }
-
-        if (outputLagging && effectiveFps == desiredFps) {
-            saturationWindows = 0
-            stableWindows = 0
-            saturationState = "source-limited"
-            return
-        }
-
-        if (effectiveFps < desiredFps) {
-            stableWindows += 1
-            saturationState = "recovering"
-            if (stableWindows >= STABLE_WINDOWS_TO_RELAX) {
-                val nextFps = nextHigherAdaptiveFps(effectiveFps, desiredFps)
-                if (nextFps > effectiveFps) {
-                    effectiveFps = nextFps
-                    stableWindows = 0
-                    logWhipLifecycle(
-                        event = "adaptive_fps_raised",
-                        detail = "fps ${metrics.targetFps} -> $effectiveFps proc=${metrics.averageFrameProcessingMs.format1()}ms out=${metrics.outputFps.format1()} in=${metrics.inputFps.format1()}"
-                    )
-                    applyFrameRate(effectiveFps, "saturation recovered")
-                }
-            }
-        } else {
-            stableWindows = 0
-            saturationState = "ok"
-        }
-
-        if (effectiveFps == desiredFps && !saturated) {
-            saturationState = "ok"
-        }
+        applyFrameRate(nextFps, decision.reason ?: "adaptive frame-rate change")
     }
 
     private fun maybeRecoverStreaming(metrics: WebRTCStreamMetrics) {
@@ -497,22 +422,6 @@ class WebRTCStreamer(
         Log.i(TAG, "WHIP lifecycle $suffix")
     }
 
-    private fun nextLowerAdaptiveFps(current: Int): Int {
-        val currentIndex = ADAPTIVE_FPS_STEPS.indexOfFirst { it == current }
-        if (currentIndex >= 0 && currentIndex < ADAPTIVE_FPS_STEPS.lastIndex) {
-            return ADAPTIVE_FPS_STEPS[currentIndex + 1]
-        }
-        return ADAPTIVE_FPS_STEPS.firstOrNull { it < current } ?: current
-    }
-
-    private fun nextHigherAdaptiveFps(current: Int, desired: Int): Int {
-        val currentIndex = ADAPTIVE_FPS_STEPS.indexOfFirst { it == current }
-        if (currentIndex > 0) {
-            return ADAPTIVE_FPS_STEPS[currentIndex - 1].coerceAtMost(desired)
-        }
-        return desired
-    }
-
     private fun optionsForSource(
         baseOptions: WebRTCMediaOptions,
         sourceMode: VideoSourceMode = currentSourceMode
@@ -538,5 +447,4 @@ class WebRTCStreamer(
         }
     }
 
-    private fun Double.format1(): String = String.format(java.util.Locale.US, "%.1f", this)
 }

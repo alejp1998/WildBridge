@@ -1,7 +1,5 @@
 package dji.sampleV5.aircraft.webrtc
 
-import android.util.Log
-
 /**
  * SDP manipulation utilities for forcing H264 codec and tuning keyframe interval.
  *
@@ -12,7 +10,11 @@ import android.util.Log
  * negotiated.
  */
 object SdpUtils {
-    private const val TAG = "SdpUtils"
+    private val RTPMAP_REGEX = Regex("""^a=rtpmap:(\d+)\s+(\S+)/""")
+    private val FMTP_APT_REGEX = Regex("""^a=fmtp:(\d+)\s+.*\bapt=(\d+)""")
+    private val PAYLOAD_ATTRIBUTE_REGEX = Regex("""^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\b""")
+    private val H264_RTPMAP_REGEX = Regex("""^a=rtpmap:(\d+)\s+H264/""")
+    private val FMTP_REGEX = Regex("""^a=fmtp:(\d+)\s+""")
 
     /**
      * Remove all video codecs except H264 (and their associated RTX/RED/ULPFEC)
@@ -23,73 +25,18 @@ object SdpUtils {
     fun forceH264Only(sdp: String): String {
         val lineEnding = if ("\r\n" in sdp) "\r\n" else "\n"
         val lines = sdp.split(lineEnding)
+        val videoSection = findVideoSection(lines) ?: return sdp
+        val codecInfo = collectCodecInfo(lines, videoSection)
+        val h264PayloadTypes = codecInfo.codecForPayloadType
+            .filter { it.value.equals("H264", ignoreCase = true) }
+            .keys
 
-        // --- Phase 1: locate the video m-line and collect codec metadata ---
-        var videoLineIdx = -1
-        var videoEndIdx = lines.size
-        val allVideoPts = mutableListOf<Int>()
-        val codecForPt = mutableMapOf<Int, String>()
-        val rtxApt = mutableMapOf<Int, Int>() // rtx_pt -> associated_pt
-
-        for ((i, line) in lines.withIndex()) {
-            if (line.startsWith("m=video")) {
-                videoLineIdx = i
-                line.split(" ").drop(3).forEach { tok ->
-                    tok.toIntOrNull()?.let { allVideoPts.add(it) }
-                }
-            } else if (videoLineIdx >= 0 && i > videoLineIdx && line.startsWith("m=")) {
-                videoEndIdx = i
-                break
-            }
-
-            if (videoLineIdx >= 0 && i > videoLineIdx) {
-                Regex("""^a=rtpmap:(\d+)\s+(\S+)/""").find(line)?.let { m ->
-                    codecForPt[m.groupValues[1].toInt()] = m.groupValues[2]
-                }
-                Regex("""^a=fmtp:(\d+)\s+.*\bapt=(\d+)""").find(line)?.let { m ->
-                    rtxApt[m.groupValues[1].toInt()] = m.groupValues[2].toInt()
-                }
-            }
+        return if (h264PayloadTypes.isEmpty()) {
+            sdp
+        } else {
+            val allowedPayloadTypes = allowedVideoPayloadTypes(codecInfo, h264PayloadTypes)
+            rebuildVideoSection(lines, lineEnding, videoSection, allowedPayloadTypes)
         }
-
-        if (videoLineIdx < 0) return sdp
-
-        val h264Pts = codecForPt.filter { it.value.equals("H264", ignoreCase = true) }.keys
-        if (h264Pts.isEmpty()) {
-            Log.w(TAG, "No H264 codec found in SDP — leaving unchanged")
-            return sdp
-        }
-
-        val h264Rtx = rtxApt.filter { it.value in h264Pts }.keys
-        val redPts = codecForPt.filter { it.value.equals("red", ignoreCase = true) }.keys
-        val ulpfecPts = codecForPt.filter { it.value.equals("ulpfec", ignoreCase = true) }.keys
-        val allowed = h264Pts + h264Rtx + redPts + ulpfecPts
-
-        // --- Phase 2: rebuild the SDP keeping only allowed payload types ---
-        val result = mutableListOf<String>()
-
-        for ((i, line) in lines.withIndex()) {
-            if (i == videoLineIdx) {
-                // Rewrite m=video line with only the allowed PTs
-                val parts = line.split(" ")
-                val prefix = parts.take(3).joinToString(" ")
-                val kept = allVideoPts.filter { it in allowed }
-                result.add("$prefix ${kept.joinToString(" ")}")
-                continue
-            }
-
-            if (i in (videoLineIdx + 1) until videoEndIdx) {
-                val ptMatch = Regex("""^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\b""").find(line)
-                if (ptMatch != null && ptMatch.groupValues[1].toInt() !in allowed) {
-                    continue // drop lines for disallowed codecs
-                }
-            }
-
-            result.add(line)
-        }
-
-        Log.d(TAG, "Forced H264-only: kept PTs ${allowed.joinToString(",")}")
-        return result.joinToString(lineEnding)
     }
 
     /**
@@ -100,32 +47,19 @@ object SdpUtils {
      * @param intervalMs max interval between keyframes in milliseconds (e.g. 2000)
      */
     fun setKeyframeInterval(sdp: String, intervalMs: Int): String {
-        if (intervalMs <= 0) return sdp
-
         val lineEnding = if ("\r\n" in sdp) "\r\n" else "\n"
         val lines = sdp.split(lineEnding)
+        val h264PayloadTypes = lines.mapNotNull { line ->
+            H264_RTPMAP_REGEX.find(line)?.groupValues?.get(1)?.toInt()
+        }.toSet()
 
-        // Collect H264 payload types
-        val h264Pts = mutableSetOf<Int>()
-        for (line in lines) {
-            Regex("""^a=rtpmap:(\d+)\s+H264/""").find(line)?.let {
-                h264Pts.add(it.groupValues[1].toInt())
+        return if (intervalMs <= 0 || h264PayloadTypes.isEmpty()) {
+            sdp
+        } else {
+            lines.joinToString(lineEnding) { line ->
+                addKeyframeInterval(line, intervalMs, h264PayloadTypes)
             }
         }
-        if (h264Pts.isEmpty()) return sdp
-
-        val result = lines.map { line ->
-            val fmtpMatch = Regex("""^a=fmtp:(\d+)\s+""").find(line)
-            if (fmtpMatch != null && fmtpMatch.groupValues[1].toInt() in h264Pts
-                && "x-google-max-keyframe-interval" !in line
-            ) {
-                "$line;x-google-max-keyframe-interval=$intervalMs"
-            } else {
-                line
-            }
-        }
-
-        return result.joinToString(lineEnding)
     }
 
     /**
@@ -133,4 +67,107 @@ object SdpUtils {
      */
     fun mungeForH264(sdp: String, keyframeIntervalMs: Int = 2000): String =
         setKeyframeInterval(forceH264Only(sdp), keyframeIntervalMs)
+
+    private data class VideoSection(
+        val lineIndex: Int,
+        val endIndex: Int,
+        val payloadTypes: List<Int>
+    )
+
+    private data class CodecInfo(
+        val codecForPayloadType: Map<Int, String>,
+        val rtxAssociatedPayloadType: Map<Int, Int>
+    )
+
+    private fun findVideoSection(lines: List<String>): VideoSection? {
+        val videoLineIndex = lines.indexOfFirst { it.startsWith("m=video") }
+
+        return videoLineIndex.takeIf { it >= 0 }?.let { lineIndex ->
+            val nextMediaLineOffset = lines.drop(lineIndex + 1).indexOfFirst { it.startsWith("m=") }
+            val endIndex = if (nextMediaLineOffset >= 0) {
+                lineIndex + 1 + nextMediaLineOffset
+            } else {
+                lines.size
+            }
+            val payloadTypes = lines[lineIndex].split(" ").drop(3).mapNotNull { it.toIntOrNull() }
+
+            VideoSection(lineIndex, endIndex, payloadTypes)
+        }
+    }
+
+    private fun collectCodecInfo(lines: List<String>, section: VideoSection): CodecInfo {
+        val codecForPayloadType = mutableMapOf<Int, String>()
+        val rtxAssociatedPayloadType = mutableMapOf<Int, Int>()
+
+        lines.asSequence()
+            .drop(section.lineIndex + 1)
+            .take(section.endIndex - section.lineIndex - 1)
+            .forEach { line ->
+                RTPMAP_REGEX.find(line)?.let { match ->
+                    codecForPayloadType[match.groupValues[1].toInt()] = match.groupValues[2]
+                }
+                FMTP_APT_REGEX.find(line)?.let { match ->
+                    rtxAssociatedPayloadType[match.groupValues[1].toInt()] = match.groupValues[2].toInt()
+                }
+            }
+
+        return CodecInfo(codecForPayloadType, rtxAssociatedPayloadType)
+    }
+
+    private fun allowedVideoPayloadTypes(codecInfo: CodecInfo, h264PayloadTypes: Set<Int>): Set<Int> {
+        val h264RtxPayloadTypes = codecInfo.rtxAssociatedPayloadType
+            .filter { it.value in h264PayloadTypes }
+            .keys
+        val redPayloadTypes = codecInfo.codecForPayloadType
+            .filter { it.value.equals("red", ignoreCase = true) }
+            .keys
+        val ulpfecPayloadTypes = codecInfo.codecForPayloadType
+            .filter { it.value.equals("ulpfec", ignoreCase = true) }
+            .keys
+
+        return h264PayloadTypes + h264RtxPayloadTypes + redPayloadTypes + ulpfecPayloadTypes
+    }
+
+    private fun rebuildVideoSection(
+        lines: List<String>,
+        lineEnding: String,
+        section: VideoSection,
+        allowedPayloadTypes: Set<Int>
+    ): String {
+        return lines.mapIndexedNotNull { index, line ->
+            when {
+                index == section.lineIndex -> rewriteVideoLine(line, section.payloadTypes, allowedPayloadTypes)
+                isDroppedVideoAttribute(index, line, section, allowedPayloadTypes) -> null
+                else -> line
+            }
+        }.joinToString(lineEnding)
+    }
+
+    private fun rewriteVideoLine(line: String, payloadTypes: List<Int>, allowedPayloadTypes: Set<Int>): String {
+        val parts = line.split(" ")
+        val prefix = parts.take(3).joinToString(" ")
+        val keptPayloadTypes = payloadTypes.filter { it in allowedPayloadTypes }
+        return "$prefix ${keptPayloadTypes.joinToString(" ")}"
+    }
+
+    private fun isDroppedVideoAttribute(
+        index: Int,
+        line: String,
+        section: VideoSection,
+        allowedPayloadTypes: Set<Int>
+    ): Boolean {
+        val payloadType = PAYLOAD_ATTRIBUTE_REGEX.find(line)?.groupValues?.get(1)?.toInt()
+        return index in (section.lineIndex + 1) until section.endIndex &&
+            payloadType != null &&
+            payloadType !in allowedPayloadTypes
+    }
+
+    private fun addKeyframeInterval(line: String, intervalMs: Int, h264PayloadTypes: Set<Int>): String {
+        val payloadType = FMTP_REGEX.find(line)?.groupValues?.get(1)?.toInt()
+        return if (payloadType in h264PayloadTypes && "x-google-max-keyframe-interval" !in line) {
+            "$line;x-google-max-keyframe-interval=$intervalMs"
+        } else {
+            line
+        }
+    }
 }
