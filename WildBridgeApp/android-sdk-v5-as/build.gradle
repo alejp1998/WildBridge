@@ -14,8 +14,12 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.2'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$KOTLIN_VERSION"
+        classpath 'com.diffplug.spotless:spotless-plugin-gradle:7.0.4'
+        classpath 'io.gitlab.arturbosch.detekt:detekt-gradle-plugin:1.23.8'
     }
 }
+
+apply plugin: 'io.gitlab.arturbosch.detekt'
 
 
 allprojects {
@@ -37,4 +41,95 @@ allprojects {
         }
     }
 
+}
+
+def sampleJavaSource = file('../android-sdk-v5-sample/src/main/java')
+def uxsdkJavaSource = file('../android-sdk-v5-uxsdk/src/main/java')
+def detektTaskClass = buildscript.classLoader.loadClass('io.gitlab.arturbosch.detekt.Detekt')
+
+def wildBridgeSourceIncludes = [
+        'dji/sampleV5/aircraft/controller/**/*.kt',
+        'dji/sampleV5/aircraft/edge/**/*.kt',
+        'dji/sampleV5/aircraft/formation/**/*.kt',
+        'dji/sampleV5/aircraft/logger/**/*.kt',
+        'dji/sampleV5/aircraft/server/**/*.kt',
+        'dji/sampleV5/aircraft/webrtc/**/*.kt',
+        'dji/sampleV5/aircraft/DroneControlProfiles.kt',
+        'dji/sampleV5/aircraft/TestToolsVM.kt',
+        'dji/sampleV5/aircraft/WildBridgeDefaultLayoutActivity.kt',
+]
+
+project(':sample') {
+    apply plugin: 'com.diffplug.spotless'
+
+    spotless {
+        kotlin {
+            target wildBridgeSourceIncludes
+            ktlint('1.5.0')
+        }
+    }
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    allRules = false
+    ignoreFailures = true
+    config.setFrom(files('config/detekt/detekt.yml'))
+}
+
+tasks.withType(detektTaskClass).configureEach {
+    parallel = true
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+        txt.required.set(true)
+        sarif.required.set(true)
+    }
+}
+
+tasks.register('detektWildBridge', detektTaskClass) {
+    group = 'verification'
+    description = 'Run Detekt on WildBridge-owned Kotlin code only.'
+    buildUponDefaultConfig = true
+    allRules = false
+    ignoreFailures = true
+    config.setFrom(files('config/detekt/detekt.yml'))
+    setSource(files(sampleJavaSource))
+    include wildBridgeSourceIncludes
+    reports {
+        html.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.html"))
+        xml.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.xml"))
+        txt.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.txt"))
+        sarif.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.sarif"))
+    }
+}
+
+tasks.register('detektDji', detektTaskClass) {
+    group = 'verification'
+    description = 'Run Detekt on DJI sample and UXSDK Kotlin code, excluding WildBridge-owned packages.'
+    buildUponDefaultConfig = true
+    allRules = false
+    ignoreFailures = true
+    config.setFrom(files('config/detekt/detekt.yml'))
+    setSource(files(sampleJavaSource, uxsdkJavaSource))
+    include '**/*.kt'
+    exclude wildBridgeSourceIncludes
+    reports {
+        html.outputLocation.set(file("$buildDir/reports/detekt/dji.html"))
+        xml.outputLocation.set(file("$buildDir/reports/detekt/dji.xml"))
+        txt.outputLocation.set(file("$buildDir/reports/detekt/dji.txt"))
+        sarif.outputLocation.set(file("$buildDir/reports/detekt/dji.sarif"))
+    }
+}
+
+tasks.register('qualityWildBridge') {
+    group = 'verification'
+    description = 'Run ktlint formatting checks, Detekt, and Android Lint for WildBridge app code.'
+    dependsOn ':sample:spotlessKotlinCheck', 'detektWildBridge', ':sample:lintDebug'
+}
+
+tasks.register('qualityDji') {
+    group = 'verification'
+    description = 'Run Detekt and Android Lint for DJI/vendor code separately from WildBridge-owned code.'
+    dependsOn 'detektDji', ':uxsdk:lintDebug'
 }

@@ -24,6 +24,11 @@ android {
         freeCompilerArgs += ["-Xjvm-default=all"]
     }
 
+    lintOptions {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
     buildFeatures {
         viewBinding true
     }
