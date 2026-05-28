@@ -1,9 +1,10 @@
 ext {
     deps = [:]
+    djiSdkVersion = "5.18.0"
     // DJI MSDK V5 packages
-    deps.aircraft = "com.dji:dji-sdk-v5-aircraft:5.17.0"
-    deps.aircraftProvided = "com.dji:dji-sdk-v5-aircraft-provided:5.17.0"
-    deps.networkImp = "com.dji:dji-sdk-v5-networkImp:5.17.0"
+    deps.aircraft = "com.dji:dji-sdk-v5-aircraft:$djiSdkVersion"
+    deps.aircraftProvided = "com.dji:dji-sdk-v5-aircraft-provided:$djiSdkVersion"
+    deps.networkImp = "com.dji:dji-sdk-v5-networkImp:$djiSdkVersion"
 
     // Third-party dependency libraries
     deps.gson = 'com.google.code.gson:gson:2.9.1'

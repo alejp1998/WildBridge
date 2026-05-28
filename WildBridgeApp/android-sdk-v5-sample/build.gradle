@@ -188,4 +188,7 @@ dependencies {
 
     // WebRTC for drone video streaming (Stream's maintained fork)
     implementation 'io.getstream:stream-webrtc-android:1.1.1'
+
+    // On-device edge inference for exported YOLO/TFLite models
+    implementation 'org.tensorflow:tensorflow-lite:2.16.1'
 }
