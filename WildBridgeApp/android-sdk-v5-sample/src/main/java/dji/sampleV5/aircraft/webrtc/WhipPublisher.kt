@@ -30,7 +30,8 @@ class WhipPublisher(
     context: Context,
     private val videoCapturer: VideoCapturer,
     private val options: WebRTCMediaOptions = WebRTCMediaOptions(),
-    private val whipUrl: String
+    private val whipUrl: String,
+    private var localPreviewSink: VideoSink? = null
 ) {
     companion object {
         private const val TAG = "WhipPublisher"
@@ -49,6 +50,7 @@ class WhipPublisher(
     private var peerConnection: PeerConnection? = null
     private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var whipResourceUrl: String? = null  // Location header for DELETE on teardown
 
     private val isRunning = AtomicBoolean(false)
@@ -73,6 +75,12 @@ class WhipPublisher(
 
     fun isPublishing(): Boolean = isPublishing.get()
 
+    fun setLocalPreviewSink(sink: VideoSink?) {
+        localPreviewSink?.let { oldSink -> runCatching { videoTrack?.removeSink(oldSink) } }
+        localPreviewSink = sink
+        sink?.let { newSink -> runCatching { videoTrack?.addSink(newSink) } }
+    }
+
     fun stop() {
         val wasRunning = isRunning.getAndSet(false)
         listener = null
@@ -90,6 +98,7 @@ class WhipPublisher(
             is DJIV5VideoCapturer -> videoCapturer.changeResolution(width, height)
             is SharedVideoCapturerHandle -> videoCapturer.changeResolution(width, height)
             is MockMp4VideoCapturer -> videoCapturer.changeResolution(width, height)
+            is SharedPhoneVideoCapturerHandle -> videoCapturer.changeCaptureFormat(width, height, currentFps)
         }
     }
 
@@ -100,6 +109,7 @@ class WhipPublisher(
             is DJIV5VideoCapturer -> videoCapturer.changeCaptureFormat(options.videoResolutionWidth, options.videoResolutionHeight, boundedFps)
             is SharedVideoCapturerHandle -> videoCapturer.changeFrameRate(boundedFps)
             is MockMp4VideoCapturer -> videoCapturer.changeFrameRate(boundedFps)
+            is SharedPhoneVideoCapturerHandle -> videoCapturer.changeCaptureFormat(options.videoResolutionWidth, options.videoResolutionHeight, boundedFps)
         }
         peerConnection?.senders?.firstOrNull()?.let { configureVideoSenderForStability(it) }
         Log.d(TAG, "WHIP frame rate changed to $boundedFps fps")
@@ -151,12 +161,21 @@ class WhipPublisher(
 
         // 1. Create video source & track
         videoSource = factory.createVideoSource(false)
+        surfaceTextureHelper = SurfaceTextureHelper.create(
+            "WildBridgeWhipCapture",
+            WebRTCPeerFactory.getEglBase().eglBaseContext
+        )
+        videoTrack = factory.createVideoTrack(options.videoTrackId, videoSource).apply {
+            setEnabled(true)
+            localPreviewSink?.let { addSink(it) }
+        }
         val startingFrameCount = when (videoCapturer) {
             is SharedVideoCapturerHandle -> videoCapturer.totalOutputFrames()
             is MockMp4VideoCapturer -> videoCapturer.totalOutputFrames()
+            is SharedPhoneVideoCapturerHandle -> videoCapturer.totalOutputFrames()
             else -> 0L
         }
-        videoCapturer.initialize(null, appContext, videoSource!!.capturerObserver)
+        videoCapturer.initialize(surfaceTextureHelper, appContext, videoSource!!.capturerObserver)
         videoCapturer.startCapture(
             options.videoResolutionWidth,
             options.videoResolutionHeight,
@@ -178,10 +197,11 @@ class WhipPublisher(
                     throw IllegalStateException("No mock MP4 video frames available for WHIP publishing")
                 }
             }
-        }
-
-        videoTrack = factory.createVideoTrack(options.videoTrackId, videoSource).apply {
-            setEnabled(true)
+            is SharedPhoneVideoCapturerHandle -> {
+                if (!videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
+                    throw IllegalStateException("No shared phone camera frames available for WHIP publishing")
+                }
+            }
         }
 
         // 2. Create PeerConnection
@@ -373,11 +393,14 @@ class WhipPublisher(
         if (!isTearingDown.compareAndSet(false, true)) return
         try {
             deleteWhipResource()
+            localPreviewSink?.let { sink -> runCatching { videoTrack?.removeSink(sink) } }
             runCatching { videoCapturer.stopCapture() }
             runCatching { videoTrack?.dispose() }
             videoTrack = null
             runCatching { videoSource?.dispose() }
             videoSource = null
+            runCatching { surfaceTextureHelper?.dispose() }
+            surfaceTextureHelper = null
             runCatching { peerConnection?.dispose() }
                 .onFailure { Log.d(TAG, "PeerConnection dispose ignored: ${it.message}") }
             peerConnection = null

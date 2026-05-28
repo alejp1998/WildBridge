@@ -13,11 +13,13 @@ data class DetectedTarget(
     val left: Double,
     val top: Double,
     val right: Double,
-    val bottom: Double
+    val bottom: Double,
+    val confidence: Double? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("index", index)
         put("type", type)
+        confidence?.let { put("confidence", it) }
         put("rect", JSONArray().apply {
             put(left); put(top); put(right); put(bottom)
         })
@@ -42,7 +44,8 @@ data class DetectedTarget(
                         left = rect.getDouble(0),
                         top = rect.getDouble(1),
                         right = rect.getDouble(2),
-                        bottom = rect.getDouble(3)
+                        bottom = rect.getDouble(3),
+                        confidence = obj.optDouble("confidence").takeIf { obj.has("confidence") }
                     )
                 )
             }

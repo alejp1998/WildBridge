@@ -48,7 +48,11 @@ data class FrameMetadata(
     val isFlying: Boolean,
     val flightMode: String,          // DJI flight mode string (e.g. "GPS", "ATTI", "SPORT", "TRIPOD")
     val isManualOverrideActive: Boolean = false,  // True when pilot has taken manual RC control
-    val detectedTargets: List<DetectedTarget> = emptyList()  // AI-detected targets from AutoSensing
+    val detectedTargets: List<DetectedTarget> = emptyList(),  // AI-detected targets from selected detector
+    val detectionSource: String = "none",
+    val detectionActive: Boolean = false,
+    val detectionModel: String? = null,
+    val detectionConfidenceThreshold: Float? = null
 ) {
     /**
      * Convert to JSON for transmission via WebRTC data channel
@@ -91,6 +95,14 @@ data class FrameMetadata(
             put("flightMode", flightMode)
             put("isManualOverrideActive", isManualOverrideActive)
             put("detectedTargets", JSONArray(detectedTargets.map { it.toJson() }))
+            put("detections", JSONObject().apply {
+                put("source", detectionSource)
+                put("active", detectionActive)
+                put("count", detectedTargets.size)
+                put("model", detectionModel)
+                put("confidenceThreshold", detectionConfidenceThreshold)
+                put("targets", JSONArray(detectedTargets.map { it.toJson() }))
+            })
         }
     }
     
@@ -130,7 +142,11 @@ data class FrameMetadata(
                 isFlying = obj.optBoolean("isFlying", false),
                 flightMode = obj.optString("flightMode", "UNKNOWN"),
                 isManualOverrideActive = obj.optBoolean("isManualOverrideActive", false),
-                detectedTargets = DetectedTarget.fromJsonArray(obj.optJSONArray("detectedTargets") ?: JSONArray())
+                detectedTargets = DetectedTarget.fromJsonArray(obj.optJSONArray("detectedTargets") ?: obj.optJSONObject("detections")?.optJSONArray("targets") ?: JSONArray()),
+                detectionSource = obj.optJSONObject("detections")?.optString("source") ?: obj.optString("detectionSource", "none"),
+                detectionActive = obj.optJSONObject("detections")?.optBoolean("active") ?: false,
+                detectionModel = obj.optJSONObject("detections")?.optString("model")?.takeIf { it.isNotBlank() },
+                detectionConfidenceThreshold = obj.optJSONObject("detections")?.optDouble("confidenceThreshold")?.takeIf { it.isFinite() }?.toFloat()
             )
         }
     }

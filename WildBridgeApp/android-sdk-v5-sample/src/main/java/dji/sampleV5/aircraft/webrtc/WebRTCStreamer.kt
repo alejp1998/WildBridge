@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import dji.sdk.keyvalue.value.common.ComponentIndexType
+import org.webrtc.VideoSink
 import org.webrtc.VideoCapturer
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -31,13 +32,26 @@ class WebRTCStreamer(
 
     private val appContext = context.applicationContext
 
+    enum class VideoSourceMode(val prefValue: String, val menuLabel: String) {
+        DJI("drone", "Drone camera"),
+        PHONE("phone", "Phone back camera"),
+        MOCK("mock", "Mock MP4");
+
+        companion object {
+            fun fromPref(value: String?): VideoSourceMode {
+                return entries.firstOrNull { it.prefValue == value } ?: DJI
+            }
+        }
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sharedFrameSource: SharedDJIFrameSource? = null
     private var whipPublisher: WhipPublisher? = null
     @Volatile private var selectedOptions: WebRTCMediaOptions = options
-    @Volatile private var currentOptions: WebRTCMediaOptions = optionsForSource(options, mockVideoEnabled)
+    @Volatile private var currentSourceMode: VideoSourceMode = if (mockVideoEnabled) VideoSourceMode.MOCK else VideoSourceMode.DJI
+    @Volatile private var currentOptions: WebRTCMediaOptions = optionsForSource(options, currentSourceMode)
     @Volatile private var currentWhipUrl: String? = null
-    @Volatile private var useMockVideo: Boolean = mockVideoEnabled
+    @Volatile private var localPreviewSink: VideoSink? = null
     private var badMetricsWindows = 0
     private var saturationWindows = 0
     private var stableWindows = 0
@@ -94,10 +108,14 @@ class WebRTCStreamer(
     }
 
     fun setMockVideoEnabled(enabled: Boolean) {
-        if (useMockVideo == enabled) return
-        val previousSource = if (useMockVideo) "mock" else "dji"
-        useMockVideo = enabled
-        currentOptions = optionsForSource(selectedOptions, enabled)
+        setVideoSourceMode(if (enabled) VideoSourceMode.MOCK else VideoSourceMode.DJI)
+    }
+
+    fun setVideoSourceMode(mode: VideoSourceMode) {
+        if (currentSourceMode == mode) return
+        val previousSource = currentSourceMode
+        currentSourceMode = mode
+        currentOptions = optionsForSource(selectedOptions, mode)
         badMetricsWindows = 0
         saturationWindows = 0
         stableWindows = 0
@@ -106,10 +124,10 @@ class WebRTCStreamer(
 
         logWhipLifecycle(
             event = "whip_source_switched",
-            detail = "source $previousSource -> ${if (enabled) "mock" else "dji"}"
+            detail = "source ${previousSource.prefValue} -> ${mode.prefValue}"
         )
 
-        if (enabled) {
+        if (mode != VideoSourceMode.DJI) {
             sharedFrameSource?.dispose()
             sharedFrameSource = null
         }
@@ -122,10 +140,17 @@ class WebRTCStreamer(
                 if (currentWhipUrl == whipUrl) startWhip(whipUrl)
             }, 500L)
         }
-        Log.i(TAG, "Video source changed to ${if (enabled) "mock MP4" else "DJI camera"}")
+        Log.i(TAG, "Video source changed to ${mode.menuLabel}")
     }
 
-    fun isMockVideoEnabled(): Boolean = useMockVideo
+    fun isMockVideoEnabled(): Boolean = currentSourceMode == VideoSourceMode.MOCK
+
+    fun videoSourceMode(): VideoSourceMode = currentSourceMode
+
+    fun setLocalPreviewSink(sink: VideoSink?) {
+        localPreviewSink = sink
+        whipPublisher?.setLocalPreviewSink(sink)
+    }
 
     /**
     * Start publishing video via WHIP to a MediaMTX relay server. The phone
@@ -164,15 +189,20 @@ class WebRTCStreamer(
         TelemetryProvider.startListening()
         currentWhipUrl = whipUrl
 
-        val djiFrameSource = if (useMockVideo) null else getOrCreateSharedSource()
-        val startFrameCount = djiFrameSource?.totalOutputFrames() ?: 0L
+        val djiFrameSource = if (currentSourceMode == VideoSourceMode.DJI) getOrCreateSharedSource() else null
         val capturer = createVideoCapturer("whip")
+        val startFrameCount = when (capturer) {
+            is SharedVideoCapturerHandle -> capturer.totalOutputFrames()
+            is SharedPhoneVideoCapturerHandle -> capturer.totalOutputFrames()
+            else -> djiFrameSource?.totalOutputFrames() ?: 0L
+        }
 
         whipPublisher = WhipPublisher(
             context = appContext,
             videoCapturer = capturer,
             options = currentOptions,
-            whipUrl = whipUrl
+            whipUrl = whipUrl,
+            localPreviewSink = localPreviewSink
         ).apply {
             this.listener = object : WhipPublisher.WhipListener {
                 override fun onPublishing() {
@@ -211,7 +241,7 @@ class WebRTCStreamer(
         }
 
         mainHandler.postDelayed({
-            val noFramesSinceStart = !useMockVideo && djiFrameSource != null && djiFrameSource.observerCount() > 0 && djiFrameSource.totalOutputFrames() == startFrameCount
+            val noFramesSinceStart = currentSourceMode == VideoSourceMode.DJI && djiFrameSource != null && djiFrameSource.observerCount() > 0 && djiFrameSource.totalOutputFrames() == startFrameCount
             if (currentWhipUrl == whipUrl && noFramesSinceStart) {
                 val message = "Camera feed lost. The drone may have been idle too long or overheated; power-cycle the drone and let it cool down before retrying."
                 Log.w(TAG, message)
@@ -242,7 +272,7 @@ class WebRTCStreamer(
      */
     fun changeMediaOptions(options: WebRTCMediaOptions) {
         selectedOptions = options
-        currentOptions = optionsForSource(options)
+        currentOptions = optionsForSource(options, currentSourceMode)
         desiredFps = currentOptions.fps.coerceIn(1, 60)
         effectiveFps = desiredFps
         saturationWindows = 0
@@ -262,6 +292,15 @@ class WebRTCStreamer(
         applyFrameRate(boundedFps, "manual change")
     }
 
+    fun setEdgeDetectionFrameListener(listener: SharedDJIFrameSource.EdgeDetectionFrameListener?) {
+        if (currentSourceMode != VideoSourceMode.DJI) return
+        if (listener == null) {
+            sharedFrameSource?.setEdgeDetectionFrameListener(null)
+        } else {
+            getOrCreateSharedSource().setEdgeDetectionFrameListener(listener)
+        }
+    }
+
     private fun applyFrameRate(fps: Int, reason: String) {
         Log.d(TAG, "Changing FPS to $fps: $reason")
         sharedFrameSource?.changeFrameRate(fps)
@@ -276,12 +315,12 @@ class WebRTCStreamer(
     }
 
     private fun createVideoCapturer(clientId: String): VideoCapturer {
-        return if (useMockVideo) {
-            MockMp4VideoCapturer(droneName).apply {
+        return when (currentSourceMode) {
+            VideoSourceMode.MOCK -> MockMp4VideoCapturer(droneName).apply {
                 metricsListener = ::handleFrameSourceMetrics
             }
-        } else {
-            SharedVideoCapturerHandle(clientId, getOrCreateSharedSource())
+            VideoSourceMode.PHONE -> SharedPhoneVideoCapturerHandle(clientId)
+            VideoSourceMode.DJI -> SharedVideoCapturerHandle(clientId, getOrCreateSharedSource())
         }
     }
 
@@ -294,7 +333,7 @@ class WebRTCStreamer(
             saturationState = saturationState,
             scaleMode = if (currentOptions.usesSourceResolution) "native" else "fixed"
         )
-        if (!useMockVideo) maybeRecoverStreaming(enriched)
+        if (currentSourceMode == VideoSourceMode.DJI) maybeRecoverStreaming(enriched)
         mainHandler.post { listener?.onMetrics(enriched) }
     }
 
@@ -438,7 +477,7 @@ class WebRTCStreamer(
         val sharedSource = sharedFrameSource
         val frameCount = sharedSource?.totalOutputFrames() ?: 0L
         val observers = sharedSource?.observerCount() ?: 0
-        val source = if (useMockVideo) "mock" else "dji"
+        val source = currentSourceMode.prefValue
         val suffix = buildString {
             append("event=")
             append(event)
@@ -476,14 +515,16 @@ class WebRTCStreamer(
 
     private fun optionsForSource(
         baseOptions: WebRTCMediaOptions,
-        mockEnabled: Boolean = useMockVideo
+        sourceMode: VideoSourceMode = currentSourceMode
     ): WebRTCMediaOptions {
-        if (!mockEnabled) return baseOptions
+        if (sourceMode == VideoSourceMode.DJI) return baseOptions
 
-        // Mock MP4 playback cannot follow the "native" capture path because the
-        // bundled asset needs an explicit output size. Keep the user's selected
-        // DJI preset intact, but force the mock source onto a stable 1080p target.
-        return WebRTCMediaOptions.fullHD().copy(
+        val fallbackOptions = if (baseOptions.usesSourceResolution) {
+            if (sourceMode == VideoSourceMode.PHONE) WebRTCMediaOptions.hd() else WebRTCMediaOptions.fullHD()
+        } else {
+            baseOptions
+        }
+        return fallbackOptions.copy(
             fps = baseOptions.fps.coerceIn(1, 60),
             videoCodec = baseOptions.videoCodec
         )

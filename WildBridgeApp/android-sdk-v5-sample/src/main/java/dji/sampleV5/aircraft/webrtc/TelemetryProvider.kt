@@ -27,6 +27,18 @@ object TelemetryProvider {
     /** Current detected targets from AutoSensing – updated by the activity */
     @Volatile
     var currentDetectedTargets: List<DetectedTarget> = emptyList()
+
+    @Volatile
+    var currentDetectionSource: String = "none"
+
+    @Volatile
+    var currentDetectionActive: Boolean = false
+
+    @Volatile
+    var currentDetectionModel: String? = null
+
+    @Volatile
+    var currentDetectionThreshold: Float? = null
     
     // DJI Keys for telemetry - created once and reused
     private val location3DKey = FlightControllerKey.KeyAircraftLocation3D.create()
@@ -223,7 +235,11 @@ object TelemetryProvider {
                 isFlying = mock.isFlying,
                 flightMode = mock.flightMode,
                 isManualOverrideActive = false,
-                detectedTargets = currentDetectedTargets
+                detectedTargets = currentDetectedTargets,
+                detectionSource = currentDetectionSource,
+                detectionActive = currentDetectionActive,
+                detectionModel = currentDetectionModel,
+                detectionConfidenceThreshold = currentDetectionThreshold
             )
         }
 
@@ -267,7 +283,11 @@ object TelemetryProvider {
             isFlying = cachedIsFlying,
             flightMode = cachedFlightMode,
             isManualOverrideActive = DroneController.isManualOverrideActive,
-            detectedTargets = currentDetectedTargets
+            detectedTargets = currentDetectedTargets,
+            detectionSource = currentDetectionSource,
+            detectionActive = currentDetectionActive,
+            detectionModel = currentDetectionModel,
+            detectionConfidenceThreshold = currentDetectionThreshold
         )
     }
 }

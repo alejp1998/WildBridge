@@ -44,6 +44,11 @@ class SharedDJIFrameSource(
     private val observers = ConcurrentHashMap<String, CapturerObserver>()
     private val metadataListeners = ConcurrentHashMap<String, DJIV5VideoCapturer.FrameMetadataListener>()
     private val isCapturing = AtomicBoolean(false)
+    private val edgeDetectionActive = AtomicBoolean(false)
+
+    interface EdgeDetectionFrameListener {
+        fun onNv21Frame(frameData: ByteArray, offset: Int, length: Int, width: Int, height: Int, timestampNs: Long)
+    }
 
     @Volatile var targetWidth: Int = DJIV5VideoCapturer.FULL_HD_WIDTH
     @Volatile var targetHeight: Int = DJIV5VideoCapturer.FULL_HD_HEIGHT
@@ -51,6 +56,7 @@ class SharedDJIFrameSource(
     @Volatile private var targetFps: Int = 30
     @Volatile private var frameIntervalNs: Long = 1_000_000_000L / 30L
     @Volatile var metricsListener: ((WebRTCStreamMetrics) -> Unit)? = null
+    @Volatile private var edgeDetectionFrameListener: EdgeDetectionFrameListener? = null
     private val lastSentTimestampNs = AtomicLong(0L)
     private val frameCounter = AtomicLong(0)
     private val incomingFrameCounter = AtomicLong(0)
@@ -150,12 +156,14 @@ class SharedDJIFrameSource(
             format: ICameraStreamManager.FrameFormat
         ) {
             if (!isCapturing.get()) return
+            val timestampNs = System.nanoTime()
+            edgeDetectionFrameListener?.onNv21Frame(frameData, offset, length, width, height, timestampNs)
+
             val singleObserver = if (observers.size == 1) observers.values.firstOrNull() else null
             val currentObservers = if (singleObserver == null) observers.values.toList() else emptyList()
             if (singleObserver == null && currentObservers.isEmpty()) return
 
             try {
-                val timestampNs = System.nanoTime()
                 incomingFrameCounter.incrementAndGet()
                 inputFramesInWindow.incrementAndGet()
 
@@ -233,6 +241,33 @@ class SharedDJIFrameSource(
                 lastError = e.message
                 Log.e(TAG, "Error processing frame: ${e.message}", e)
             }
+        }
+    }
+
+    fun setEdgeDetectionFrameListener(listener: EdgeDetectionFrameListener?) {
+        edgeDetectionFrameListener = listener
+        val shouldRun = listener != null
+        edgeDetectionActive.set(shouldRun)
+        if (shouldRun) {
+            ensureFrameListenerAttached("edge detection enabled")
+        } else if (observers.isEmpty() && isCapturing.compareAndSet(true, false)) {
+            Log.d(TAG, "No observers or edge detector left – stopping shared capture")
+            cameraStreamManager.removeFrameListener(frameListener)
+        }
+    }
+
+    @Synchronized
+    private fun ensureFrameListenerAttached(reason: String) {
+        if (isCapturing.compareAndSet(false, true)) {
+            lastSentTimestampNs.set(0L)
+            Log.d(TAG, "Starting shared capture for $reason on camera $activeCameraIndex")
+            runCatching { cameraStreamManager.enableStream(activeCameraIndex, true) }
+                .onFailure { Log.w(TAG, "Could not enable stream on $activeCameraIndex: ${it.message}") }
+            cameraStreamManager.addFrameListener(
+                activeCameraIndex,
+                ICameraStreamManager.FrameFormat.NV21,
+                frameListener
+            )
         }
     }
 
@@ -342,7 +377,7 @@ class SharedDJIFrameSource(
         observers.remove(clientId)
         metadataListeners.remove(clientId)
         Log.d(TAG, "Client removed: $clientId (remaining: ${observers.size})")
-        if (observers.isEmpty() && isCapturing.compareAndSet(true, false)) {
+        if (observers.isEmpty() && !edgeDetectionActive.get() && isCapturing.compareAndSet(true, false)) {
             Log.d(TAG, "No observers left – stopping shared capture")
             cameraStreamManager.removeFrameListener(frameListener)
         }
@@ -406,6 +441,8 @@ class SharedDJIFrameSource(
         }
         observers.clear()
         metadataListeners.clear()
+        edgeDetectionFrameListener = null
+        edgeDetectionActive.set(false)
         metricsListener = null
         Log.d(TAG, "SharedDJIFrameSource disposed")
     }
