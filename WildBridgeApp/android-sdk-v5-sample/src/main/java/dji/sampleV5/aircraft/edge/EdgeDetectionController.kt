@@ -118,19 +118,12 @@ class EdgeDetectionController(
         executor.shutdownNow()
     }
 
-    override fun onNv21Frame(
-        frameData: ByteArray,
-        offset: Int,
-        length: Int,
-        width: Int,
-        height: Int,
-        timestampNs: Long
-    ) {
-        if (!startInferenceWindow(timestampNs)) return
+    override fun onNv21Frame(frame: SharedDJIFrameSource.Nv21Frame) {
+        if (!startInferenceWindow(frame.timestampNs)) return
 
-        val frameCopy = frameData.copyOfRange(offset, offset + length)
+        val frameCopy = frame.data.copyOfRange(frame.offset, frame.offset + frame.length)
         executor.execute {
-            runNv21Inference(frameCopy, width, height)
+            runNv21Inference(frameCopy, frame.width, frame.height)
         }
     }
 

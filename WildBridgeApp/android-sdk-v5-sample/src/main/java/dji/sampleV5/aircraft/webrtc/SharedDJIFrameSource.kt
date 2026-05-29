@@ -47,8 +47,17 @@ class SharedDJIFrameSource(
     private val edgeDetectionActive = AtomicBoolean(false)
 
     interface EdgeDetectionFrameListener {
-        fun onNv21Frame(frameData: ByteArray, offset: Int, length: Int, width: Int, height: Int, timestampNs: Long)
+        fun onNv21Frame(frame: Nv21Frame)
     }
+
+    data class Nv21Frame(
+        val data: ByteArray,
+        val offset: Int,
+        val length: Int,
+        val width: Int,
+        val height: Int,
+        val timestampNs: Long
+    )
 
     @Volatile var targetWidth: Int = DJIV5VideoCapturer.FULL_HD_WIDTH
     @Volatile var targetHeight: Int = DJIV5VideoCapturer.FULL_HD_HEIGHT
@@ -147,6 +156,8 @@ class SharedDJIFrameSource(
         }
     }
 
+    private val frameProcessor = FrameProcessor()
+
     private val frameListener = object : ICameraStreamManager.CameraFrameListener {
         override fun onFrame(
             frameData: ByteArray,
@@ -156,95 +167,122 @@ class SharedDJIFrameSource(
             height: Int,
             format: ICameraStreamManager.FrameFormat
         ) {
-            if (!isCapturing.get()) return
-            val timestampNs = System.nanoTime()
-            edgeDetectionFrameListener?.onNv21Frame(frameData, offset, length, width, height, timestampNs)
+            if (isCapturing.get()) {
+                val frame = Nv21Frame(frameData, offset, length, width, height, System.nanoTime())
+                edgeDetectionFrameListener?.onNv21Frame(frame)
 
-            val singleObserver = if (observers.size == 1) observers.values.firstOrNull() else null
-            val currentObservers = if (singleObserver == null) observers.values.toList() else emptyList()
-            if (singleObserver == null && currentObservers.isEmpty()) return
+                val recipients = DjiFrameRecipients.capture(observers, metadataListeners)
+                if (recipients.hasObservers) {
+                    frameProcessor.process(frame, recipients)
+                }
+            }
+        }
+    }
 
-            try {
+    private inner class FrameProcessor {
+        fun process(frame: Nv21Frame, recipients: DjiFrameRecipients) {
+            runCatching {
                 incomingFrameCounter.incrementAndGet()
                 inputFramesInWindow.incrementAndGet()
 
-                val previousSent = lastSentTimestampNs.get()
-                if (previousSent != 0L && (timestampNs - previousSent) < frameIntervalNs) {
-                    droppedFrameCounter.incrementAndGet()
-                    droppedFramesInWindow.incrementAndGet()
-                    maybeEmitMetrics(timestampNs)
-                    return
-                }
-                lastSentTimestampNs.set(timestampNs)
-
-                if (width != lastSourceWidth || height != lastSourceHeight) {
-                    lastSourceWidth = width
-                    lastSourceHeight = height
-                    Log.d(
-                        TAG,
-                        "Source: ${width}x${height}, Target: " +
-                            "${targetWidth}x${targetHeight}, Scale: $scaleToTarget"
-                    )
-                }
-
-                val frameNumber = frameCounter.incrementAndGet()
-                synchronized(frameWaitLock) {
-                    frameWaitLock.notifyAll()
-                }
-                sentFramesInWindow.incrementAndGet()
-
-                val (outputWidth, outputHeight) = chooseOutputSize(width, height)
-                lastOutputWidth = outputWidth
-                lastOutputHeight = outputHeight
-
-                // Capture telemetry once and broadcast to all metadata listeners
-                val singleListener = if (metadataListeners.size == 1) metadataListeners.values.firstOrNull() else null
-                val currentListeners = if (singleListener == null) metadataListeners.values.toList() else emptyList()
-                if (singleListener != null || currentListeners.isNotEmpty()) {
-                    val metadata = TelemetryProvider.captureMetadata(
-                        frameNumber = frameNumber,
-                        timestampNs = timestampNs,
-                        frameWidth = outputWidth,
-                        frameHeight = outputHeight,
-                        droneName = droneName
-                    )
-                    if (singleListener != null) {
-                        singleListener.onFrameMetadata(metadata)
-                    } else {
-                        currentListeners.forEach { it.onFrameMetadata(metadata) }
-                    }
-                }
-
-                // Create NV21 buffer and scale ONCE
-                val buffer = NV21Buffer(frameData, width, height, null)
-
-                val needsScale = scaleToTarget && (width != outputWidth || height != outputHeight)
-                val outputBuffer = if (needsScale) {
-                    val scaled = buffer.cropAndScale(0, 0, width, height, outputWidth, outputHeight)
-                    buffer.release()
-                    scaled
+                if (shouldDropForTargetFrameRate(frame.timestampNs)) {
+                    recordDroppedFrame(frame.timestampNs)
                 } else {
-                    buffer
+                    deliverFrame(frame, recipients)
                 }
-
-                // Broadcast the same VideoFrame to every observer.
-                // Retain once per extra observer; the first consumer uses the initial ref.
-                val videoFrame = VideoFrame(outputBuffer, 0, timestampNs)
-                if (singleObserver != null) {
-                    singleObserver.onFrameCaptured(videoFrame)
-                } else {
-                    val extra = currentObservers.size - 1
-                    repeat(extra) { videoFrame.retain() }
-                    currentObservers.forEach { it.onFrameCaptured(videoFrame) }
-                }
-                videoFrame.release()
-                processingTimeNsInWindow.addAndGet(System.nanoTime() - timestampNs)
-                maybeEmitMetrics(timestampNs)
-
-            } catch (e: Exception) {
+            }.onFailure { error ->
                 processingErrorCounter.incrementAndGet()
-                lastError = e.message
-                Log.e(TAG, "Error processing frame: ${e.message}", e)
+                lastError = error.message
+                Log.e(TAG, "Error processing frame: ${error.message}", error)
+            }
+        }
+
+        private fun deliverFrame(frame: Nv21Frame, recipients: DjiFrameRecipients) {
+            updateSourceSize(frame.width, frame.height)
+            val frameNumber = recordAcceptedFrame(frame.timestampNs)
+            val (outputWidth, outputHeight) = chooseOutputSize(frame.width, frame.height)
+            lastOutputWidth = outputWidth
+            lastOutputHeight = outputHeight
+
+            deliverMetadata(frameNumber, frame.timestampNs, outputWidth, outputHeight, recipients)
+            deliverVideoFrame(frame, outputWidth, outputHeight, recipients)
+            processingTimeNsInWindow.addAndGet(System.nanoTime() - frame.timestampNs)
+            maybeEmitMetrics(frame.timestampNs)
+        }
+
+        private fun shouldDropForTargetFrameRate(timestampNs: Long): Boolean {
+            val previousSent = lastSentTimestampNs.get()
+            return previousSent != 0L && (timestampNs - previousSent) < frameIntervalNs
+        }
+
+        private fun recordDroppedFrame(timestampNs: Long) {
+            droppedFrameCounter.incrementAndGet()
+            droppedFramesInWindow.incrementAndGet()
+            maybeEmitMetrics(timestampNs)
+        }
+
+        private fun updateSourceSize(width: Int, height: Int) {
+            if (width != lastSourceWidth || height != lastSourceHeight) {
+                lastSourceWidth = width
+                lastSourceHeight = height
+                Log.d(
+                    TAG,
+                    "Source: ${width}x${height}, Target: " +
+                        "${targetWidth}x${targetHeight}, Scale: $scaleToTarget"
+                )
+            }
+        }
+
+        private fun recordAcceptedFrame(timestampNs: Long): Long {
+            lastSentTimestampNs.set(timestampNs)
+            val frameNumber = frameCounter.incrementAndGet()
+            synchronized(frameWaitLock) {
+                frameWaitLock.notifyAll()
+            }
+            sentFramesInWindow.incrementAndGet()
+            return frameNumber
+        }
+
+        private fun deliverMetadata(
+            frameNumber: Long,
+            timestampNs: Long,
+            outputWidth: Int,
+            outputHeight: Int,
+            recipients: DjiFrameRecipients
+        ) {
+            if (!recipients.hasMetadataListeners) return
+            val metadata = TelemetryProvider.captureMetadata(
+                frameNumber = frameNumber,
+                timestampNs = timestampNs,
+                frameWidth = outputWidth,
+                frameHeight = outputHeight,
+                droneName = droneName
+            )
+            recipients.singleMetadataListener?.onFrameMetadata(metadata)
+                ?: recipients.metadataListeners.forEach { it.onFrameMetadata(metadata) }
+        }
+
+        private fun deliverVideoFrame(
+            frame: Nv21Frame,
+            outputWidth: Int,
+            outputHeight: Int,
+            recipients: DjiFrameRecipients
+        ) {
+            val buffer = NV21Buffer(frame.data, frame.width, frame.height, null)
+            val needsScale = scaleToTarget && (frame.width != outputWidth || frame.height != outputHeight)
+            val outputBuffer = if (needsScale) {
+                val scaled = buffer.cropAndScale(0, 0, frame.width, frame.height, outputWidth, outputHeight)
+                buffer.release()
+                scaled
+            } else {
+                buffer
+            }
+
+            val videoFrame = VideoFrame(outputBuffer, 0, frame.timestampNs)
+            try {
+                recipients.deliver(videoFrame)
+            } finally {
+                videoFrame.release()
             }
         }
     }
@@ -456,5 +494,45 @@ class SharedDJIFrameSource(
         edgeDetectionActive.set(false)
         metricsListener = null
         Log.d(TAG, "SharedDJIFrameSource disposed")
+    }
+}
+
+private data class DjiFrameRecipients(
+    val singleObserver: CapturerObserver?,
+    val observers: List<CapturerObserver>,
+    val singleMetadataListener: DJIV5VideoCapturer.FrameMetadataListener?,
+    val metadataListeners: List<DJIV5VideoCapturer.FrameMetadataListener>
+) {
+    val hasObservers: Boolean = singleObserver != null || observers.isNotEmpty()
+    val hasMetadataListeners: Boolean = singleMetadataListener != null || metadataListeners.isNotEmpty()
+
+    fun deliver(videoFrame: VideoFrame) {
+        if (singleObserver != null) {
+            singleObserver.onFrameCaptured(videoFrame)
+        } else {
+            repeat((observers.size - 1).coerceAtLeast(0)) { videoFrame.retain() }
+            observers.forEach { it.onFrameCaptured(videoFrame) }
+        }
+    }
+
+    companion object {
+        fun capture(
+            observers: ConcurrentHashMap<String, CapturerObserver>,
+            metadataListeners: ConcurrentHashMap<String, DJIV5VideoCapturer.FrameMetadataListener>
+        ): DjiFrameRecipients {
+            val singleObserver = observers.singleValueOrNull()
+            val observerSnapshot = if (singleObserver == null) observers.values.toList() else emptyList()
+            val singleMetadataListener = metadataListeners.singleValueOrNull()
+            val metadataSnapshot = if (singleMetadataListener == null) {
+                metadataListeners.values.toList()
+            } else {
+                emptyList()
+            }
+            return DjiFrameRecipients(singleObserver, observerSnapshot, singleMetadataListener, metadataSnapshot)
+        }
+
+        private fun <T> ConcurrentHashMap<String, T>.singleValueOrNull(): T? {
+            return if (size == 1) values.firstOrNull() else null
+        }
     }
 }

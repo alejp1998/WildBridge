@@ -54,6 +54,7 @@ Focused refactors completed so far:
 - `WildBridgeFlightLogger`: split DJI log syncing and storage resolution out of the logger object, flattened directory fallback handling, and removed the logger from Detekt.
 - `FormationController`: removed unused private formation-position/collision helpers and cleaned import/exception style, leaving only the larger controller split for later.
 - `WhipPublisher`: converted required no-op WebRTC callbacks to explicit `Unit` expression bodies so the remaining findings focus on publish-flow complexity.
+- `SharedDJIFrameSource`: introduced an `Nv21Frame` value and private frame processor so the hot DJI frame callback only snapshots recipients and delegates delivery.
 
 Reports to inspect:
 
