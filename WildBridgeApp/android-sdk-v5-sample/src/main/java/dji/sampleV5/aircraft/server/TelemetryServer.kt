@@ -22,6 +22,8 @@ class TelemetryServer(
     /** Callback invoked when a bridge client connects. Receives the client's IP address. */
     var onFirstClientConnected: ((clientIp: String) -> Unit)? = null
 
+    fun hasClients(): Boolean = clients.isNotEmpty()
+
     fun start() {
         if (isRunning) return
 
