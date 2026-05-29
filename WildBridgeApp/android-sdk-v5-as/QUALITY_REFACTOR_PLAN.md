@@ -50,6 +50,7 @@ Focused refactors completed so far:
 - `TelemetryServer`: split client accept, broadcast, disconnect cleanup, and interruption handling; the server no longer appears in Detekt.
 - `MockMp4VideoCapturer`: replaced ad-hoc throws/catches with precondition helpers and `runCatching`, and cleared its targeted formatting findings.
 - `SharedDJIFrameSource`: simplified camera-index fallback and cleaned listener registration/recovery logging before tackling the larger frame-broadcast method.
+- `WildBridgeDefaultLayoutActivity.shouldAllowMockVideo`: removed the constant helper and used the mock source-mode check directly.
 
 Reports to inspect:
 
@@ -95,6 +96,7 @@ Good first extraction target:
 Done already:
 
 - Aircraft connection source-switching logic was named as `shouldSwitchToDroneVideoSource`, reducing condition complexity in `applyAircraftConnectionState`.
+- Removed the constant mock-video gate so preview visibility follows `isMockVideoEnabled()` directly.
 
 ### 2. WebRTC Flow Complexity
 

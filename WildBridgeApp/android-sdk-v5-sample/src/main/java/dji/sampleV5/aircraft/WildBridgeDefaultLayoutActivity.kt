@@ -858,8 +858,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         return getVideoSourceMode() == VideoSourceMode.MOCK || getVideoSourceMode() == VideoSourceMode.PHONE
     }
 
-    private fun shouldAllowMockVideo(): Boolean = true
-
     private fun setupAircraftConnectionListener() {
         val initialConnectionState = flightControllerConnectionKey.get(true)
         applyAircraftConnectionState(initialConnectionState, forceDroneSourceDefault = initialConnectionState)
@@ -1112,7 +1110,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun updateMockPreviewVisibility() {
         val preview = findViewById<TextureView>(R.id.mock_video_preview)
         val label = findViewById<TextView>(R.id.mock_video_preview_label)
-        val shouldShow = shouldAllowMockVideo() && isMockVideoEnabled()
+        val shouldShow = isMockVideoEnabled()
         preview?.visibility = if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
         label?.visibility = if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
         if (shouldShow && preview?.isAvailable == true) {
@@ -1123,7 +1121,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun startMockVideoPreview(surfaceTexture: SurfaceTexture) {
-        if (!(shouldAllowMockVideo() && isMockVideoEnabled())) return
+        if (!isMockVideoEnabled()) return
         if (mockPreviewPlayer != null) {
             runCatching { mockPreviewPlayer?.start() }
             return
