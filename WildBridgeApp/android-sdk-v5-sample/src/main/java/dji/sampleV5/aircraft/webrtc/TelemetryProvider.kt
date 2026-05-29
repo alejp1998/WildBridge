@@ -208,41 +208,61 @@ object TelemetryProvider {
         frameHeight: Int,
         droneName: String = "drone_1"
     ): FrameMetadata {
-        if (mockTelemetryEnabled) {
-            val mock = currentMockTelemetry(droneName)
-            return FrameMetadata(
-                frameNumber = frameNumber,
-                timestampNs = timestampNs,
-                captureTimeMs = System.currentTimeMillis(),
-                droneName = droneName,
-                frameWidth = frameWidth,
-                frameHeight = frameHeight,
-                latitude = mock.location.latitude,
-                longitude = mock.location.longitude,
-                altitudeASL = mock.location.altitude,
-                altitudeAGL = mock.altitudeAGL,
-                aircraftPitch = mock.attitude.pitch,
-                aircraftRoll = mock.attitude.roll,
-                aircraftYaw = mock.heading,
-                gimbalPitch = mock.gimbalAttitude.pitch,
-                gimbalRoll = mock.gimbalAttitude.roll,
-                gimbalYaw = mock.gimbalAttitude.yaw,
-                velocityX = mock.velocity.x,
-                velocityY = mock.velocity.y,
-                velocityZ = mock.velocity.z,
-                satelliteCount = mock.satelliteCount,
-                batteryPercent = mock.batteryPercent,
-                isFlying = mock.isFlying,
-                flightMode = mock.flightMode,
-                isManualOverrideActive = false,
-                detectedTargets = currentDetectedTargets,
-                detectionSource = currentDetectionSource,
-                detectionActive = currentDetectionActive,
-                detectionModel = currentDetectionModel,
-                detectionConfidenceThreshold = currentDetectionThreshold
-            )
+        return if (mockTelemetryEnabled) {
+            captureMockMetadata(frameNumber, timestampNs, frameWidth, frameHeight, droneName)
+        } else {
+            captureCachedMetadata(frameNumber, timestampNs, frameWidth, frameHeight, droneName)
         }
+    }
 
+    private fun captureMockMetadata(
+        frameNumber: Long,
+        timestampNs: Long,
+        frameWidth: Int,
+        frameHeight: Int,
+        droneName: String
+    ): FrameMetadata {
+        val mock = currentMockTelemetry(droneName)
+        return FrameMetadata(
+            frameNumber = frameNumber,
+            timestampNs = timestampNs,
+            captureTimeMs = System.currentTimeMillis(),
+            droneName = droneName,
+            frameWidth = frameWidth,
+            frameHeight = frameHeight,
+            latitude = mock.location.latitude,
+            longitude = mock.location.longitude,
+            altitudeASL = mock.location.altitude,
+            altitudeAGL = mock.altitudeAGL,
+            aircraftPitch = mock.attitude.pitch,
+            aircraftRoll = mock.attitude.roll,
+            aircraftYaw = mock.heading,
+            gimbalPitch = mock.gimbalAttitude.pitch,
+            gimbalRoll = mock.gimbalAttitude.roll,
+            gimbalYaw = mock.gimbalAttitude.yaw,
+            velocityX = mock.velocity.x,
+            velocityY = mock.velocity.y,
+            velocityZ = mock.velocity.z,
+            satelliteCount = mock.satelliteCount,
+            batteryPercent = mock.batteryPercent,
+            isFlying = mock.isFlying,
+            flightMode = mock.flightMode,
+            isManualOverrideActive = false,
+            detectedTargets = currentDetectedTargets,
+            detectionSource = currentDetectionSource,
+            detectionActive = currentDetectionActive,
+            detectionModel = currentDetectionModel,
+            detectionConfidenceThreshold = currentDetectionThreshold
+        )
+    }
+
+    private fun captureCachedMetadata(
+        frameNumber: Long,
+        timestampNs: Long,
+        frameWidth: Int,
+        frameHeight: Int,
+        droneName: String
+    ): FrameMetadata {
         val location = cachedLocation
         val attitude = cachedAttitude
         val velocity = cachedVelocity

@@ -36,6 +36,7 @@ Focused refactors completed so far:
 - `PID`: anti-windup limit checks are now explicit, covered by unit tests, and no longer appear in the WildBridge Detekt findings.
 - `MockTelemetryOrigin`: extracted from `TelemetryProvider`, covered by unit tests, and removed mock-location condition complexity from telemetry setup.
 - `shouldSwitchToDroneVideoSource`: extracted from `WildBridgeDefaultLayoutActivity`, making aircraft connection source switching explicit and removing its condition complexity finding.
+- `TelemetryProvider.captureMetadata`: split into mock and cached metadata builders, removing the telemetry long-method finding.
 
 Reports to inspect:
 
@@ -115,6 +116,7 @@ Done already:
 - `SdpUtils` was refactored and covered by `SdpUtilsTest`.
 - Adaptive frame-rate decisions were extracted into `AdaptiveFrameRatePolicy` and covered by `AdaptiveFrameRatePolicyTest`.
 - Mock telemetry origin validation was extracted into `MockTelemetryOrigin` and covered by `MockTelemetryOriginTest`.
+- Metadata capture now delegates to separate mock and cached metadata builders.
 
 ### 3. Edge Detection Pipeline Complexity
 
