@@ -243,7 +243,7 @@ class WhipPublisher(
         val connected = AtomicBoolean(false)
 
         peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onSignalingChange(s: PeerConnection.SignalingState) {}
+            override fun onSignalingChange(s: PeerConnection.SignalingState) = Unit
             override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) {
                 Log.d(TAG, "ICE connection: $s")
                 when (s) {
@@ -260,19 +260,19 @@ class WhipPublisher(
                     else -> {}
                 }
             }
-            override fun onIceConnectionReceivingChange(b: Boolean) {}
+            override fun onIceConnectionReceivingChange(b: Boolean) = Unit
             override fun onIceGatheringChange(s: PeerConnection.IceGatheringState) {
                 if (s == PeerConnection.IceGatheringState.COMPLETE) {
                     iceGatherLatch.countDown()
                 }
             }
-            override fun onIceCandidate(c: IceCandidate) {}
-            override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
-            override fun onAddStream(s: MediaStream) {}
-            override fun onRemoveStream(s: MediaStream) {}
-            override fun onDataChannel(dc: DataChannel) {}
-            override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(r: RtpReceiver, ss: Array<out MediaStream>) {}
+            override fun onIceCandidate(c: IceCandidate) = Unit
+            override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) = Unit
+            override fun onAddStream(s: MediaStream) = Unit
+            override fun onRemoveStream(s: MediaStream) = Unit
+            override fun onDataChannel(dc: DataChannel) = Unit
+            override fun onRenegotiationNeeded() = Unit
+            override fun onAddTrack(r: RtpReceiver, ss: Array<out MediaStream>) = Unit
         })
 
         // Add video track (sendonly — mediamtx doesn't send back video)
@@ -308,16 +308,16 @@ class WhipPublisher(
                         Log.e(TAG, "setLocalDescription failed: $err")
                         offerLatch.countDown()
                     }
-                    override fun onCreateSuccess(s: SessionDescription?) {}
-                    override fun onCreateFailure(s: String?) {}
+                    override fun onCreateSuccess(s: SessionDescription?) = Unit
+                    override fun onCreateFailure(s: String?) = Unit
                 }, mungedSdp)
             }
             override fun onCreateFailure(err: String) {
                 Log.e(TAG, "createOffer failed: $err")
                 offerLatch.countDown()
             }
-            override fun onSetSuccess() {}
-            override fun onSetFailure(s: String?) {}
+            override fun onSetSuccess() = Unit
+            override fun onSetFailure(s: String?) = Unit
         }, constraints)
 
         offerLatch.await(5, TimeUnit.SECONDS)
@@ -344,8 +344,8 @@ class WhipPublisher(
                 Log.e(TAG, "setRemoteDescription failed: $err")
                 answerLatch.countDown()
             }
-            override fun onCreateSuccess(s: SessionDescription?) {}
-            override fun onCreateFailure(s: String?) {}
+            override fun onCreateSuccess(s: SessionDescription?) = Unit
+            override fun onCreateFailure(s: String?) = Unit
         }, answer)
         answerLatch.await(5, TimeUnit.SECONDS)
 

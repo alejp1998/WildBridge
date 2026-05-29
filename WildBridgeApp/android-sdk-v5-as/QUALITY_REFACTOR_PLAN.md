@@ -53,6 +53,7 @@ Focused refactors completed so far:
 - `WildBridgeDefaultLayoutActivity.shouldAllowMockVideo`: removed the constant helper and used the mock source-mode check directly.
 - `WildBridgeFlightLogger`: split DJI log syncing and storage resolution out of the logger object, flattened directory fallback handling, and removed the logger from Detekt.
 - `FormationController`: removed unused private formation-position/collision helpers and cleaned import/exception style, leaving only the larger controller split for later.
+- `WhipPublisher`: converted required no-op WebRTC callbacks to explicit `Unit` expression bodies so the remaining findings focus on publish-flow complexity.
 
 Reports to inspect:
 
