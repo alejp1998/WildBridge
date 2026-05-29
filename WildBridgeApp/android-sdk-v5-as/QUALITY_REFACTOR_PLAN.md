@@ -35,6 +35,7 @@ Focused refactors completed so far:
 - `LetterboxTransform`: extracted from `YoloTfliteDetector`, covered by unit tests, and removed the detector's coordinate-mapping Detekt findings.
 - `PID`: anti-windup limit checks are now explicit, covered by unit tests, and no longer appear in the WildBridge Detekt findings.
 - `MockTelemetryOrigin`: extracted from `TelemetryProvider`, covered by unit tests, and removed mock-location condition complexity from telemetry setup.
+- `shouldSwitchToDroneVideoSource`: extracted from `WildBridgeDefaultLayoutActivity`, making aircraft connection source switching explicit and removing its condition complexity finding.
 
 Reports to inspect:
 
@@ -75,6 +76,10 @@ What we should do:
 Good first extraction target:
 
 - the local HTTP/control server and `handlePostRequest` logic, because it is both long and complex and can become testable without the full Android UI.
+
+Done already:
+
+- Aircraft connection source-switching logic was named as `shouldSwitchToDroneVideoSource`, reducing condition complexity in `applyAircraftConnectionState`.
 
 ### 2. WebRTC Flow Complexity
 

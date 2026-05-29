@@ -872,7 +872,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun applyAircraftConnectionState(isConnected: Boolean, forceDroneSourceDefault: Boolean = false) {
         val wasConnected = aircraftConnected
         aircraftConnected = isConnected
-        if (isConnected && (forceDroneSourceDefault || !wasConnected) && getVideoSourceMode() != VideoSourceMode.DJI) {
+        if (shouldSwitchToDroneVideoSource(isConnected, wasConnected, forceDroneSourceDefault)) {
             sharedPreferences.edit()
                 .putString(PREF_VIDEO_SOURCE, VideoSourceMode.DJI.prefValue)
                 .putBoolean(PREF_MOCK_VIDEO_ENABLED, false)
@@ -886,6 +886,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         updatePhonePreviewVisibility()
         refreshMockTelemetryMode()
         invalidateOptionsMenu()
+    }
+
+    private fun shouldSwitchToDroneVideoSource(
+        isConnected: Boolean,
+        wasConnected: Boolean,
+        forceDroneSourceDefault: Boolean
+    ): Boolean {
+        val shouldSelectDroneSource = forceDroneSourceDefault || !wasConnected
+        return isConnected && shouldSelectDroneSource && getVideoSourceMode() != VideoSourceMode.DJI
     }
 
     private fun updateMockVideoVisibility() {
