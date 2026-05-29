@@ -313,44 +313,28 @@ object DroneController {
      * - The drone is no longer in virtual stick mode (user took manual control)
      */
     private fun shouldControlLoopContinue(loopId: Long): Boolean {
-        // Check if loop was cancelled or a new one started
-        if (!controlLoopEnabled || loopId != currentControlLoopId) {
-            return false
-        }
-
-        // If manual override was triggered, stop immediately
-        if (isManualOverrideActive) {
-            controlLoopEnabled = false
-            return false
-        }
-        
-        // Give virtual stick time to enable before checking its state
-        // enableVirtualStick() is async, so we need a grace period
         val timeSinceStart = System.currentTimeMillis() - controlLoopStartTime
-        if (timeSinceStart < VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS) {
-            // Still in grace period, don't check virtual stick state yet
-            return true
-        }
-        
-        // Check if drone is still in virtual stick mode
-        // If virtual stick gets disabled while a loop is running, kill the loop.
         val isVirtualStickEnabled = virtualStickVM
             ?.currentVirtualStickStateInfo
             ?.value
             ?.state
             ?.isVirtualStickEnable ?: false
-        if (!isVirtualStickEnabled) {
-            // Virtual stick was disabled externally.
-            // NOTE: Do NOT call activateManualOverride() here — virtual stick can be disabled
-            // by the system itself (e.g. disableVirtualStick() called by startTakeOff(), signal
-            // loss recovery, FC safety checks) which would spuriously latch manual override and
-            // block subsequent autonomous commands.  Real pilot RC-stick intervention is detected
-            // in VirtualStickVM.tryUpdateVirtualStickByRc() while isAutonomousFlightActive is true.
+
+        val decision = ControlLoopContinuation.decide(
+            ControlLoopContinuation.State(
+                controlLoopEnabled = controlLoopEnabled,
+                loopId = loopId,
+                currentControlLoopId = currentControlLoopId,
+                manualOverrideActive = isManualOverrideActive,
+                timeSinceStartMs = timeSinceStart,
+                virtualStickEnableGracePeriodMs = VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS,
+                virtualStickEnabled = isVirtualStickEnabled
+            )
+        )
+        if (decision.shouldDisableControlLoop) {
             controlLoopEnabled = false
-            return false
         }
-        
-        return true
+        return decision.shouldContinue
     }
 
     // Keep track of last KMZ pushed/started
