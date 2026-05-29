@@ -194,50 +194,18 @@ class WhipPublisher(
             setEnabled(true)
             localPreviewSink?.let { addSink(it) }
         }
-        val startingFrameCount = when (videoCapturer) {
-            is SharedVideoCapturerHandle -> videoCapturer.totalOutputFrames()
-            is MockMp4VideoCapturer -> videoCapturer.totalOutputFrames()
-            is SharedPhoneVideoCapturerHandle -> videoCapturer.totalOutputFrames()
-            else -> 0L
-        }
+        val firstFrameGate = createFirstFrameGate(videoCapturer)
+        val startingFrameCount = firstFrameGate?.totalOutputFrames() ?: 0L
         videoCapturer.initialize(surfaceTextureHelper, appContext, videoSource!!.capturerObserver)
         videoCapturer.startCapture(
             options.videoResolutionWidth,
             options.videoResolutionHeight,
             currentFps
         )
-
-        when (videoCapturer) {
-            is SharedVideoCapturerHandle -> {
-                if (!videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
-                    Log.w(TAG, "No DJI video frames before WHIP offer; recovering capture")
-                    videoCapturer.recoverCapture("no frames before WHIP offer")
-                    check(videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_RECOVERY_TIMEOUT_MS)) {
-                        "No DJI video frames available for WHIP publishing"
-                    }
-                }
-            }
-            is MockMp4VideoCapturer -> {
-                check(videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
-                    "No mock MP4 video frames available for WHIP publishing"
-                }
-            }
-            is SharedPhoneVideoCapturerHandle -> {
-                check(videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
-                    "No shared phone camera frames available for WHIP publishing"
-                }
-            }
-        }
+        firstFrameGate?.awaitFirstFrame(startingFrameCount, FIRST_FRAME_TIMEOUT_MS, FIRST_FRAME_RECOVERY_TIMEOUT_MS)
 
         // 2. Create PeerConnection
-        val rtcConfig = PeerConnection.RTCConfiguration(
-            listOf(
-                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
-                    .createIceServer()
-            )
-        ).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        }
+        val rtcConfig = whipRtcConfiguration()
 
         // Disable CPU overuse detection so WebRTC doesn't auto-downscale resolution
         disableCpuOveruseDetection(rtcConfig)
@@ -245,38 +213,17 @@ class WhipPublisher(
         val iceGatherLatch = CountDownLatch(1)
         val connected = AtomicBoolean(false)
 
-        peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onSignalingChange(s: PeerConnection.SignalingState) = Unit
-            override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) {
-                Log.d(TAG, "ICE connection: $s")
-                when (s) {
-                    PeerConnection.IceConnectionState.CONNECTED -> {
-                        connected.set(true)
-                        isPublishing.set(true)
-                        mainHandler.post { listener?.onPublishing() }
-                    }
-                    PeerConnection.IceConnectionState.FAILED,
-                    PeerConnection.IceConnectionState.DISCONNECTED,
-                    PeerConnection.IceConnectionState.CLOSED -> {
-                        connected.set(false)
-                    }
-                    else -> {}
+        peerConnection = factory.createPeerConnection(
+            rtcConfig,
+            WhipConnectionObserver(
+                iceGatherLatch = iceGatherLatch,
+                connected = connected,
+                onPublishing = {
+                    isPublishing.set(true)
+                    mainHandler.post { listener?.onPublishing() }
                 }
-            }
-            override fun onIceConnectionReceivingChange(b: Boolean) = Unit
-            override fun onIceGatheringChange(s: PeerConnection.IceGatheringState) {
-                if (s == PeerConnection.IceGatheringState.COMPLETE) {
-                    iceGatherLatch.countDown()
-                }
-            }
-            override fun onIceCandidate(c: IceCandidate) = Unit
-            override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) = Unit
-            override fun onAddStream(s: MediaStream) = Unit
-            override fun onRemoveStream(s: MediaStream) = Unit
-            override fun onDataChannel(dc: DataChannel) = Unit
-            override fun onRenegotiationNeeded() = Unit
-            override fun onAddTrack(r: RtpReceiver, ss: Array<out MediaStream>) = Unit
-        })
+            )
+        )
 
         // Add video track (sendonly — mediamtx doesn't send back video)
         peerConnection!!.addTrack(videoTrack, listOf(options.mediaStreamId))
@@ -287,44 +234,7 @@ class WhipPublisher(
         }
 
         // 3. Create offer
-        val offerLatch = CountDownLatch(1)
-        var localSdp: SessionDescription? = null
-
-        val constraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
-        }
-
-        peerConnection!!.createOffer(object : SdpObserver {
-            override fun onCreateSuccess(sdp: SessionDescription) {
-                // Force H264 and set short keyframe interval for loss recovery
-                val mungedSdp = SessionDescription(
-                    sdp.type,
-                    SdpUtils.mungeForH264(sdp.description)
-                )
-                peerConnection!!.setLocalDescription(object : SdpObserver {
-                    override fun onSetSuccess() {
-                        localSdp = mungedSdp
-                        offerLatch.countDown()
-                    }
-                    override fun onSetFailure(err: String) {
-                        Log.e(TAG, "setLocalDescription failed: $err")
-                        offerLatch.countDown()
-                    }
-                    override fun onCreateSuccess(s: SessionDescription?) = Unit
-                    override fun onCreateFailure(s: String?) = Unit
-                }, mungedSdp)
-            }
-            override fun onCreateFailure(err: String) {
-                Log.e(TAG, "createOffer failed: $err")
-                offerLatch.countDown()
-            }
-            override fun onSetSuccess() = Unit
-            override fun onSetFailure(s: String?) = Unit
-        }, constraints)
-
-        offerLatch.await(5, TimeUnit.SECONDS)
-    check(localSdp != null) { "Failed to create SDP offer" }
+        createAndSetLocalOffer(peerConnection!!)
 
         // 4. Wait for ICE gathering to finish (full SDP needed for WHIP)
         if (!iceGatherLatch.await(ICE_GATHER_TIMEOUT_S, TimeUnit.SECONDS)) {
@@ -340,32 +250,12 @@ class WhipPublisher(
         val answerSdp = postWhipOffer(offerSdp)
 
         // 6. Set remote description (answer from mediamtx)
-        val answerLatch = CountDownLatch(1)
-        val answer = SessionDescription(SessionDescription.Type.ANSWER, answerSdp)
-        peerConnection!!.setRemoteDescription(object : SdpObserver {
-            override fun onSetSuccess() { answerLatch.countDown() }
-            override fun onSetFailure(err: String) {
-                Log.e(TAG, "setRemoteDescription failed: $err")
-                answerLatch.countDown()
-            }
-            override fun onCreateSuccess(s: SessionDescription?) = Unit
-            override fun onCreateFailure(s: String?) = Unit
-        }, answer)
-        answerLatch.await(5, TimeUnit.SECONDS)
+        setRemoteWhipAnswer(peerConnection!!, answerSdp)
 
         Log.i(TAG, "WHIP publish started — waiting for connection")
 
         // 7. Wait until connection drops or we're stopped
-        while (
-            isRunning.get() &&
-            (connected.get() || peerConnection?.iceConnectionState() == PeerConnection.IceConnectionState.CHECKING)
-        ) {
-            Thread.sleep(500)
-        }
-
-        if (isRunning.get()) {
-            Log.w(TAG, "WHIP connection lost — will reconnect")
-        }
+        waitForWhipConnectionLoss(isRunning, connected) { peerConnection }
     }
 
     /**
@@ -493,6 +383,219 @@ internal fun absoluteWhipResourceUrl(url: URL, location: String?): String? {
 }
 
 private fun URL.portSegment(): String = if (port >= 0) ":$port" else ""
+
+private fun whipRtcConfiguration(): PeerConnection.RTCConfiguration {
+    return PeerConnection.RTCConfiguration(
+        listOf(
+            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
+                .createIceServer()
+        )
+    ).apply {
+        sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+    }
+}
+
+private fun whipOfferConstraints(): MediaConstraints {
+    return MediaConstraints().apply {
+        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+    }
+}
+
+private fun createAndSetLocalOffer(peerConnection: PeerConnection) {
+    val offerLatch = CountDownLatch(1)
+    var localSdp: SessionDescription? = null
+
+    peerConnection.createOffer(
+        WhipOfferObserver(peerConnection, offerLatch) { sdp -> localSdp = sdp },
+        whipOfferConstraints()
+    )
+
+    offerLatch.await(5, TimeUnit.SECONDS)
+    check(localSdp != null) { "Failed to create SDP offer" }
+}
+
+private fun setRemoteWhipAnswer(peerConnection: PeerConnection, answerSdp: String) {
+    val answerLatch = CountDownLatch(1)
+    val answer = SessionDescription(SessionDescription.Type.ANSWER, answerSdp)
+    peerConnection.setRemoteDescription(WhipRemoteDescriptionObserver(answerLatch), answer)
+    answerLatch.await(5, TimeUnit.SECONDS)
+}
+
+private fun waitForWhipConnectionLoss(
+    isRunning: AtomicBoolean,
+    connected: AtomicBoolean,
+    peerConnection: () -> PeerConnection?
+) {
+    while (
+        isRunning.get() &&
+        (connected.get() || peerConnection()?.iceConnectionState() == PeerConnection.IceConnectionState.CHECKING)
+    ) {
+        Thread.sleep(500)
+    }
+
+    if (isRunning.get()) {
+        Log.w("WhipPublisher", "WHIP connection lost — will reconnect")
+    }
+}
+
+@Suppress("TooManyFunctions")
+private class WhipConnectionObserver(
+    private val iceGatherLatch: CountDownLatch,
+    private val connected: AtomicBoolean,
+    private val onPublishing: () -> Unit
+) : PeerConnection.Observer {
+    override fun onSignalingChange(s: PeerConnection.SignalingState) = Unit
+
+    override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) {
+        Log.d("WhipPublisher", "ICE connection: $s")
+        when (s) {
+            PeerConnection.IceConnectionState.CONNECTED -> {
+                connected.set(true)
+                onPublishing()
+            }
+            PeerConnection.IceConnectionState.FAILED,
+            PeerConnection.IceConnectionState.DISCONNECTED,
+            PeerConnection.IceConnectionState.CLOSED -> {
+                connected.set(false)
+            }
+            else -> Unit
+        }
+    }
+
+    override fun onIceConnectionReceivingChange(b: Boolean) = Unit
+
+    override fun onIceGatheringChange(s: PeerConnection.IceGatheringState) {
+        if (s == PeerConnection.IceGatheringState.COMPLETE) {
+            iceGatherLatch.countDown()
+        }
+    }
+
+    override fun onIceCandidate(c: IceCandidate) = Unit
+    override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) = Unit
+    override fun onAddStream(s: MediaStream) = Unit
+    override fun onRemoveStream(s: MediaStream) = Unit
+    override fun onDataChannel(dc: DataChannel) = Unit
+    override fun onRenegotiationNeeded() = Unit
+    override fun onAddTrack(r: RtpReceiver, ss: Array<out MediaStream>) = Unit
+}
+
+private class WhipOfferObserver(
+    private val peerConnection: PeerConnection,
+    private val offerLatch: CountDownLatch,
+    private val onLocalSdp: (SessionDescription) -> Unit
+) : SdpObserver {
+    override fun onCreateSuccess(sdp: SessionDescription) {
+        val mungedSdp = SessionDescription(
+            sdp.type,
+            SdpUtils.mungeForH264(sdp.description)
+        )
+        peerConnection.setLocalDescription(
+            WhipSetLocalDescriptionObserver(offerLatch) { onLocalSdp(mungedSdp) },
+            mungedSdp
+        )
+    }
+
+    override fun onCreateFailure(err: String) {
+        Log.e("WhipPublisher", "createOffer failed: $err")
+        offerLatch.countDown()
+    }
+
+    override fun onSetSuccess() = Unit
+    override fun onSetFailure(s: String?) = Unit
+}
+
+private class WhipSetLocalDescriptionObserver(
+    private val offerLatch: CountDownLatch,
+    private val onSet: () -> Unit
+) : SdpObserver {
+    override fun onSetSuccess() {
+        onSet()
+        offerLatch.countDown()
+    }
+
+    override fun onSetFailure(err: String) {
+        Log.e("WhipPublisher", "setLocalDescription failed: $err")
+        offerLatch.countDown()
+    }
+
+    override fun onCreateSuccess(s: SessionDescription?) = Unit
+    override fun onCreateFailure(s: String?) = Unit
+}
+
+private class WhipRemoteDescriptionObserver(private val answerLatch: CountDownLatch) : SdpObserver {
+    override fun onSetSuccess() {
+        answerLatch.countDown()
+    }
+
+    override fun onSetFailure(err: String) {
+        Log.e("WhipPublisher", "setRemoteDescription failed: $err")
+        answerLatch.countDown()
+    }
+
+    override fun onCreateSuccess(s: SessionDescription?) = Unit
+    override fun onCreateFailure(s: String?) = Unit
+}
+
+private fun createFirstFrameGate(capturer: VideoCapturer): WhipFirstFrameGate? {
+    return when (capturer) {
+        is SharedVideoCapturerHandle -> WhipFirstFrameGate(
+            waiter = object : WhipFirstFrameWaiter {
+                override fun totalOutputFrames(): Long = capturer.totalOutputFrames()
+                override fun waitForOutputFrameAfter(frameCount: Long, timeoutMs: Long): Boolean {
+                    return capturer.waitForOutputFrameAfter(frameCount, timeoutMs)
+                }
+            },
+            unavailableMessage = "No DJI video frames available for WHIP publishing",
+            recoverBeforeRetry = { capturer.recoverCapture("no frames before WHIP offer") },
+            recoveryLogMessage = "No DJI video frames before WHIP offer; recovering capture"
+        )
+        is MockMp4VideoCapturer -> WhipFirstFrameGate(
+            waiter = object : WhipFirstFrameWaiter {
+                override fun totalOutputFrames(): Long = capturer.totalOutputFrames()
+                override fun waitForOutputFrameAfter(frameCount: Long, timeoutMs: Long): Boolean {
+                    return capturer.waitForOutputFrameAfter(frameCount, timeoutMs)
+                }
+            },
+            unavailableMessage = "No mock MP4 video frames available for WHIP publishing"
+        )
+        is SharedPhoneVideoCapturerHandle -> WhipFirstFrameGate(
+            waiter = object : WhipFirstFrameWaiter {
+                override fun totalOutputFrames(): Long = capturer.totalOutputFrames()
+                override fun waitForOutputFrameAfter(frameCount: Long, timeoutMs: Long): Boolean {
+                    return capturer.waitForOutputFrameAfter(frameCount, timeoutMs)
+                }
+            },
+            unavailableMessage = "No shared phone camera frames available for WHIP publishing"
+        )
+        else -> null
+    }
+}
+
+internal interface WhipFirstFrameWaiter {
+    fun totalOutputFrames(): Long
+    fun waitForOutputFrameAfter(frameCount: Long, timeoutMs: Long): Boolean
+}
+
+internal class WhipFirstFrameGate(
+    private val waiter: WhipFirstFrameWaiter,
+    private val unavailableMessage: String,
+    private val recoverBeforeRetry: (() -> Unit)? = null,
+    private val recoveryLogMessage: String? = null
+) {
+    fun totalOutputFrames(): Long = waiter.totalOutputFrames()
+
+    fun awaitFirstFrame(startingFrameCount: Long, firstTimeoutMs: Long, recoveryTimeoutMs: Long) {
+        if (waiter.waitForOutputFrameAfter(startingFrameCount, firstTimeoutMs)) return
+        recoverBeforeRetry?.let { recover ->
+            recoveryLogMessage?.let { Log.w("WhipPublisher", it) }
+            recover()
+            check(waiter.waitForOutputFrameAfter(startingFrameCount, recoveryTimeoutMs)) { unavailableMessage }
+            return
+        }
+        error(unavailableMessage)
+    }
+}
 
 private fun sleepBeforeReconnect(delayMs: Long): Boolean {
     return try {

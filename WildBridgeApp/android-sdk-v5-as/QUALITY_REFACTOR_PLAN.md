@@ -59,6 +59,7 @@ Focused refactors completed so far:
 - `DroneController`: fixed a small constant declaration and wrapped mission/trajectory lines before the larger controller split.
 - `WildBridgeDefaultLayoutActivity`: converted required listener no-ops to explicit `Unit` bodies and removed an unused edge-detection setter.
 - Added characterization tests for refactored WebRTC metadata parsing, stream metrics labels, and WHIP resource URL handling; fixed relative WHIP resource URLs for endpoints without explicit ports.
+- `WhipPublisher`: added characterization tests for first-frame wait/recovery behavior, extracted the WHIP first-frame gate, and split publish setup into named peer-connection, SDP offer, remote-answer, and connection-wait helpers. The `publish` method no longer appears as a WildBridge Detekt `LongMethod` finding.
 
 Reports to inspect:
 
@@ -150,6 +151,8 @@ Done already:
 - WHIP publisher imports are explicit, and the simple frame-rate/logging line findings are cleared.
 - Mock MP4 startup and frame emission now share the same explicit failure-reporting style as the other capturers.
 - Shared DJI camera selection now uses a single fallback expression, reducing return-count noise around camera availability changes.
+- WHIP first-frame availability is now handled by a small tested gate, preserving the DJI recovery retry while keeping mock/phone sources as single-attempt checks.
+- WHIP publishing now delegates peer-connection observer setup, SDP offer creation, remote-answer application, and connection-loss waiting to focused helpers, removing the `publish` long-method finding.
 
 ### 3. Edge Detection Pipeline Complexity
 
