@@ -16,10 +16,10 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * VideoCapturer implementation for DJI SDK V5 that captures frames
  * from the drone's camera using CameraStreamManager.
- * 
+ *
  * This adapter captures YUV frames from the DJI camera and converts them
  * to WebRTC VideoFrames for transmission via WebRTC.
- * 
+ *
  * Also captures synchronized telemetry metadata for each frame.
  */
 class DJIV5VideoCapturer(
@@ -32,7 +32,7 @@ class DJIV5VideoCapturer(
 
     companion object {
         private const val TAG = "DJIV5VideoCapturer"
-        
+
         // Resolution presets
         const val FULL_HD_WIDTH = 1920
         const val FULL_HD_HEIGHT = 1080
@@ -48,17 +48,17 @@ class DJIV5VideoCapturer(
     private var lastSourceWidth = 0
     private var lastSourceHeight = 0
     private val lastSentTimestampNs = AtomicLong(0L)
-    
+
     // Frame counter for metadata synchronization
     private val frameCounter = AtomicLong(0)
-    
+
     // Listener for frame metadata (called for each frame with synchronized telemetry)
     var metadataListener: FrameMetadataListener? = null
-    
+
     interface FrameMetadataListener {
         fun onFrameMetadata(metadata: FrameMetadata)
     }
-    
+
     private val cameraStreamManager: ICameraStreamManager by lazy {
         MediaDataCenter.getInstance().cameraStreamManager
     }
@@ -74,68 +74,68 @@ class DJIV5VideoCapturer(
         ) {
             if (!isCapturing.get() || capturerObserver == null) return
 
-            try {
-                val timestampNs = System.nanoTime()
-
-                // Cap output FPS by dropping frames that arrive too soon.
-                val previousSent = lastSentTimestampNs.get()
-                if (previousSent != 0L && (timestampNs - previousSent) < frameIntervalNs) {
-                    return
-                }
-                lastSentTimestampNs.set(timestampNs)
-
-                // Log source resolution changes
-                if (width != lastSourceWidth || height != lastSourceHeight) {
-                    lastSourceWidth = width
-                    lastSourceHeight = height
-                    Log.d(TAG, "Source: ${width}x${height}, Target: ${targetWidth}x${targetHeight}, Scale: $scaleToTarget")
-                }
-
-                val frameNumber = frameCounter.incrementAndGet()
-                
-                val (outputWidth, outputHeight) = chooseOutputSize(width, height)
-                
-                // Capture synchronized telemetry metadata at this exact moment
-                metadataListener?.let { listener ->
-                    val metadata = TelemetryProvider.captureMetadata(
-                        frameNumber = frameNumber,
-                        timestampNs = timestampNs,
-                        frameWidth = outputWidth,
-                        frameHeight = outputHeight,
-                        droneName = droneName
-                    )
-                    Log.v(TAG, "Captured metadata for frame $frameNumber: lat=${metadata.latitude}, lon=${metadata.longitude}, battery=${metadata.batteryPercent}%")
-                    listener.onFrameMetadata(metadata)
-                }
-                
-                // Create NV21 buffer from the frame data
-                val buffer = NV21Buffer(
-                    frameData,
-                    width,
-                    height,
-                    null
-                )
-                
-                // Scale to target resolution if enabled and dimensions differ
-                val needsScale = scaleToTarget && (width != outputWidth || height != outputHeight)
-                val outputBuffer = if (needsScale) {
-                    val scaled = buffer.cropAndScale(
-                        0, 0, width, height,  // Use full source frame
-                        outputWidth, outputHeight
-                    )
-                    buffer.release()  // Release the original; cropAndScale made a copy
-                    scaled
-                } else {
-                    buffer
-                }
-                
-                val videoFrame = VideoFrame(outputBuffer, 0, timestampNs)
-                capturerObserver?.onFrameCaptured(videoFrame)
-                videoFrame.release()
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Error processing frame: ${e.message}", e)
+            runCatching {
+                processFrame(frameData, width, height)
+            }.onFailure { error ->
+                Log.e(TAG, "Error processing frame: ${error.message}", error)
             }
+        }
+    }
+
+    private fun processFrame(frameData: ByteArray, width: Int, height: Int) {
+        val timestampNs = System.nanoTime()
+        val previousSent = lastSentTimestampNs.get()
+        if (previousSent != 0L && timestampNs - previousSent < frameIntervalNs) return
+        lastSentTimestampNs.set(timestampNs)
+
+        if (width != lastSourceWidth || height != lastSourceHeight) {
+            lastSourceWidth = width
+            lastSourceHeight = height
+            Log.d(
+                TAG,
+                "Source: ${width}x${height}, Target: " +
+                    "${targetWidth}x${targetHeight}, Scale: $scaleToTarget"
+            )
+        }
+
+        val frameNumber = frameCounter.incrementAndGet()
+        val (outputWidth, outputHeight) = chooseOutputSize(width, height)
+        notifyMetadataListener(frameNumber, timestampNs, outputWidth, outputHeight)
+        DjiVideoFrameDelivery.deliver(
+            request = DjiFrameDeliveryRequest(
+                frameData = frameData,
+                sourceWidth = width,
+                sourceHeight = height,
+                outputWidth = outputWidth,
+                outputHeight = outputHeight,
+                timestampNs = timestampNs
+            ),
+            observer = capturerObserver,
+            scaleToTarget = scaleToTarget
+        )
+    }
+
+    private fun notifyMetadataListener(
+        frameNumber: Long,
+        timestampNs: Long,
+        outputWidth: Int,
+        outputHeight: Int
+    ) {
+        metadataListener?.let { listener ->
+            val metadata = TelemetryProvider.captureMetadata(
+                frameNumber = frameNumber,
+                timestampNs = timestampNs,
+                frameWidth = outputWidth,
+                frameHeight = outputHeight,
+                droneName = droneName
+            )
+            Log.v(
+                TAG,
+                "Captured metadata for frame $frameNumber: " +
+                    "lat=${metadata.latitude}, lon=${metadata.longitude}, " +
+                    "battery=${metadata.batteryPercent}%"
+            )
+            listener.onFrameMetadata(metadata)
         }
     }
 
@@ -164,7 +164,7 @@ class DJIV5VideoCapturer(
         frameIntervalNs = 1_000_000_000L / targetFps.toLong()
         lastSentTimestampNs.set(0L)
         Log.d(TAG, "Starting capture: ${targetWidth}x${targetHeight}@${targetFps}fps (scale=$scaleToTarget)")
-        
+
         if (isCapturing.compareAndSet(false, true)) {
             // Register frame listener with NV21 format (compatible with WebRTC's NV21Buffer)
             cameraStreamManager.addFrameListener(
@@ -172,7 +172,7 @@ class DJIV5VideoCapturer(
                 ICameraStreamManager.FrameFormat.NV21,
                 frameListener
             )
-            
+
             capturerObserver?.onCapturerStarted(true)
             Log.d(TAG, "Capture started successfully")
         }
@@ -180,7 +180,7 @@ class DJIV5VideoCapturer(
 
     override fun stopCapture() {
         Log.d(TAG, "Stopping capture")
-        
+
         if (isCapturing.compareAndSet(true, false)) {
             cameraStreamManager.removeFrameListener(frameListener)
             capturerObserver?.onCapturerStopped()
@@ -206,7 +206,9 @@ class DJIV5VideoCapturer(
         }
         Log.d(
             TAG,
-            "Changing target resolution: ${previousWidth}x${previousHeight} (scale=$previousScale) -> ${targetWidth}x${targetHeight} (scale=$scaleToTarget)"
+            "Changing target resolution: " +
+                "${previousWidth}x${previousHeight} (scale=$previousScale) -> " +
+                "${targetWidth}x${targetHeight} (scale=$scaleToTarget)"
         )
     }
 
@@ -225,4 +227,45 @@ class DJIV5VideoCapturer(
     }
 
     override fun isScreencast(): Boolean = false
+}
+
+private data class DjiFrameDeliveryRequest(
+    val frameData: ByteArray,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+    val outputWidth: Int,
+    val outputHeight: Int,
+    val timestampNs: Long
+)
+
+private object DjiVideoFrameDelivery {
+    fun deliver(
+        request: DjiFrameDeliveryRequest,
+        observer: CapturerObserver?,
+        scaleToTarget: Boolean
+    ) {
+        val buffer = NV21Buffer(request.frameData, request.sourceWidth, request.sourceHeight, null)
+        val outputBuffer = if (request.needsScale(scaleToTarget)) {
+            val scaled = buffer.cropAndScale(
+                0,
+                0,
+                request.sourceWidth,
+                request.sourceHeight,
+                request.outputWidth,
+                request.outputHeight
+            )
+            buffer.release()
+            scaled
+        } else {
+            buffer
+        }
+
+        val videoFrame = VideoFrame(outputBuffer, 0, request.timestampNs)
+        observer?.onFrameCaptured(videoFrame)
+        videoFrame.release()
+    }
+
+    private fun DjiFrameDeliveryRequest.needsScale(scaleToTarget: Boolean): Boolean {
+        return scaleToTarget && (sourceWidth != outputWidth || sourceHeight != outputHeight)
+    }
 }
