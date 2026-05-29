@@ -93,10 +93,10 @@ class SharedDJIFrameSource(
         // Begin observing available cameras as early as possible so we can
         // attach the frame listener to a camera index that actually exists
         // on the connected aircraft.
-        try {
+        runCatching {
             cameraStreamManager.addAvailableCameraUpdatedListener(availableCameraListener)
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not register available-camera listener: ${e.message}")
+        }.onFailure { error ->
+            Log.w(TAG, "Could not register available-camera listener: ${error.message}")
         }
     }
 
@@ -108,12 +108,9 @@ class SharedDJIFrameSource(
      *  3. The first entry in the list as a last resort.
      */
     private fun pickCameraIndex(available: List<ComponentIndexType>): ComponentIndexType? {
-        if (available.isEmpty()) return null
-        if (available.contains(preferredCameraIndex)) return preferredCameraIndex
-        for (candidate in CAMERA_PREFERENCE) {
-            if (available.contains(candidate)) return candidate
-        }
-        return available.first()
+        return preferredCameraIndex.takeIf { available.contains(it) }
+            ?: CAMERA_PREFERENCE.firstOrNull { available.contains(it) }
+            ?: available.firstOrNull()
     }
 
     @Synchronized
@@ -128,11 +125,15 @@ class SharedDJIFrameSource(
         }
         val previous = activeCameraIndex
         activeCameraIndex = resolved
-        Log.i(TAG, "Active camera index changed: $previous -> $resolved (available: $available, preferred: $preferredCameraIndex)")
+        Log.i(
+            TAG,
+            "Active camera index changed: $previous -> $resolved " +
+                "(available: $available, preferred: $preferredCameraIndex)"
+        )
 
         // If we're already streaming, re-attach the frame listener to the new index.
         if (isCapturing.get()) {
-            try {
+            runCatching {
                 cameraStreamManager.removeFrameListener(frameListener)
                 cameraStreamManager.addFrameListener(
                     activeCameraIndex,
@@ -140,8 +141,8 @@ class SharedDJIFrameSource(
                     frameListener
                 )
                 Log.i(TAG, "Re-attached frame listener on $activeCameraIndex")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to re-attach frame listener on $activeCameraIndex: ${e.message}", e)
+            }.onFailure { error ->
+                Log.e(TAG, "Failed to re-attach frame listener on $activeCameraIndex: ${error.message}", error)
             }
         }
     }
@@ -179,7 +180,11 @@ class SharedDJIFrameSource(
                 if (width != lastSourceWidth || height != lastSourceHeight) {
                     lastSourceWidth = width
                     lastSourceHeight = height
-                    Log.d(TAG, "Source: ${width}x${height}, Target: ${targetWidth}x${targetHeight}, Scale: $scaleToTarget")
+                    Log.d(
+                        TAG,
+                        "Source: ${width}x${height}, Target: " +
+                            "${targetWidth}x${targetHeight}, Scale: $scaleToTarget"
+                    )
                 }
 
                 val frameNumber = frameCounter.incrementAndGet()
@@ -360,7 +365,11 @@ class SharedDJIFrameSource(
             targetFps = fps.coerceAtLeast(1)
             frameIntervalNs = 1_000_000_000L / targetFps.toLong()
             lastSentTimestampNs.set(0L)
-            Log.d(TAG, "Starting shared capture: ${targetWidth}x${targetHeight}@${targetFps}fps on camera $activeCameraIndex (preferred: $preferredCameraIndex)")
+            Log.d(
+                TAG,
+                "Starting shared capture: ${targetWidth}x${targetHeight}@$targetFps fps " +
+                    "on camera $activeCameraIndex (preferred: $preferredCameraIndex)"
+            )
             runCatching { cameraStreamManager.enableStream(activeCameraIndex, true) }
                 .onFailure { Log.w(TAG, "Could not enable stream on $activeCameraIndex: ${it.message}") }
             cameraStreamManager.addFrameListener(
@@ -390,7 +399,9 @@ class SharedDJIFrameSource(
         applyResolutionRequest(width, height)
         Log.d(
             TAG,
-            "Changing target resolution: ${previousWidth}x${previousHeight} (scale=$previousScale) -> ${targetWidth}x${targetHeight} (scale=$scaleToTarget)"
+            "Changing target resolution: " +
+                "${previousWidth}x${previousHeight} (scale=$previousScale) -> " +
+                "${targetWidth}x${targetHeight} (scale=$scaleToTarget)"
         )
     }
 
@@ -421,7 +432,9 @@ class SharedDJIFrameSource(
         lastSentTimestampNs.set(0L)
         runCatching { cameraStreamManager.removeFrameListener(frameListener) }
         runCatching { cameraStreamManager.enableStream(activeCameraIndex, true) }
-            .onFailure { Log.w(TAG, "Could not enable stream during listener reset on $activeCameraIndex: ${it.message}") }
+            .onFailure {
+                Log.w(TAG, "Could not enable stream during listener reset on $activeCameraIndex: ${it.message}")
+            }
         cameraStreamManager.addFrameListener(
             activeCameraIndex,
             ICameraStreamManager.FrameFormat.NV21,
@@ -434,11 +447,9 @@ class SharedDJIFrameSource(
         if (isCapturing.compareAndSet(true, false)) {
             cameraStreamManager.removeFrameListener(frameListener)
         }
-        try {
+        runCatching {
             cameraStreamManager.removeAvailableCameraUpdatedListener(availableCameraListener)
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not remove available-camera listener: ${e.message}")
-        }
+        }.onFailure { error -> Log.w(TAG, "Could not remove available-camera listener: ${error.message}") }
         observers.clear()
         metadataListeners.clear()
         edgeDetectionFrameListener = null
