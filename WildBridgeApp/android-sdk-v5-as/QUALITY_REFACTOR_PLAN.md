@@ -52,6 +52,7 @@ Focused refactors completed so far:
 - `SharedDJIFrameSource`: simplified camera-index fallback and cleaned listener registration/recovery logging before tackling the larger frame-broadcast method.
 - `WildBridgeDefaultLayoutActivity.shouldAllowMockVideo`: removed the constant helper and used the mock source-mode check directly.
 - `WildBridgeFlightLogger`: split DJI log syncing and storage resolution out of the logger object, flattened directory fallback handling, and removed the logger from Detekt.
+- `FormationController`: removed unused private formation-position/collision helpers and cleaned import/exception style, leaving only the larger controller split for later.
 
 Reports to inspect:
 

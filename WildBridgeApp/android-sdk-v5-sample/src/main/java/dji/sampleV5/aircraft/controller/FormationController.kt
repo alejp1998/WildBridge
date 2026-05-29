@@ -10,14 +10,13 @@ import dji.sampleV5.aircraft.util.ToastUtils
 import dji.v5.et.create
 import dji.v5.et.get
 import org.java_websocket.WebSocket
-import org.java_websocket.server.WebSocketServer
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.handshake.ServerHandshake
+import org.java_websocket.server.WebSocketServer
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.URI
-import kotlin.math.*
 
 data class FormationConfig(
     val distanceBehind: Double = 1.0, // meters behind leader
@@ -52,7 +51,6 @@ object FormationController {
     private const val TAG = "FormationController"
     private const val WEBSOCKET_PORT = 8765
     private const val UPDATE_INTERVAL = 100L // ms
-    private const val CONNECTION_TIMEOUT = 5000L // ms
 
     // DJI SDK Keys for telemetry
     private val location3DKey = FlightControllerKey.KeyAircraftLocation3D.create()
@@ -150,24 +148,24 @@ object FormationController {
     }
 
     private fun startWebSocketServer() {
-        try {
+        runCatching {
             webSocketServer = FormationWebSocketServer(InetSocketAddress(WEBSOCKET_PORT))
             webSocketServer?.start()
             Log.i(TAG, "WebSocket server started on port $WEBSOCKET_PORT")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start WebSocket server", e)
-            ToastUtils.showToast("Failed to start server: ${e.message}")
+        }.onFailure { failure ->
+            Log.e(TAG, "Failed to start WebSocket server", failure)
+            ToastUtils.showToast("Failed to start server: ${failure.message}")
         }
     }
 
     private fun connectToLeader(ipAddress: String) {
-        try {
+        runCatching {
             val uri = URI("ws://$ipAddress:$WEBSOCKET_PORT")
             webSocketClient = FormationWebSocketClient(uri)
             webSocketClient?.connect()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to connect to leader", e)
-            ToastUtils.showToast("Failed to connect: ${e.message}")
+        }.onFailure { failure ->
+            Log.e(TAG, "Failed to connect to leader", failure)
+            ToastUtils.showToast("Failed to connect: ${failure.message}")
         }
     }
 
@@ -221,61 +219,8 @@ object FormationController {
         }
     }
 
-    private fun calculateFollowerTargetPosition(leader: DroneState, config: FormationConfig): LocationCoordinate3D {
-        val leaderPos = leader.position
-        val leaderHeading = leader.heading
-
-        return when (config.formationType) {
-            FormationType.BEHIND -> {
-                // Position behind the leader
-                val behindLat = leaderPos.latitude - (config.distanceBehind * cos(Math.toRadians(leaderHeading)) / 111320.0)
-                val behindLon = leaderPos.longitude - (config.distanceBehind * sin(Math.toRadians(leaderHeading)) / (111320.0 * cos(Math.toRadians(leaderPos.latitude))))
-                LocationCoordinate3D(behindLat, behindLon, leaderPos.altitude + config.altitudeOffset)
-            }
-            FormationType.BESIDE -> {
-                // Position to the right side of the leader
-                val sideHeading = leaderHeading + 90
-                val sideLat = leaderPos.latitude + (config.distanceBehind * cos(Math.toRadians(sideHeading)) / 111320.0)
-                val sideLon = leaderPos.longitude + (config.distanceBehind * sin(Math.toRadians(sideHeading)) / (111320.0 * cos(Math.toRadians(leaderPos.latitude))))
-                LocationCoordinate3D(sideLat, sideLon, leaderPos.altitude + config.altitudeOffset)
-            }
-            FormationType.DIAGONAL -> {
-                // Position diagonally behind and to the right
-                val diagHeading = leaderHeading + 45
-                val diagLat = leaderPos.latitude - (config.distanceBehind * cos(Math.toRadians(diagHeading)) / 111320.0)
-                val diagLon = leaderPos.longitude - (config.distanceBehind * sin(Math.toRadians(diagHeading)) / (111320.0 * cos(Math.toRadians(leaderPos.latitude))))
-                LocationCoordinate3D(diagLat, diagLon, leaderPos.altitude + config.altitudeOffset)
-            }
-        }
-    }
-
-    private fun checkCollisionRisk(follower: DroneState, leader: DroneState): Boolean {
-        val distance = DroneController.calculateDistance(
-            follower.position.latitude, follower.position.longitude,
-            leader.position.latitude, leader.position.longitude
-        )
-        val altitudeDiff = abs(follower.position.altitude - leader.position.altitude)
-
-        // Risk if too close horizontally and not enough vertical separation
-        return distance < 0.5 && altitudeDiff < 1.0
-    }
-
-    private fun executeCollisionAvoidance(follower: DroneState, leader: DroneState) {
-        // Simple collision avoidance: move up and away
-        val avoidanceAltitude = leader.position.altitude + 3.0
-        val awayHeading = DroneController.calculateBearing(
-            leader.position.latitude, leader.position.longitude,
-            follower.position.latitude, follower.position.longitude
-        ).toDouble()
-
-        val avoidanceLat = follower.position.latitude + (2.0 * cos(Math.toRadians(awayHeading)) / 111320.0)
-        val avoidanceLon = follower.position.longitude + (2.0 * sin(Math.toRadians(awayHeading)) / (111320.0 * cos(Math.toRadians(follower.position.latitude))))
-
-        ToastUtils.showToast("Collision avoidance active")
-    }
-
     private fun getCurrentDroneState(): DroneState {
-        return try {
+        return runCatching {
             val position = location3DKey.get(LocationCoordinate3D(0.0, 0.0, 0.0))
             val heading = compassHeadKey.get(0.0)
             val battery = batteryPercentKey.get(0)
@@ -287,8 +232,8 @@ object FormationController {
                 isConnected = true,
                 timestamp = System.currentTimeMillis()
             )
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting drone state", e)
+        }.getOrElse { failure ->
+            Log.e(TAG, "Error getting drone state", failure)
             DroneState(
                 position = LocationCoordinate3D(0.0, 0.0, 0.0),
                 heading = 0.0,
@@ -397,7 +342,7 @@ object FormationController {
     }
 
     private fun handleIncomingMessage(message: String) {
-        try {
+        runCatching {
             val json = JSONObject(message)
             val type = json.getString("type")
             val data = json.getJSONObject("data")
@@ -449,14 +394,14 @@ object FormationController {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing message: $message", e)
-        }
+        }.onFailure { failure -> Log.e(TAG, "Error parsing message: $message", failure) }
     }
 
     fun getConnectionStatus(): String {
         return when (role) {
-            DroneRole.LEADER -> if (webSocketServer?.connections?.isNotEmpty() == true) "Follower Connected" else "Waiting for Follower"
+            DroneRole.LEADER -> {
+                if (webSocketServer?.connections?.isNotEmpty() == true) "Follower Connected" else "Waiting for Follower"
+            }
             DroneRole.FOLLOWER -> if (webSocketClient?.isOpen == true) "Connected to Leader" else "Disconnected"
             DroneRole.NONE -> "No Role Selected"
         }
