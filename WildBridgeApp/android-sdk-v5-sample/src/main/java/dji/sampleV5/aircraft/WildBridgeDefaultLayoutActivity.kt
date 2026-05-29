@@ -257,9 +257,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             phoneLocation = location
             refreshMockTelemetryMode()
         }
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-        override fun onProviderEnabled(provider: String) {}
-        override fun onProviderDisabled(provider: String) {}
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+        override fun onProviderEnabled(provider: String) = Unit
+        override fun onProviderDisabled(provider: String) = Unit
     }
 
     // Phone Sensors & Status
@@ -338,11 +338,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             applyDetectedTargets(targets)
         }
 
-        override fun onTrackingTargetUpdate(target: AutoSensingTarget) { }
+        override fun onTrackingTargetUpdate(target: AutoSensingTarget) = Unit
 
-        override fun onIntelligentModelUpdate(models: MutableList<IntelligentModel>) { }
+        override fun onIntelligentModelUpdate(models: MutableList<IntelligentModel>) = Unit
 
-        override fun onRunningIntelligentModelUpdate(modelId: Int) { }
+        override fun onRunningIntelligentModelUpdate(modelId: Int) = Unit
     }
     // ==================== End AutoSensing Fields ====================
 
@@ -911,14 +911,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 updatePhonePreviewVisibility()
             }
 
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) = Unit
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                 stopPhoneCameraPreview()
                 return true
             }
 
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
         }
         updatePhonePreviewVisibility()
     }
@@ -1095,14 +1095,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 updateMockPreviewVisibility()
             }
 
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) = Unit
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                 stopMockVideoPreview()
                 return true
             }
 
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
         }
         updateMockPreviewVisibility()
     }
@@ -1504,15 +1504,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun isEdgeDetectionEnabled(): Boolean {
         return isDetectionsEnabled() && getDetectionSource() == DetectionSource.YOLO_ON_PHONE
-    }
-
-    private fun setEdgeDetectionEnabled(enabled: Boolean) {
-        if (enabled) {
-            setDetectionSource(DetectionSource.YOLO_ON_PHONE)
-            setDetectionsEnabled(true)
-        } else {
-            setDetectionsEnabled(false)
-        }
     }
 
     private fun startEdgeDetection() {

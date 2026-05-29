@@ -57,6 +57,7 @@ Focused refactors completed so far:
 - `SharedDJIFrameSource`: introduced an `Nv21Frame` value and private frame processor so the hot DJI frame callback only snapshots recipients and delegates delivery.
 - `WhipPublisher`: replaced ad-hoc publish precondition throws, flattened WHIP POST handling, and simplified reconnect-loop control.
 - `DroneController`: fixed a small constant declaration and wrapped mission/trajectory lines before the larger controller split.
+- `WildBridgeDefaultLayoutActivity`: converted required listener no-ops to explicit `Unit` bodies and removed an unused edge-detection setter.
 
 Reports to inspect:
 
