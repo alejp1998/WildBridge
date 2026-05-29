@@ -42,6 +42,7 @@ Focused refactors completed so far:
 - `FrameMetadata.fromJson`: moved detection compatibility parsing into named helpers, removing the metadata parser's Detekt formatting findings.
 - `EdgeDetectionController`: introduced `EdgeDetectionConfig`, shared frame-admission logic, and `runCatching` inference paths; the controller is now absent from the WildBridge Detekt report.
 - Empty placeholder files in `aircraft/formation` were removed; active formation logic remains in `aircraft/controller/FormationController.kt`.
+- Cleared remaining `NewLineAtEndOfFile` findings in small WildBridge Kotlin files.
 
 Reports to inspect:
 

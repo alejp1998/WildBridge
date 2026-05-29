@@ -51,6 +51,7 @@ enum class DroneControlProfile(
     )
 }
 
+
 object DroneControlProfiles {
     fun activeProfile(): DroneControlProfile {
         val detected = ProductKey.KeyProductType.create().get(ProductType.UNKNOWN)

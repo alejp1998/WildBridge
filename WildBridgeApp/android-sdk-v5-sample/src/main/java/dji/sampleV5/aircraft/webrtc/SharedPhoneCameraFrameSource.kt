@@ -149,6 +149,7 @@ object SharedPhoneCameraFrameSource {
     private fun even(value: Int): Int = (value - value % 2).coerceAtLeast(2)
 }
 
+
 class SharedPhoneVideoCapturerHandle(
     private val clientId: String,
     private val source: SharedPhoneCameraFrameSource = SharedPhoneCameraFrameSource
