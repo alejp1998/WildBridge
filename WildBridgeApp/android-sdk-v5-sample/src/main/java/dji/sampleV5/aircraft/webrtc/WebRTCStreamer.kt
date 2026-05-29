@@ -9,6 +9,7 @@ import org.webrtc.VideoSink
 import org.webrtc.VideoCapturer
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.SocketException
 
 /**
  * WebRTCStreamer manages DJI video capture and WHIP publishing for the drone feed.
@@ -45,7 +46,11 @@ class WebRTCStreamer(
     private var whipPublisher: WhipPublisher? = null
     private val frameRatePolicy = AdaptiveFrameRatePolicy(options.fps)
     @Volatile private var selectedOptions: WebRTCMediaOptions = options
-    @Volatile private var currentSourceMode: VideoSourceMode = if (mockVideoEnabled) VideoSourceMode.MOCK else VideoSourceMode.DJI
+    @Volatile private var currentSourceMode: VideoSourceMode = if (mockVideoEnabled) {
+        VideoSourceMode.MOCK
+    } else {
+        VideoSourceMode.DJI
+    }
     @Volatile private var currentOptions: WebRTCMediaOptions = optionsForSource(options, currentSourceMode)
     @Volatile private var currentWhipUrl: String? = null
     @Volatile private var localPreviewSink: VideoSink? = null
@@ -156,25 +161,7 @@ class WebRTCStreamer(
             detail = "fps=${frameRatePolicy.effectiveFps} target=${resolutionLabelForOptions(currentOptions)}"
         )
 
-        whipPublisher?.let { existingPublisher ->
-            if (currentWhipUrl == whipUrl && existingPublisher.isRunning() && existingPublisher.isPublishing()) {
-                Log.d(TAG, "WHIP publisher already healthy for $whipUrl")
-                logWhipLifecycle(
-                    event = "whip_start_skipped",
-                    whipUrl = whipUrl,
-                    detail = "publisher already running"
-                )
-                return
-            }
-            Log.w(TAG, "Restarting stale WHIP publisher for $whipUrl")
-            logWhipLifecycle(
-                event = "whip_restart_requested",
-                whipUrl = whipUrl,
-                detail = "stale publisher detected"
-            )
-            existingPublisher.stop()
-            whipPublisher = null
-        }
+        if (keepHealthyPublisherOrStopStale(whipUrl)) return
 
         TelemetryProvider.startListening()
         currentWhipUrl = whipUrl
@@ -194,55 +181,109 @@ class WebRTCStreamer(
             whipUrl = whipUrl,
             localPreviewSink = localPreviewSink
         ).apply {
-            this.listener = object : WhipPublisher.WhipListener {
-                override fun onPublishing() {
-                    val ip = getLocalIpAddress() ?: "Unknown"
-                    Log.i(TAG, "WHIP publishing from $ip to $whipUrl")
-                    logWhipLifecycle(
-                        event = "whip_publishing",
-                        whipUrl = whipUrl,
-                        detail = "localIp=$ip"
-                    )
-                    mainHandler.post {
-                        this@WebRTCStreamer.listener?.onServerStarted(ip, 0)
-                    }
-                }
-                override fun onDisconnected() {
-                    Log.w(TAG, "WHIP connection lost")
-                    logWhipLifecycle(
-                        event = "whip_disconnected",
-                        whipUrl = whipUrl,
-                        detail = "publisher disconnected"
-                    )
-                }
-                override fun onError(error: String) {
-                    Log.e(TAG, "WHIP error: $error")
-                    logWhipLifecycle(
-                        event = "whip_error",
-                        whipUrl = whipUrl,
-                        detail = error
-                    )
-                    mainHandler.post {
-                        this@WebRTCStreamer.listener?.onServerError("WHIP: $error")
-                    }
-                }
-            }
+            this.listener = createWhipListener(whipUrl)
             start()
         }
 
-        mainHandler.postDelayed({
-            val noFramesSinceStart = currentSourceMode == VideoSourceMode.DJI && djiFrameSource != null && djiFrameSource.observerCount() > 0 && djiFrameSource.totalOutputFrames() == startFrameCount
-            if (currentWhipUrl == whipUrl && noFramesSinceStart) {
-                val message = "Camera feed lost. The drone may have been idle too long or overheated; power-cycle the drone and let it cool down before retrying."
-                Log.w(TAG, message)
+        scheduleSourceLossCheck(whipUrl, djiFrameSource, startFrameCount)
+    }
+
+    private fun keepHealthyPublisherOrStopStale(whipUrl: String): Boolean {
+        val existingPublisher = whipPublisher
+        val keepPublisher = existingPublisher != null &&
+            currentWhipUrl == whipUrl &&
+            existingPublisher.isRunning() &&
+            existingPublisher.isPublishing()
+
+        if (keepPublisher) {
+            Log.d(TAG, "WHIP publisher already healthy for $whipUrl")
+            logWhipLifecycle(
+                event = "whip_start_skipped",
+                whipUrl = whipUrl,
+                detail = "publisher already running"
+            )
+        } else if (existingPublisher != null) {
+            Log.w(TAG, "Restarting stale WHIP publisher for $whipUrl")
+            logWhipLifecycle(
+                event = "whip_restart_requested",
+                whipUrl = whipUrl,
+                detail = "stale publisher detected"
+            )
+            existingPublisher.stop()
+            whipPublisher = null
+        }
+
+        return keepPublisher
+    }
+
+    private fun createWhipListener(whipUrl: String): WhipPublisher.WhipListener {
+        return object : WhipPublisher.WhipListener {
+            override fun onPublishing() {
+                val ip = getLocalIpAddress() ?: "Unknown"
+                Log.i(TAG, "WHIP publishing from $ip to $whipUrl")
                 logWhipLifecycle(
-                    event = "whip_source_lost",
+                    event = "whip_publishing",
                     whipUrl = whipUrl,
-                    detail = "no new DJI frames after start"
+                    detail = "localIp=$ip"
                 )
-                mainHandler.post { listener?.onServerError(message) }
+                mainHandler.post {
+                    this@WebRTCStreamer.listener?.onServerStarted(ip, 0)
+                }
             }
+
+            override fun onDisconnected() {
+                Log.w(TAG, "WHIP connection lost")
+                logWhipLifecycle(
+                    event = "whip_disconnected",
+                    whipUrl = whipUrl,
+                    detail = "publisher disconnected"
+                )
+            }
+
+            override fun onError(error: String) {
+                Log.e(TAG, "WHIP error: $error")
+                logWhipLifecycle(
+                    event = "whip_error",
+                    whipUrl = whipUrl,
+                    detail = error
+                )
+                mainHandler.post {
+                    this@WebRTCStreamer.listener?.onServerError("WHIP: $error")
+                }
+            }
+        }
+    }
+
+    private fun scheduleSourceLossCheck(
+        whipUrl: String,
+        djiFrameSource: SharedDJIFrameSource?,
+        startFrameCount: Long
+    ) {
+        mainHandler.postDelayed({
+            notifyIfDjiSourceLost(whipUrl, djiFrameSource, startFrameCount)
         }, 15_000L)
+    }
+
+    private fun notifyIfDjiSourceLost(
+        whipUrl: String,
+        djiFrameSource: SharedDJIFrameSource?,
+        startFrameCount: Long
+    ) {
+        val noFramesSinceStart = currentSourceMode == VideoSourceMode.DJI &&
+            djiFrameSource != null &&
+            djiFrameSource.observerCount() > 0 &&
+            djiFrameSource.totalOutputFrames() == startFrameCount
+        if (currentWhipUrl == whipUrl && noFramesSinceStart) {
+            val message = "Camera feed lost. The drone may have been idle too long or overheated; " +
+                "power-cycle the drone and let it cool down before retrying."
+            Log.w(TAG, message)
+            logWhipLifecycle(
+                event = "whip_source_lost",
+                whipUrl = whipUrl,
+                detail = "no new DJI frames after start"
+            )
+            mainHandler.post { listener?.onServerError(message) }
+        }
     }
 
     fun isRunning(): Boolean = whipPublisher?.isRunning() == true
@@ -347,7 +388,11 @@ class WebRTCStreamer(
             Log.w(TAG, "Recovering WebRTC pipeline: $reason")
             logWhipLifecycle(
                 event = "whip_source_degraded",
-                detail = "$reason proc=${metrics.averageFrameProcessingMs}ms req=${metrics.requestedWidth}x${metrics.requestedHeight} src=${metrics.sourceWidth}x${metrics.sourceHeight}"
+                detail = buildString {
+                    append("$reason proc=${metrics.averageFrameProcessingMs}ms")
+                    append(" req=${metrics.requestedWidth}x${metrics.requestedHeight}")
+                    append(" src=${metrics.sourceWidth}x${metrics.sourceHeight}")
+                }
             )
             sharedFrameSource?.recoverCapture(reason)
             restartWhipPublisher(reason)
@@ -376,20 +421,25 @@ class WebRTCStreamer(
      * Get the local IP address of the device
      */
     fun getLocalIpAddress(): String? {
-        try {
+        return try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
-                val networkInterface = interfaces.nextElement()
-                val addresses = networkInterface.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val address = addresses.nextElement()
-                    if (!address.isLoopbackAddress && address is Inet4Address) {
-                        return address.hostAddress
-                    }
-                }
+                findIpv4Address(interfaces.nextElement())?.let { return it }
             }
-        } catch (e: Exception) {
+            null
+        } catch (e: SocketException) {
             Log.e(TAG, "Error getting local IP: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun findIpv4Address(networkInterface: NetworkInterface): String? {
+        val addresses = networkInterface.inetAddresses
+        while (addresses.hasMoreElements()) {
+            val address = addresses.nextElement()
+            if (!address.isLoopbackAddress && address is Inet4Address) {
+                return address.hostAddress
+            }
         }
         return null
     }

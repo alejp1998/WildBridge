@@ -37,6 +37,7 @@ Focused refactors completed so far:
 - `MockTelemetryOrigin`: extracted from `TelemetryProvider`, covered by unit tests, and removed mock-location condition complexity from telemetry setup.
 - `shouldSwitchToDroneVideoSource`: extracted from `WildBridgeDefaultLayoutActivity`, making aircraft connection source switching explicit and removing its condition complexity finding.
 - `TelemetryProvider.captureMetadata`: split into mock and cached metadata builders, removing the telemetry long-method finding.
+- `WebRTCStreamer.startWhip`: split publisher reuse, listener wiring, and source-loss checks into helpers; local IP lookup was flattened and now catches `SocketException`.
 
 Reports to inspect:
 
@@ -117,6 +118,8 @@ Done already:
 - Adaptive frame-rate decisions were extracted into `AdaptiveFrameRatePolicy` and covered by `AdaptiveFrameRatePolicyTest`.
 - Mock telemetry origin validation was extracted into `MockTelemetryOrigin` and covered by `MockTelemetryOriginTest`.
 - Metadata capture now delegates to separate mock and cached metadata builders.
+- WHIP startup now delegates publisher reuse, callbacks, and source-loss checks to named helpers.
+- Local IP lookup now delegates address scanning to a helper and catches `SocketException` specifically.
 
 ### 3. Edge Detection Pipeline Complexity
 
