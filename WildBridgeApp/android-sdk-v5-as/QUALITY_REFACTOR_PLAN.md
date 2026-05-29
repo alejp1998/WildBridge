@@ -70,6 +70,8 @@ Focused refactors completed so far:
 - `WildBridgeDefaultLayoutActivity`: split edge-detection startup into explicit precheck, failure handling, controller creation, overlay configuration, and source attachment helpers. `startEdgeDetection` no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
 - `WildBridgeDefaultLayoutActivity`: decomposed SDK key listener registration into focused setup stages (battery/RTH, storage, flight-state, telemetry). `setupKeyListeners` no longer appears as a Detekt `CyclomaticComplexMethod` finding.
 - `WildBridgeDefaultLayoutActivity`: simplified `isHomeSet` into a single return path while preserving latch semantics. `isHomeSet` no longer appears as a Detekt `ReturnCount` finding.
+- `WildBridgeDefaultLayoutActivity`: simplified phone camera preview startup and phone inference frame gating to reduce early-return branching. `startPhoneCameraPreview` and `handlePhoneInferenceImage` no longer appear as Detekt `ReturnCount` findings.
+- `WildBridgeDefaultLayoutActivity`: flattened sibling labels URI resolution into one return path while preserving direct-sibling and folder-scan fallback behavior. `findSiblingLabelsUri` no longer appears as a Detekt `ReturnCount` finding.
 
 Reports to inspect:
 
@@ -123,6 +125,8 @@ Done already:
 - Edge-detection startup now has a small coordinator method with dedicated helper stages so UI messaging and source wiring remain explicit without deep branching.
 - SDK key listener wiring now keeps flight-state transitions and telemetry cache updates in separate setup stages, making the listener lifecycle easier to audit.
 - Home-point latching logic now uses one decision path, keeping the same distance threshold and flight-state guard with clearer state transitions.
+- Phone preview startup and inference gating now keep image close paths explicit while avoiding multi-exit control flow in the Activity hot path.
+- Sibling edge-label discovery now keeps folder validation, direct name probes, and SAF child scans in one decision flow.
 
 ### 2. WebRTC Flow Complexity
 

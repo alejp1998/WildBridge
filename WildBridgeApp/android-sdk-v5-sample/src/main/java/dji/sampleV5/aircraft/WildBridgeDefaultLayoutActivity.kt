@@ -766,39 +766,48 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun findSiblingLabelsUri(modelUri: Uri, modelName: String): Uri? {
-        if (!DocumentsContract.isDocumentUri(this, modelUri)) return null
-        val documentId = runCatching { DocumentsContract.getDocumentId(modelUri) }.getOrNull() ?: return null
-        val folderId = documentId.substringBeforeLast('/', missingDelimiterValue = "")
-        if (folderId.isBlank()) return null
-        val candidateNames = candidateLabelNames(modelName)
-        candidateNames
-            .map { DocumentsContract.buildDocumentUri(modelUri.authority, "$folderId/$it") }
-            .firstOrNull { readEdgeLabels(it).isNotEmpty() }
-            ?.let { return it }
-
-        val candidateNameSet = candidateNames.map { it.lowercase(java.util.Locale.US) }.toSet()
-        val childrenUri = DocumentsContract.buildChildDocumentsUri(modelUri.authority, folderId)
-        return runCatching {
-            contentResolver.query(
-                childrenUri,
-                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                null,
-                null,
-                null
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                while (cursor.moveToNext()) {
-                    val name = cursor.getString(nameIndex) ?: continue
-                    if (candidateNameSet.contains(name.lowercase(java.util.Locale.US))) {
-                        return@use DocumentsContract.buildDocumentUri(modelUri.authority, cursor.getString(idIndex))
-                    }
-                }
-                null
-            }
-        }.getOrElse { error ->
-            Log.d(TAG, "Could not scan model sibling labels: ${error.message}")
+        val folderId = if (DocumentsContract.isDocumentUri(this, modelUri)) {
+            runCatching { DocumentsContract.getDocumentId(modelUri) }
+                .getOrNull()
+                ?.substringBeforeLast('/', missingDelimiterValue = "")
+                ?.takeIf { it.isNotBlank() }
+        } else {
             null
+        }
+
+        return folderId?.let { parentFolderId ->
+            val candidateNames = candidateLabelNames(modelName)
+            val siblingMatch = candidateNames
+                .asSequence()
+                .map { DocumentsContract.buildDocumentUri(modelUri.authority, "$parentFolderId/$it") }
+                .firstOrNull { readEdgeLabels(it).isNotEmpty() }
+
+            siblingMatch ?: run {
+                val candidateNameSet = candidateNames.map { it.lowercase(java.util.Locale.US) }.toSet()
+                val childrenUri = DocumentsContract.buildChildDocumentsUri(modelUri.authority, parentFolderId)
+                runCatching {
+                    contentResolver.query(
+                        childrenUri,
+                        arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                        null,
+                        null,
+                        null
+                    )?.use { cursor ->
+                        val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                        val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                        while (cursor.moveToNext()) {
+                            val name = cursor.getString(nameIndex) ?: continue
+                            if (candidateNameSet.contains(name.lowercase(java.util.Locale.US))) {
+                                return@use DocumentsContract.buildDocumentUri(modelUri.authority, cursor.getString(idIndex))
+                            }
+                        }
+                        null
+                    }
+                }.getOrElse { error ->
+                    Log.d(TAG, "Could not scan model sibling labels: ${error.message}")
+                    null
+                }
+            }
         }
     }
 
@@ -963,67 +972,72 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun startPhoneCameraPreview(surfaceTexture: SurfaceTexture) {
-        if (getVideoSourceMode() != VideoSourceMode.PHONE) return
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
-        if (phoneCameraDevice != null) return
+        val canStart = getVideoSourceMode() == VideoSourceMode.PHONE &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+            phoneCameraDevice == null
+        if (!canStart) return
 
-        try {
+        runCatching {
             val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-                cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                cameraManager.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
             } ?: cameraManager.cameraIdList.firstOrNull()
+
             if (cameraId == null) {
                 Log.e(TAG, "No phone camera available for preview")
-                return
+                stopPhoneCameraPreview()
+            } else {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val previewSize = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(SurfaceTexture::class.java)
+                    ?.sortedWith(compareBy({ kotlin.math.abs(it.width - 1920) + kotlin.math.abs(it.height - 1080) }, { it.width * it.height }))
+                    ?.firstOrNull()
+                val phoneFrameSize = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(ImageFormat.YUV_420_888)
+                    ?.sortedWith(compareBy({ kotlin.math.abs(it.width - 1280) + kotlin.math.abs(it.height - 720) }, { it.width * it.height }))
+                    ?.firstOrNull()
+
+                val width = previewSize?.width ?: 1920
+                val height = previewSize?.height ?: 1080
+                surfaceTexture.setDefaultBufferSize(width, height)
+                val surface = Surface(surfaceTexture)
+                phonePreviewSurface = surface
+                findViewById<TextureView>(R.id.phone_camera_preview)?.let {
+                    configurePhonePreviewTransform(it, width, height)
+                }
+
+                val thread = HandlerThread("WildBridgePhonePreview").also { it.start() }
+                phoneCameraThread = thread
+                phoneCameraHandler = Handler(thread.looper)
+                val frameWidth = phoneFrameSize?.width ?: 1280
+                val frameHeight = phoneFrameSize?.height ?: 720
+                detectionOverlay?.setSourceFrameSize(frameWidth, frameHeight)
+                phoneImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 3).apply {
+                    setOnImageAvailableListener({ reader -> handlePhoneInferenceImage(reader) }, phoneCameraHandler)
+                }
+                Log.i(TAG, "Phone shared frame reader configured: ${frameWidth}x${frameHeight}")
+
+                cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        phoneCameraDevice = camera
+                        createPhonePreviewSession(camera, surface)
+                        Log.i(TAG, "Phone camera preview opened: $cameraId ${width}x${height}")
+                    }
+
+                    override fun onDisconnected(camera: CameraDevice) {
+                        Log.w(TAG, "Phone camera preview disconnected")
+                        stopPhoneCameraPreview()
+                    }
+
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        Log.e(TAG, "Phone camera preview error: $error")
+                        stopPhoneCameraPreview()
+                    }
+                }, phoneCameraHandler)
             }
-
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            val previewSize = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                ?.getOutputSizes(SurfaceTexture::class.java)
-                ?.sortedWith(compareBy({ kotlin.math.abs(it.width - 1920) + kotlin.math.abs(it.height - 1080) }, { it.width * it.height }))
-                ?.firstOrNull()
-            val phoneFrameSize = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                ?.getOutputSizes(ImageFormat.YUV_420_888)
-                ?.sortedWith(compareBy({ kotlin.math.abs(it.width - 1280) + kotlin.math.abs(it.height - 720) }, { it.width * it.height }))
-                ?.firstOrNull()
-
-            val width = previewSize?.width ?: 1920
-            val height = previewSize?.height ?: 1080
-            surfaceTexture.setDefaultBufferSize(width, height)
-            val surface = Surface(surfaceTexture)
-            phonePreviewSurface = surface
-            findViewById<TextureView>(R.id.phone_camera_preview)?.let { configurePhonePreviewTransform(it, width, height) }
-
-            val thread = HandlerThread("WildBridgePhonePreview").also { it.start() }
-            phoneCameraThread = thread
-            phoneCameraHandler = Handler(thread.looper)
-            val frameWidth = phoneFrameSize?.width ?: 1280
-            val frameHeight = phoneFrameSize?.height ?: 720
-            detectionOverlay?.setSourceFrameSize(frameWidth, frameHeight)
-            phoneImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 3).apply {
-                setOnImageAvailableListener({ reader -> handlePhoneInferenceImage(reader) }, phoneCameraHandler)
-            }
-            Log.i(TAG, "Phone shared frame reader configured: ${frameWidth}x${frameHeight}")
-
-            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    phoneCameraDevice = camera
-                    createPhonePreviewSession(camera, surface)
-                    Log.i(TAG, "Phone camera preview opened: $cameraId ${width}x${height}")
-                }
-
-                override fun onDisconnected(camera: CameraDevice) {
-                    Log.w(TAG, "Phone camera preview disconnected")
-                    stopPhoneCameraPreview()
-                }
-
-                override fun onError(camera: CameraDevice, error: Int) {
-                    Log.e(TAG, "Phone camera preview error: $error")
-                    stopPhoneCameraPreview()
-                }
-            }, phoneCameraHandler)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start phone camera preview: ${e.message}", e)
+        }.onFailure { error ->
+            Log.e(TAG, "Failed to start phone camera preview: ${error.message}", error)
             stopPhoneCameraPreview()
         }
     }
@@ -1073,22 +1087,24 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun handlePhoneInferenceImage(reader: ImageReader) {
         val image = reader.acquireLatestImage() ?: return
-        val controller = edgeDetectionController
         val timestampNs = System.nanoTime()
-        if (getVideoSourceMode() != VideoSourceMode.PHONE) {
+        val isPhoneSource = getVideoSourceMode() == VideoSourceMode.PHONE
+        if (!isPhoneSource) {
             image.close()
-            return
-        }
-        SharedPhoneCameraFrameSource.offerImage(image, timestampNs)
-        if (controller == null ||
-            timestampNs - lastPhoneEdgeFrameNs < PHONE_EDGE_FRAME_INTERVAL_NS ||
-            !phoneInferenceBusy.compareAndSet(false, true)) {
-            image.close()
-            return
-        }
-        lastPhoneEdgeFrameNs = timestampNs
-        controller.onYuv420Image(image, timestampNs) {
-            phoneInferenceBusy.set(false)
+        } else {
+            SharedPhoneCameraFrameSource.offerImage(image, timestampNs)
+            val controller = edgeDetectionController
+            val canRunInference = controller != null &&
+                timestampNs - lastPhoneEdgeFrameNs >= PHONE_EDGE_FRAME_INTERVAL_NS &&
+                phoneInferenceBusy.compareAndSet(false, true)
+            if (!canRunInference) {
+                image.close()
+            } else {
+                lastPhoneEdgeFrameNs = timestampNs
+                controller.onYuv420Image(image, timestampNs) {
+                    phoneInferenceBusy.set(false)
+                }
+            }
         }
     }
 
