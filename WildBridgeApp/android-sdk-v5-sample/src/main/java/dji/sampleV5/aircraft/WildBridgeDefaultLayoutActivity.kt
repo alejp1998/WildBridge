@@ -2954,122 +2954,115 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private fun handlePostRequest(uri: String, postData: String): String {
             return try {
                 Log.i("DroneServer", "POST $uri with data: $postData")
-                when (uri) {
-                    "/send/takeoff" -> {
-                        DroneController.startTakeOff()
-                        "Takeoff command sent."
-                    }
-                    "/send/land" -> {
-                        DroneController.startLanding()
-                        "Landing command sent."
-                    }
-                    "/send/RTH" -> {
-                        DroneController.startReturnToHome()
-                        "Return to home command sent."
-                    }
-                    "/send/stick" -> handleStickCommand(postData)
-                    "/send/gimbal/pitch" -> handleGimbalPitchCommand(postData)
-                    "/send/gimbal/yaw" -> handleGimbalYawCommand(postData)
-                    "/send/gotoYaw" -> {
-                        if (DroneController.shouldRejectAutonomousCommand("gotoYaw")) {
-                            AUTONOMOUS_COMMAND_REJECTED
-                        } else {
-                            val yaw = postData.split(",")[0].toDouble()
-                            DroneController.gotoYaw(yaw)
-                            "Received: yaw: $yaw"
-                        }
-                    }
-                    "/send/gotoAltitude" -> {
-                        if (DroneController.shouldRejectAutonomousCommand("gotoAltitude")) {
-                            AUTONOMOUS_COMMAND_REJECTED
-                        } else {
-                            val targetAltitude = postData.split(",")[0].toDouble()
-                            DroneController.gotoAltitude(targetAltitude)
-                            "Received: Altitude: $targetAltitude"
-                        }
-                    }
-                    "/send/camera/zoom" -> {
-                        val targetZoom = postData.toDouble()
-                        zoomKey.set(targetZoom)
-                        "Received: zoom: $targetZoom"
-                    }
-                    "/send/abortMission" -> {
-                        DroneController.setStick(0.0f, 0.0f, 0.0f, 0.0f)
-                        DroneController.disableVirtualStick()
-                        "Received: abortMission"
-                    }
-                    "/send/abortAll" -> {
-                        DroneController.abortAllMissions()
-                        "Received: abortAll"
-                    }
-                    "/send/enableVirtualStick" -> {
-                        if (DroneController.shouldRejectAutonomousCommand("enableVirtualStick")) {
-                            AUTONOMOUS_COMMAND_REJECTED
-                        } else {
-                            DroneController.enableVirtualStick()
-                            "Received: enableVirtualStick"
-                        }
-                    }
-                    "/send/camera/startRecording" -> {
-                        startRecording.action()
-                        "Received: camera start recording"
-                    }
-                    "/send/camera/stopRecording" -> {
-                        stopRecording.action()
-                        "Received: camera stop recording"
-                    }
-                    "/send/gotoWP" -> handleWaypointCommand(postData)
-                    "/send/gotoWPwithPID" -> handleWaypointPidCommand(postData)
-                    "/send/navigateTrajectory" -> handleTrajectoryCommand(postData)
-                    "/send/navigateTrajectoryDJINative" -> handleNativeTrajectoryCommand(postData)
-                    "/send/abort/DJIMission" -> {
-                        DroneController.endMission()
-                        "Mission stop requested"
-                    }
-                    "/send/setRTHAltitude" -> {
-                        val altitude = postData.toIntOrNull()
-                        if (altitude != null) {
-                            DroneController.setRTHAltitude(altitude)
-                            "RTH altitude set to $altitude m"
-                        } else {
-                            "Invalid altitude value"
-                        }
-                    }
-                    // --- Manual Override Control ---
-                    "/send/deactivateManualOverride" -> {
-                        DroneController.deactivateManualOverride()
-                        mainHandler.post { updateManualOverrideUI() }
-                        "Manual override deactivated. Autonomous commands are now allowed."
-                    }
-                    "/get/isManualOverrideActive" -> {
-                        if (DroneController.isManualOverrideActive) "true" else "false"
-                    }
-                    // --- AutoSensing (AI Detection) Control ---
-                    "/send/autoSensing/start" -> {
-                        mainHandler.post {
-                            startAutoSensing()
-                            findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = true
-                        }
-                        "AutoSensing start requested"
-                    }
-                    "/send/autoSensing/stop" -> {
-                        mainHandler.post {
-                            stopAutoSensing()
-                            findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = false
-                        }
-                        "AutoSensing stop requested"
-                    }
-                    "/get/autoSensing/status" -> {
-                        """{"active":$isAutoSensingActive,"targetCount":${currentDetectedTargets.size}}"""
-                    }
-                    "/get/autoSensing/targets" -> {
-                        DetectedTarget.listToJsonArray(currentDetectedTargets).toString()
-                    }
-                    else -> "Not Found: $uri"
-                }
+                handleFlightPost(uri, postData)
+                    ?: handleGimbalAndCameraPost(uri, postData)
+                    ?: handleNavigationPost(uri, postData)
+                    ?: handleStatePost(uri)
+                    ?: "Not Found: $uri"
             } catch (e: Exception) {
                 Log.e("DroneServer", "Error processing POST request: ${e.message}", e)
                 "Error processing request: ${e.message}"
+            }
+        }
+
+        private fun handleFlightPost(uri: String, postData: String): String? {
+            return when (uri) {
+                "/send/takeoff" -> {
+                    DroneController.startTakeOff()
+                    "Takeoff command sent."
+                }
+                "/send/land" -> {
+                    DroneController.startLanding()
+                    "Landing command sent."
+                }
+                "/send/RTH" -> {
+                    DroneController.startReturnToHome()
+                    "Return to home command sent."
+                }
+                "/send/stick" -> handleStickCommand(postData)
+                "/send/gotoYaw" -> handleGotoYawCommand(postData)
+                "/send/gotoAltitude" -> handleGotoAltitudeCommand(postData)
+                "/send/abortMission" -> {
+                    DroneController.setStick(0.0f, 0.0f, 0.0f, 0.0f)
+                    DroneController.disableVirtualStick()
+                    "Received: abortMission"
+                }
+                "/send/abortAll" -> {
+                    DroneController.abortAllMissions()
+                    "Received: abortAll"
+                }
+                "/send/enableVirtualStick" -> handleEnableVirtualStickCommand()
+                else -> null
+            }
+        }
+
+        private fun handleGimbalAndCameraPost(uri: String, postData: String): String? {
+            return when (uri) {
+                "/send/gimbal/pitch" -> handleGimbalPitchCommand(postData)
+                "/send/gimbal/yaw" -> handleGimbalYawCommand(postData)
+                "/send/camera/zoom" -> {
+                    val targetZoom = postData.toDouble()
+                    zoomKey.set(targetZoom)
+                    "Received: zoom: $targetZoom"
+                }
+                "/send/camera/startRecording" -> {
+                    startRecording.action()
+                    "Received: camera start recording"
+                }
+                "/send/camera/stopRecording" -> {
+                    stopRecording.action()
+                    "Received: camera stop recording"
+                }
+                else -> null
+            }
+        }
+
+        private fun handleNavigationPost(uri: String, postData: String): String? {
+            return when (uri) {
+                "/send/gotoWP" -> handleWaypointCommand(postData)
+                "/send/gotoWPwithPID" -> handleWaypointPidCommand(postData)
+                "/send/navigateTrajectory" -> handleTrajectoryCommand(postData)
+                "/send/navigateTrajectoryDJINative" -> handleNativeTrajectoryCommand(postData)
+                "/send/abort/DJIMission" -> {
+                    DroneController.endMission()
+                    "Mission stop requested"
+                }
+                "/send/setRTHAltitude" -> handleSetRthAltitudeCommand(postData)
+                else -> null
+            }
+        }
+
+        private fun handleStatePost(uri: String): String? {
+            return when (uri) {
+                "/send/deactivateManualOverride" -> {
+                    DroneController.deactivateManualOverride()
+                    mainHandler.post { updateManualOverrideUI() }
+                    "Manual override deactivated. Autonomous commands are now allowed."
+                }
+                "/get/isManualOverrideActive" -> {
+                    if (DroneController.isManualOverrideActive) "true" else "false"
+                }
+                "/send/autoSensing/start" -> {
+                    mainHandler.post {
+                        startAutoSensing()
+                        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = true
+                    }
+                    "AutoSensing start requested"
+                }
+                "/send/autoSensing/stop" -> {
+                    mainHandler.post {
+                        stopAutoSensing()
+                        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = false
+                    }
+                    "AutoSensing stop requested"
+                }
+                "/get/autoSensing/status" -> {
+                    """{"active":$isAutoSensingActive,"targetCount":${currentDetectedTargets.size}}"""
+                }
+                "/get/autoSensing/targets" -> {
+                    DetectedTarget.listToJsonArray(currentDetectedTargets).toString()
+                }
+                else -> null
             }
         }
 
@@ -3081,6 +3074,32 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             DroneController.setStick(command.leftX, command.leftY, command.rightX, command.rightY)
             return "Received: leftX: ${command.leftX}, leftY: ${command.leftY}, " +
                 "rightX: ${command.rightX}, rightY: ${command.rightY}"
+        }
+
+        private fun handleGotoYawCommand(postData: String): String {
+            if (DroneController.shouldRejectAutonomousCommand("gotoYaw")) {
+                return AUTONOMOUS_COMMAND_REJECTED
+            }
+            val yaw = postData.split(",")[0].toDouble()
+            DroneController.gotoYaw(yaw)
+            return "Received: yaw: $yaw"
+        }
+
+        private fun handleGotoAltitudeCommand(postData: String): String {
+            if (DroneController.shouldRejectAutonomousCommand("gotoAltitude")) {
+                return AUTONOMOUS_COMMAND_REJECTED
+            }
+            val targetAltitude = postData.split(",")[0].toDouble()
+            DroneController.gotoAltitude(targetAltitude)
+            return "Received: Altitude: $targetAltitude"
+        }
+
+        private fun handleEnableVirtualStickCommand(): String {
+            if (DroneController.shouldRejectAutonomousCommand("enableVirtualStick")) {
+                return AUTONOMOUS_COMMAND_REJECTED
+            }
+            DroneController.enableVirtualStick()
+            return "Received: enableVirtualStick"
         }
 
         private fun handleGimbalPitchCommand(postData: String): String {
@@ -3185,6 +3204,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     "DJI native mission requested with ${trajectory.waypoints.size} waypoints " +
                         "at ${trajectory.speed}m/s"
                 }
+            }
+        }
+
+        private fun handleSetRthAltitudeCommand(postData: String): String {
+            val altitude = postData.toIntOrNull()
+            return if (altitude != null) {
+                DroneController.setRTHAltitude(altitude)
+                "RTH altitude set to $altitude m"
+            } else {
+                "Invalid altitude value"
             }
         }
 
