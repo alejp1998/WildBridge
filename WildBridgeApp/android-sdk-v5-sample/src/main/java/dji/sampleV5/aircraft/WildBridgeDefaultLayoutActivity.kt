@@ -2749,22 +2749,25 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun getTimeNeededToLand(): Int = timeNeededToLandProcessor.value
 
     private fun isHomeSet(): Boolean {
-        if (isHomePointSetLatch) return true
-        val isFlying = isFlyingKey.get(false)
-        if (!isFlying) {
+        val shouldLatchHomePoint = !isHomePointSetLatch && !isFlyingKey.get(false) && run {
             val home = getHomeLocation()
-            if (home.latitude != 0.0 && home.longitude != 0.0) {
+            val hasHomeCoordinates = home.latitude != 0.0 && home.longitude != 0.0
+            if (!hasHomeCoordinates) {
+                false
+            } else {
                 val current = getLocation3D()
                 val distance = DroneController.calculateDistance(
                     current.latitude, current.longitude,
                     home.latitude, home.longitude
                 )
-                if (distance < 0.5) {
-                    isHomePointSetLatch = true
-                    return true
-                }
+                distance < 0.5
             }
         }
+
+        if (shouldLatchHomePoint) {
+            isHomePointSetLatch = true
+        }
+
         return isHomePointSetLatch
     }
 
