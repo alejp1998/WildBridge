@@ -6,7 +6,7 @@ This note captures the first baseline pass for Python and ROS GroundStation code
 
 Treat these areas as separate streams:
 
-- Plain GroundStation scripts: `Python/djiInterface.py` and `Python/mavlink_proxy.py`
+- Plain GroundStation scripts: `Python/wildbridge_groundstation/dji_client.py` and `Python/mavlink_proxy.py`
 - ROS 2 packages: `ROS/dji_controller`, `ROS/wildbridge_mavros`, `ROS/drone_videofeed`, and launch files under `ROS/wildview_bringup`
 - Video test webapp: `video_test/webapp/server.py`
 
@@ -16,7 +16,6 @@ The first pass found 29 Python files and about 5,900 total lines. Largest files 
 - `Python/mavlink_proxy.py` at about 850 lines
 - `ROS/dji_controller/dji_controller/submodules/dji_interface.py` at about 730 lines
 - `ROS/wildbridge_mavros/wildbridge_mavros/mavros_bridge.py` at about 630 lines
-- `Python/djiInterface.py` at about 600 lines
 - `ROS/dji_controller/dji_controller/controller.py` at about 500 lines
 - `video_test/webapp/server.py` at about 410 lines
 
@@ -34,8 +33,8 @@ Current result:
 - The repository now has `pyproject.toml`, `.pre-commit-config.yaml`, and `scripts/check_radon_complexity.py`.
 - The local `.venv` has the Python quality toolchain needed for Ruff, pre-commit, Radon, mypy, Bandit, and pytest.
 - The strict Radon gate requires B-or-better complexity. C/D/E/F blocks fail the check.
-- Current strict Radon result after shared-helper extraction: A: 451, B: 27, C: 0, D: 0, E: 0, F: 0.
-- GroundStation pytest suite: 25 passed.
+- Current strict Radon result after canonical client extraction: A: 337, B: 27, C: 0, D: 0, E: 0, F: 0.
+- GroundStation pytest suite: 32 passed.
 
 ## Main Issues To Fix
 
@@ -43,7 +42,7 @@ Current result:
 
 Primary files:
 
-- `Python/djiInterface.py`
+- `Python/wildbridge_groundstation/dji_client.py`
 - `ROS/dji_controller/dji_controller/submodules/dji_interface.py`
 - `ROS/wildbridge_mavros/wildbridge_mavros/dji_interface.py`
 
@@ -177,7 +176,7 @@ Completed first slice: DJI telemetry and discovery helpers, because they are dup
 
 1. Extracted `parse_discovery_response`, `build_command_url`, and `parse_telemetry_line` helpers.
 2. Added pytest tests for valid, invalid, and partial inputs.
-3. Wired `Python/djiInterface.py` to the helpers.
+3. Wired the plain Python client path to the helpers.
 4. Refactored C-or-worse complexity blocks across the plain DJI interface, ROS DJI interfaces, MAVLink proxy, MAVROS bridge, launch helpers, and video test webapp.
 5. Re-ran compileall, Ruff, pytest, strict Radon, mypy, Bandit, and pre-commit successfully.
 
@@ -200,6 +199,14 @@ Completed fourth slice:
 2. Added pytest coverage for those MAVLink decisions without importing `pymavlink` or opening sockets.
 3. Wired `Python/mavlink_proxy.py` to the helpers, reducing heartbeat-loop complexity while preserving MAVLink message boundaries in the proxy.
 
+Completed fifth slice:
+
+1. Added the canonical `wildbridge_groundstation.dji_client.DJIInterface` client for common HTTP command and TCP telemetry behavior.
+2. Added tests for discovery normalization, config name lookup, telemetry buffering, command URL posting, command formatting, and socket/thread shutdown.
+3. Replaced the old plain `djiInterface.py` implementation with shared-client usage.
+4. Replaced `ROS/dji_controller/.../dji_interface.py` with a package-local discovery adapter around the shared client.
+5. Replaced the MAVROS local client class with a shared-client adapter while preserving its richer multicast/mDNS/cache discovery code.
+
 ## Current Green Checks
 
 Run from the repository root:
@@ -215,4 +222,4 @@ Current result:
 - Radon complexity, B-or-better only: passed.
 - mypy gradual typing: passed.
 - Bandit security scan: passed.
-- Helper pytest suite: 25 passed.
+- GroundStation pytest suite: 32 passed.

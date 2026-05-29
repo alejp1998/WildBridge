@@ -238,13 +238,13 @@ Runtime diagnostics are written under `GroundStation/video_test/logs/`. Those lo
 
 ## Python Interface (`DJIInterface`)
 
-`GroundStation/Python/djiInterface.py` provides a high-level class wrapping all HTTP commands and the TCP telemetry socket in a thread-safe background receiver.
+`GroundStation/Python/wildbridge_groundstation/dji_client.py` provides a high-level class wrapping all HTTP commands and the TCP telemetry socket in a thread-safe background receiver.
 
 ```python
-from djiInterface import DJIInterface
+from wildbridge_groundstation.dji_client import DJIInterface, discover_drone
 
 # Auto-discovery via UDP broadcast (port 30000) if no IP provided
-dji = DJIInterface("192.168.1.100")
+dji = DJIInterface("", discover_callback=discover_drone)
 
 # Start background telemetry thread (TCP socket, port 8081)
 dji.startTelemetryStream()
@@ -576,7 +576,7 @@ WildBridge/
 │   └── android-sdk-v5-uxsdk/            # DJI UXSDK UI components
 └── GroundStation/
     ├── Python/
-    │   ├── djiInterface.py              # DJIInterface class (HTTP + TCP telemetry)
+    │   ├── wildbridge_groundstation/    # Shared DJI + MAVLink helper package
     │   └── mavlink_proxy.py             # QGroundControl bridge
     ├── Dockerfile                       # ros:humble + CycloneDDS container
     ├── entrypoint.sh                    # Container entry point

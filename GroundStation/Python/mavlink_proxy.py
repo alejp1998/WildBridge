@@ -36,12 +36,7 @@ except ImportError:
     print("ERROR: pymavlink not installed. Install with: pip install pymavlink")
     exit(1)
 
-import os
-import sys
-
-# Add parent path to import djiInterface
-sys.path.insert(0, os.path.dirname(__file__))
-from djiInterface import DJIInterface
+from wildbridge_groundstation.dji_client import DJIInterface, discover_drone
 from wildbridge_groundstation.mavlink_helpers import (
     climb_rate_mps,
     gps_fix_type,
@@ -106,7 +101,7 @@ class MAVLinkProxy:
         else:
             print("Connecting to WildBridge (auto-discovery)...")
 
-        self.dji = DJIInterface(drone_ip)
+        self.dji = DJIInterface(drone_ip, discover_callback=discover_drone)
 
         # Update drone_ip if discovered
         if not self.drone_ip and self.dji.IP_RC:

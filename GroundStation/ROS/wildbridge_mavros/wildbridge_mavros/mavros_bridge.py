@@ -13,8 +13,6 @@ License: MIT
 """
 
 import math
-import os
-import sys
 from typing import ClassVar
 
 import rclpy
@@ -26,14 +24,21 @@ from sensor_msgs.msg import BatteryState, Imu, NavSatFix, NavSatStatus
 # Standard ROS messages
 from std_msgs.msg import Bool, Float64, String, UInt32
 from std_srvs.srv import SetBool, Trigger
+from wildbridge_groundstation.dji_client import DJIInterface as _SharedDJIInterface
 
-# Add parent path to import djiInterface
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "Python"))
-try:
-    from djiInterface import DJIInterface
-except ImportError:
-    # Fallback: try from submodules (same as dji_controller)
-    from wildbridge_mavros.dji_interface import DJIInterface
+from wildbridge_mavros.dji_interface import discover_drone, get_config
+
+
+class DJIInterface(_SharedDJIInterface):
+    """MAVROS bridge adapter for the shared DJI client."""
+
+    def __init__(self, IP_RC=""):  # noqa: N803
+        super().__init__(
+            IP_RC,
+            discover_callback=discover_drone,
+            config_loader=get_config,
+            query_config_name=True,
+        )
 
 
 class WildBridgeMavrosNode(Node):
