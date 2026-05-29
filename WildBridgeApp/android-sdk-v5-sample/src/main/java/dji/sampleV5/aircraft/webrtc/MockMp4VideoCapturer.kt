@@ -68,35 +68,41 @@ class MockMp4VideoCapturer(
 
         if (!isCapturing.compareAndSet(false, true)) return
 
-        try {
-            val context = appContext ?: throw IllegalStateException("Capturer not initialized")
+        runCatching {
+            val context = checkNotNull(appContext) { "Capturer not initialized" }
             retriever = openRetriever(context)
             loadFrameCache()
 
-            if (!isCapturing.get()) return
+            if (!isCapturing.get()) return@runCatching
             synchronized(observerLock) {
                 capturerObserver?.onCapturerStarted(true)
             }
             scheduleFrameLoop()
-            Log.i(TAG, "Started MP4 mock capture: ${effectiveTargetWidth()}x${effectiveTargetHeight()}@${targetFps}fps from $assetPath")
-        } catch (e: Exception) {
-            lastError = e.message
+            Log.i(
+                TAG,
+                "Started MP4 mock capture: " +
+                    "${effectiveTargetWidth()}x${effectiveTargetHeight()}@$targetFps fps from $assetPath"
+            )
+        }.onFailure { error ->
+            lastError = error.message
             isCapturing.set(false)
             synchronized(observerLock) {
                 capturerObserver?.onCapturerStarted(false)
             }
-            Log.e(TAG, "Failed to start mock capture: ${e.message}", e)
+            Log.e(TAG, "Failed to start mock capture: ${error.message}", error)
         }
     }
 
     private fun emitFrame() {
         if (!isCapturing.get()) return
         val frameStartNs = System.nanoTime()
-        try {
+        runCatching {
             val nextFrameNumber = frameCounter.get() + 1L
             val sourceBitmap = synchronized(cacheLock) {
-                if (frameCache.isEmpty()) null else frameCache[((nextFrameNumber - 1L) % frameCache.size).toInt()]
-            } ?: throw IllegalStateException("Mock frame cache is empty")
+                frameCache.takeIf { it.isNotEmpty() }
+                    ?.get(((nextFrameNumber - 1L) % frameCache.size).toInt())
+            }
+            checkNotNull(sourceBitmap) { "Mock frame cache is empty" }
             val buffer = bitmapToI420(sourceBitmap)
 
             val frameNumber = frameCounter.incrementAndGet()
@@ -128,9 +134,9 @@ class MockMp4VideoCapturer(
             sentFramesInWindow++
             processingTimeNsInWindow += System.nanoTime() - frameStartNs
             maybeEmitMetrics(System.nanoTime())
-        } catch (e: Exception) {
-            lastError = e.message
-            Log.e(TAG, "Error emitting mock MP4 frame: ${e.message}", e)
+        }.onFailure { error ->
+            lastError = error.message
+            Log.e(TAG, "Error emitting mock MP4 frame: ${error.message}", error)
         }
     }
 
@@ -169,9 +175,7 @@ class MockMp4VideoCapturer(
             cachedFrames.add(prepared)
         }
 
-        if (cachedFrames.isEmpty()) {
-            throw IllegalStateException("Could not decode any frames from $assetPath")
-        }
+        check(cachedFrames.isNotEmpty()) { "Could not decode any frames from $assetPath" }
 
         synchronized(cacheLock) {
             clearFrameCacheLocked()
@@ -192,7 +196,11 @@ class MockMp4VideoCapturer(
     }
 
     private fun prepareBitmap(source: Bitmap, width: Int, height: Int): Bitmap {
-        val argbSource = if (source.config == Bitmap.Config.ARGB_8888) source else source.copy(Bitmap.Config.ARGB_8888, false)
+        val argbSource = if (source.config == Bitmap.Config.ARGB_8888) {
+            source
+        } else {
+            source.copy(Bitmap.Config.ARGB_8888, false)
+        }
         return if (argbSource.width == width && argbSource.height == height) {
             argbSource
         } else {
@@ -278,9 +286,19 @@ class MockMp4VideoCapturer(
         val nextWidth = targetWidth
         val nextHeight = targetHeight
         if (previousWidth == nextWidth && previousHeight == nextHeight) return
+        val previousResolution = if (previousWidth > 0 && previousHeight > 0) {
+            "${previousWidth}x${previousHeight}"
+        } else {
+            "native"
+        }
+        val nextResolution = if (nextWidth > 0 && nextHeight > 0) {
+            "${nextWidth}x${nextHeight}"
+        } else {
+            "native"
+        }
         Log.d(
             TAG,
-            "Changing mock target resolution: ${if (previousWidth > 0 && previousHeight > 0) "${previousWidth}x${previousHeight}" else "native"} -> ${if (nextWidth > 0 && nextHeight > 0) "${nextWidth}x${nextHeight}" else "native"}"
+            "Changing mock target resolution: $previousResolution -> $nextResolution"
         )
         if (isCapturing.get()) {
             executor?.execute {
@@ -343,7 +361,9 @@ class MockMp4VideoCapturer(
 
     private fun effectiveTargetWidth(): Int = if (targetWidth > 0) targetWidth else even(sourceWidth.coerceAtLeast(2))
 
-    private fun effectiveTargetHeight(): Int = if (targetHeight > 0) targetHeight else even(sourceHeight.coerceAtLeast(2))
+    private fun effectiveTargetHeight(): Int {
+        return if (targetHeight > 0) targetHeight else even(sourceHeight.coerceAtLeast(2))
+    }
 
     override fun dispose() {
         stopCapture()

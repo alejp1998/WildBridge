@@ -48,6 +48,7 @@ Focused refactors completed so far:
 - `DJIV5VideoCapturer`: split frame processing/delivery boundaries and removed its long-line and broad-catch findings.
 - `WhipPublisher`: replaced the WebRTC wildcard import and split several long diagnostic/control lines before the larger publish-flow extraction.
 - `TelemetryServer`: split client accept, broadcast, disconnect cleanup, and interruption handling; the server no longer appears in Detekt.
+- `MockMp4VideoCapturer`: replaced ad-hoc throws/catches with precondition helpers and `runCatching`, and cleared its targeted formatting findings.
 
 Reports to inspect:
 
@@ -136,6 +137,7 @@ Done already:
 - Shared phone camera frames now delegate NV21 conversion and even-size calculations to `PhoneImageConverter`.
 - DJI V5 frame delivery now flows through a private delivery request/helper, keeping the capturer listener small.
 - WHIP publisher imports are explicit, and the simple frame-rate/logging line findings are cleared.
+- Mock MP4 startup and frame emission now share the same explicit failure-reporting style as the other capturers.
 
 ### 3. Edge Detection Pipeline Complexity
 
