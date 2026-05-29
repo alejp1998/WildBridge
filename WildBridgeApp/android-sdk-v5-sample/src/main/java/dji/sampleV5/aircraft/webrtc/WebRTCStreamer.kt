@@ -14,6 +14,7 @@ import java.net.SocketException
 /**
  * WebRTCStreamer manages DJI video capture and WHIP publishing for the drone feed.
  */
+@Suppress("TooManyFunctions")
 class WebRTCStreamer(
     context: Context,
     private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN,

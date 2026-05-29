@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+@Suppress("TooManyFunctions")
 class MockMp4VideoCapturer(
     private val droneName: String,
     private val assetPath: String = "mock_video/jellyfish_1080_10s_5mb.mp4"

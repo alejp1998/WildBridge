@@ -185,6 +185,7 @@ class WildBridgeDiscoveryManager(
     /**
      * Registers Zeroconf/mDNS service for drone HTTP, telemetry, and WHIP publish.
      */
+    @Suppress("TooGenericExceptionCaught")
     fun registerMdnsService(droneSerialNumber: String, httpPort: Int, telemetryPort: Int) {
         val droneName = droneNameProvider()
         try {
@@ -220,6 +221,7 @@ class WildBridgeDiscoveryManager(
     /**
      * Unregisters Zeroconf/mDNS service.
      */
+    @Suppress("TooGenericExceptionCaught")
     fun unregisterMdnsService() {
         if (isMdnsRegistered || isMdnsRegistrationRequested) {
             try {

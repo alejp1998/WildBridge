@@ -1463,6 +1463,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
+    @Suppress("TooGenericExceptionCaught")
     private fun stopAutoSensing() {
         clearAutoSensingState()
         if (!isAutoSensingActive) {
@@ -1488,6 +1489,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
+    @Suppress("TooGenericExceptionCaught")
     private fun removeAutoSensingListener() {
         if (!isAutoSensingListenerRegistered) return
         try {
@@ -2565,51 +2567,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             )
         } else {
             telemetryCoordinator.mockSnapshot = null
-            
-            val location = getLocation3D()
-            val homeLocation = getHomeLocation()
-            val goHomeInfo = goHomeAssessmentProcessor.value
-            val timeNeededToGoHome = getTimeNeededToGoHome()
-            val timeNeededToLand = getTimeNeededToLand()
-            
-            telemetryCoordinator.speed = getSpeed()
-            telemetryCoordinator.heading = getHeading()
-            telemetryCoordinator.attitude = getAttitude()
-            telemetryCoordinator.location = location
-            telemetryCoordinator.gimbalAttitude = getGimbalAttitude()
-            telemetryCoordinator.gimbalJointAttitude = getGimbalJointAttitude()
-            telemetryCoordinator.zoomFl = getCameraZoomFocalLength()
-            telemetryCoordinator.hybridFl = getCameraHybridFocalLength()
-            telemetryCoordinator.opticalFl = getCameraOpticalFocalLength()
-            telemetryCoordinator.zoomRatio = zoomKey.get() ?: 1.0
-            telemetryCoordinator.batteryLevel = getBatteryLevel()
-            telemetryCoordinator.satelliteCount = getSatelliteCount()
-            telemetryCoordinator.homeLocation = homeLocation
-            telemetryCoordinator.distanceToHome = DroneController.calculateDistance(
-                location.latitude, location.longitude,
-                homeLocation.latitude, homeLocation.longitude
-            )
-            telemetryCoordinator.waypointReached = DroneController.isWaypointReached()
-            telemetryCoordinator.intermediaryWaypointReached = DroneController.isIntermediaryWaypointReached()
-            telemetryCoordinator.yawReached = DroneController.isYawReached()
-            telemetryCoordinator.altitudeReached = DroneController.isAltitudeReached()
-            telemetryCoordinator.isRecording = isRecordingKey.get() ?: false
-            telemetryCoordinator.homeSet = isHomeSet()
-            telemetryCoordinator.flightMode = getFlightMode().name
-            telemetryCoordinator.isManualOverrideActive = DroneController.isManualOverrideActive
-            telemetryCoordinator.isAutoSensingActive = isAutoSensingActive
-
-            // Battery assessment
-            telemetryCoordinator.remainingFlightTime = goHomeInfo.remainingFlightTime
-            telemetryCoordinator.timeNeededToGoHome = timeNeededToGoHome
-            telemetryCoordinator.timeNeededToLand = timeNeededToLand
-            telemetryCoordinator.totalTime = timeNeededToGoHome + timeNeededToLand
-            telemetryCoordinator.maxRadiusCanFlyAndGoHome = goHomeInfo.maxRadiusCanFlyAndGoHome.toInt()
-            telemetryCoordinator.remainingCharge = chargeRemainingProcessor.value.toInt()
-            telemetryCoordinator.batteryNeededToLand = goHomeInfo.batteryPercentNeededToLand
-            telemetryCoordinator.batteryNeededToGoHome = goHomeInfo.batteryPercentNeededToGoHome
-            telemetryCoordinator.seriousLowBatteryThreshold = seriousLowBatteryThresholdProcessor.value
-            telemetryCoordinator.lowBatteryThreshold = lowBatteryThresholdProcessor.value
+            rebuildRealTelemetryCache()
         }
 
         // Phone Status (always updated for both mock and real modes)
@@ -2625,6 +2583,53 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
         // Rebuild cache inside the coordinator
         telemetryCoordinator.rebuildTelemetryCache()
+    }
+
+    private fun rebuildRealTelemetryCache() {
+        val location = getLocation3D()
+        val homeLocation = getHomeLocation()
+        val goHomeInfo = goHomeAssessmentProcessor.value
+        val timeNeededToGoHome = getTimeNeededToGoHome()
+        val timeNeededToLand = getTimeNeededToLand()
+        
+        telemetryCoordinator.speed = getSpeed()
+        telemetryCoordinator.heading = getHeading()
+        telemetryCoordinator.attitude = getAttitude()
+        telemetryCoordinator.location = location
+        telemetryCoordinator.gimbalAttitude = getGimbalAttitude()
+        telemetryCoordinator.gimbalJointAttitude = getGimbalJointAttitude()
+        telemetryCoordinator.zoomFl = getCameraZoomFocalLength()
+        telemetryCoordinator.hybridFl = getCameraHybridFocalLength()
+        telemetryCoordinator.opticalFl = getCameraOpticalFocalLength()
+        telemetryCoordinator.zoomRatio = zoomKey.get() ?: 1.0
+        telemetryCoordinator.batteryLevel = getBatteryLevel()
+        telemetryCoordinator.satelliteCount = getSatelliteCount()
+        telemetryCoordinator.homeLocation = homeLocation
+        telemetryCoordinator.distanceToHome = DroneController.calculateDistance(
+            location.latitude, location.longitude,
+            homeLocation.latitude, homeLocation.longitude
+        )
+        telemetryCoordinator.waypointReached = DroneController.isWaypointReached()
+        telemetryCoordinator.intermediaryWaypointReached = DroneController.isIntermediaryWaypointReached()
+        telemetryCoordinator.yawReached = DroneController.isYawReached()
+        telemetryCoordinator.altitudeReached = DroneController.isAltitudeReached()
+        telemetryCoordinator.isRecording = isRecordingKey.get() ?: false
+        telemetryCoordinator.homeSet = isHomeSet()
+        telemetryCoordinator.flightMode = getFlightMode().name
+        telemetryCoordinator.isManualOverrideActive = DroneController.isManualOverrideActive
+        telemetryCoordinator.isAutoSensingActive = isAutoSensingActive
+
+        // Battery assessment
+        telemetryCoordinator.remainingFlightTime = goHomeInfo.remainingFlightTime
+        telemetryCoordinator.timeNeededToGoHome = timeNeededToGoHome
+        telemetryCoordinator.timeNeededToLand = timeNeededToLand
+        telemetryCoordinator.totalTime = timeNeededToGoHome + timeNeededToLand
+        telemetryCoordinator.maxRadiusCanFlyAndGoHome = goHomeInfo.maxRadiusCanFlyAndGoHome.toInt()
+        telemetryCoordinator.remainingCharge = chargeRemainingProcessor.value.toInt()
+        telemetryCoordinator.batteryNeededToLand = goHomeInfo.batteryPercentNeededToLand
+        telemetryCoordinator.batteryNeededToGoHome = goHomeInfo.batteryPercentNeededToGoHome
+        telemetryCoordinator.seriousLowBatteryThreshold = seriousLowBatteryThresholdProcessor.value
+        telemetryCoordinator.lowBatteryThreshold = lowBatteryThresholdProcessor.value
     }
 
     private inner class WildBridgeHttpCommandHandler {

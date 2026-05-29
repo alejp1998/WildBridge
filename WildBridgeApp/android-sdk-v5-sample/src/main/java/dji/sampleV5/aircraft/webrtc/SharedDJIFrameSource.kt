@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
  * WebRTC CapturerObservers.  This eliminates duplicate NV21→scale→encode work
  * when multiple viewers are connected.
  */
+@Suppress("TooManyFunctions")
 class SharedDJIFrameSource(
     private val preferredCameraIndex: ComponentIndexType,
     private val droneName: String

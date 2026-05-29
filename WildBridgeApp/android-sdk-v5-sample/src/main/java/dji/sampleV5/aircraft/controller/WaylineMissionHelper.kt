@@ -54,6 +54,7 @@ import java.util.zip.ZipFile
  * pushing waylines, and native waypoint execution flows.
  * Decouples DJI WPMZ/KMZ logic from virtual stick controls.
  */
+@Suppress("TooManyFunctions")
 object WaylineMissionHelper {
 
     @Volatile
@@ -455,6 +456,7 @@ object WaylineMissionHelper {
         WaypointMissionManager.getInstance().pushKMZFileToAircraft(kmzOutPath, object :
             CommonCallbacks.CompletionCallbackWithProgress<Double> {
             override fun onProgressUpdate(progress: Double) {
+                Log.d("WaylineMissionHelper", "Push KMZ progress: $progress")
             }
             override fun onSuccess() {
                 val ids = extractWaylineIdsFromKmz(kmzOutPath).ifEmpty { arrayListOf(0) }

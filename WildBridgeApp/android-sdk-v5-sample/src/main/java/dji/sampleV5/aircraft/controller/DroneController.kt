@@ -92,6 +92,7 @@ private fun waypointFlightControlParam(
     }
 }
 
+@Suppress("TooManyFunctions")
 object DroneController {
 
     private const val TAG = "DroneController"

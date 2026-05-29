@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Reconnects automatically if the connection drops.
  */
+@Suppress("TooManyFunctions")
 class WhipPublisher(
     context: Context,
     private val videoCapturer: VideoCapturer,

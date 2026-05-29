@@ -9,14 +9,6 @@ import dji.sdk.keyvalue.value.common.LocationCoordinate3D
 import dji.sampleV5.aircraft.util.ToastUtils
 import dji.v5.et.create
 import dji.v5.et.get
-import org.java_websocket.WebSocket
-import org.java_websocket.client.WebSocketClient
-import org.java_websocket.handshake.ClientHandshake
-import org.java_websocket.handshake.ServerHandshake
-import org.java_websocket.server.WebSocketServer
-import org.json.JSONObject
-import java.net.InetSocketAddress
-import java.net.URI
 
 data class FormationConfig(
     val distanceBehind: Double = 1.0, // meters behind leader
@@ -46,10 +38,10 @@ data class FormationCommand(
     val data: Map<String, Any>
 )
 
+@Suppress("TooManyFunctions")
 object FormationController {
 
     private const val TAG = "FormationController"
-    private const val WEBSOCKET_PORT = 8765
     private const val UPDATE_INTERVAL = 100L // ms
 
     // DJI SDK Keys for telemetry
@@ -64,8 +56,6 @@ object FormationController {
     var config = FormationConfig()
         private set
 
-    private var webSocketServer: FormationWebSocketServer? = null
-    private var webSocketClient: FormationWebSocketClient? = null
     private var leaderState: DroneState? = null
     private var followerState: DroneState? = null
 
@@ -76,15 +66,50 @@ object FormationController {
     private var emergencyStopRequested = false
     private var collisionAvoidanceActive = false
 
+    init {
+        FormationNetworkManager.onLeaderStateReceived = { state ->
+            if (role == DroneRole.FOLLOWER) {
+                leaderState = state
+            }
+        }
+        FormationNetworkManager.onFollowerStateReceived = { state ->
+            if (role == DroneRole.LEADER) {
+                followerState = state
+            }
+        }
+        FormationNetworkManager.onFormationStartRequested = {
+            if (role == DroneRole.FOLLOWER && !isFormationActive) {
+                startFormation()
+            }
+        }
+        FormationNetworkManager.onFormationStopRequested = {
+            if (isFormationActive) {
+                stopFormation()
+            }
+        }
+        FormationNetworkManager.onEmergencyStopRequested = {
+            if (isFormationActive) {
+                stopFormation()
+            }
+            emergencyStopRequested = true
+            DroneController.setStick(0F, 0F, 0F, 0F)
+        }
+        FormationNetworkManager.onConnectionClosed = {
+            if (isFormationActive) {
+                stopFormation()
+            }
+        }
+    }
+
     fun initAsLeader() {
         role = DroneRole.LEADER
-        startWebSocketServer()
+        FormationNetworkManager.startServer()
         ToastUtils.showToast("Initialized as Formation Leader")
     }
 
     fun initAsFollower(leaderIpAddress: String) {
         role = DroneRole.FOLLOWER
-        connectToLeader(leaderIpAddress)
+        FormationNetworkManager.connectToLeader(leaderIpAddress)
         ToastUtils.showToast("Connecting to Leader at $leaderIpAddress")
     }
 
@@ -105,9 +130,10 @@ object FormationController {
 
         // Notify other drone
         if (role == DroneRole.LEADER) {
-            broadcastCommand("formation_start", mapOf("config" to configToMap()))
+            val cfgMap = FormationNetworkManager.configToMap(config)
+            FormationNetworkManager.broadcastCommand("formation_start", mapOf("config" to cfgMap))
         } else {
-            sendToLeader("formation_ready", mapOf("follower_ready" to true))
+            FormationNetworkManager.sendToLeader("formation_ready", mapOf("follower_ready" to true))
         }
 
         ToastUtils.showToast("Formation Started")
@@ -119,9 +145,9 @@ object FormationController {
 
         // Notify other drone
         if (role == DroneRole.LEADER) {
-            broadcastCommand("formation_stop", mapOf("reason" to "manual_stop"))
+            FormationNetworkManager.broadcastCommand("formation_stop", mapOf("reason" to "manual_stop"))
         } else {
-            sendToLeader("formation_stop", mapOf("reason" to "manual_stop"))
+            FormationNetworkManager.sendToLeader("formation_stop", mapOf("reason" to "manual_stop"))
         }
 
         // Stop drone movement
@@ -139,34 +165,12 @@ object FormationController {
 
         // Notify other drone
         if (role == DroneRole.LEADER) {
-            broadcastCommand("emergency_stop", mapOf("reason" to "emergency"))
+            FormationNetworkManager.broadcastCommand("emergency_stop", mapOf("reason" to "emergency"))
         } else {
-            sendToLeader("emergency_stop", mapOf("reason" to "emergency"))
+            FormationNetworkManager.sendToLeader("emergency_stop", mapOf("reason" to "emergency"))
         }
 
         ToastUtils.showToast("EMERGENCY STOP ACTIVATED")
-    }
-
-    private fun startWebSocketServer() {
-        runCatching {
-            webSocketServer = FormationWebSocketServer(InetSocketAddress(WEBSOCKET_PORT))
-            webSocketServer?.start()
-            Log.i(TAG, "WebSocket server started on port $WEBSOCKET_PORT")
-        }.onFailure { failure ->
-            Log.e(TAG, "Failed to start WebSocket server", failure)
-            ToastUtils.showToast("Failed to start server: ${failure.message}")
-        }
-    }
-
-    private fun connectToLeader(ipAddress: String) {
-        runCatching {
-            val uri = URI("ws://$ipAddress:$WEBSOCKET_PORT")
-            webSocketClient = FormationWebSocketClient(uri)
-            webSocketClient?.connect()
-        }.onFailure { failure ->
-            Log.e(TAG, "Failed to connect to leader", failure)
-            ToastUtils.showToast("Failed to connect: ${failure.message}")
-        }
     }
 
     private fun startFormationControl() {
@@ -198,8 +202,8 @@ object FormationController {
         val currentState = getCurrentDroneState()
 
         // Broadcast leader state to followers
-        broadcastCommand("leader_state", mapOf(
-            "position" to positionToMap(currentState.position),
+        FormationNetworkManager.broadcastCommand("leader_state", mapOf(
+            "position" to FormationNetworkManager.positionToMap(currentState.position),
             "heading" to currentState.heading,
             "battery" to currentState.battery,
             "timestamp" to currentState.timestamp
@@ -243,166 +247,22 @@ object FormationController {
         }
     }
 
-    private fun broadcastCommand(type: String, data: Map<String, Any>) {
-        webSocketServer?.broadcast(createCommandJson(type, data))
-    }
-
-    private fun sendToLeader(type: String, data: Map<String, Any>) {
-        webSocketClient?.send(createCommandJson(type, data))
-    }
-
-    private fun createCommandJson(type: String, data: Map<String, Any>): String {
-        val json = JSONObject()
-        json.put("type", type)
-        json.put("data", JSONObject(data))
-        json.put("timestamp", System.currentTimeMillis())
-        return json.toString()
-    }
-
-    private fun configToMap(): Map<String, Any> {
-        return mapOf(
-            "distanceBehind" to config.distanceBehind,
-            "altitudeOffset" to config.altitudeOffset,
-            "maxFormationDistance" to config.maxFormationDistance,
-            "formationType" to config.formationType.name
-        )
-    }
-
-    private fun positionToMap(position: LocationCoordinate3D): Map<String, Double> {
-        return mapOf(
-            "latitude" to position.latitude,
-            "longitude" to position.longitude,
-            "altitude" to position.altitude
-        )
-    }
-
-    // WebSocket Server for Leader
-    private class FormationWebSocketServer(address: InetSocketAddress) : WebSocketServer(address) {
-
-        override fun onOpen(conn: WebSocket?, handshake: ClientHandshake?) {
-            Log.i(TAG, "Follower connected: ${conn?.remoteSocketAddress}")
-            Handler(Looper.getMainLooper()).post {
-                ToastUtils.showToast("Follower connected")
-            }
-        }
-
-        override fun onClose(conn: WebSocket?, code: Int, reason: String?, remote: Boolean) {
-            Log.i(TAG, "Follower disconnected: $reason")
-            Handler(Looper.getMainLooper()).post {
-                ToastUtils.showToast("Follower disconnected")
-                if (isFormationActive) {
-                    stopFormation()
-                }
-            }
-        }
-
-        override fun onMessage(conn: WebSocket?, message: String?) {
-            message?.let { handleIncomingMessage(it) }
-        }
-
-        override fun onError(conn: WebSocket?, ex: Exception?) {
-            Log.e(TAG, "WebSocket server error", ex)
-        }
-
-        override fun onStart() {
-            Log.i(TAG, "WebSocket server started successfully")
-        }
-    }
-
-    // WebSocket Client for Follower
-    private class FormationWebSocketClient(uri: URI) : WebSocketClient(uri) {
-
-        override fun onOpen(handshake: ServerHandshake?) {
-            Log.i(TAG, "Connected to leader")
-            Handler(Looper.getMainLooper()).post {
-                ToastUtils.showToast("Connected to leader")
-            }
-        }
-
-        override fun onMessage(message: String?) {
-            message?.let { handleIncomingMessage(it) }
-        }
-
-        override fun onClose(code: Int, reason: String?, remote: Boolean) {
-            Log.i(TAG, "Disconnected from leader: $reason")
-            Handler(Looper.getMainLooper()).post {
-                ToastUtils.showToast("Disconnected from leader")
-                if (isFormationActive) {
-                    stopFormation()
-                }
-            }
-        }
-
-        override fun onError(ex: Exception?) {
-            Log.e(TAG, "WebSocket client error", ex)
-            Handler(Looper.getMainLooper()).post {
-                ToastUtils.showToast("Connection error: ${ex?.message}")
-            }
-        }
-    }
-
-    private fun handleIncomingMessage(message: String) {
-        runCatching {
-            val json = JSONObject(message)
-            val type = json.getString("type")
-            val data = json.getJSONObject("data")
-
-            when (type) {
-                "leader_state" -> {
-                    if (role == DroneRole.FOLLOWER) {
-                        val position = data.getJSONObject("position")
-                        leaderState = DroneState(
-                            position = LocationCoordinate3D(
-                                position.getDouble("latitude"),
-                                position.getDouble("longitude"),
-                                position.getDouble("altitude")
-                            ),
-                            heading = data.getDouble("heading"),
-                            battery = data.getInt("battery"),
-                            isConnected = true,
-                            timestamp = data.getLong("timestamp")
-                        )
-                    }
-                }
-                "follower_state" -> {
-                    if (role == DroneRole.LEADER) {
-                        val position = data.getJSONObject("position")
-                        followerState = DroneState(
-                            position = LocationCoordinate3D(
-                                position.getDouble("latitude"),
-                                position.getDouble("longitude"),
-                                position.getDouble("altitude")
-                            ),
-                            heading = data.getDouble("heading"),
-                            battery = data.getInt("battery"),
-                            isConnected = true
-                        )
-                    }
-                }
-                "formation_start" -> {
-                    if (role == DroneRole.FOLLOWER && !isFormationActive) {
-                        startFormation()
-                    }
-                }
-                "formation_stop", "emergency_stop" -> {
-                    if (isFormationActive) {
-                        stopFormation()
-                    }
-                    if (type == "emergency_stop") {
-                        emergencyStopRequested = true
-                        DroneController.setStick(0F, 0F, 0F, 0F)
-                    }
-                }
-            }
-        }.onFailure { failure -> Log.e(TAG, "Error parsing message: $message", failure) }
-    }
-
     fun getConnectionStatus(): String {
         return when (role) {
             DroneRole.LEADER -> {
-                if (webSocketServer?.connections?.isNotEmpty() == true) "Follower Connected" else "Waiting for Follower"
+                if (FormationNetworkManager.getConnectionsCount() > 0) {
+                    "Follower Connected"
+                } else {
+                    "Waiting for Follower"
+                }
             }
-            DroneRole.FOLLOWER -> if (webSocketClient?.isOpen == true) "Connected to Leader" else "Disconnected"
+            DroneRole.FOLLOWER -> {
+                if (FormationNetworkManager.isClientConnected) {
+                    "Connected to Leader"
+                } else {
+                    "Disconnected"
+                }
+            }
             DroneRole.NONE -> "No Role Selected"
         }
     }
@@ -427,10 +287,7 @@ object FormationController {
     fun cleanup() {
         stopFormation()
         mainHandler.removeCallbacksAndMessages(null)
-        webSocketServer?.stop()
-        webSocketClient?.close()
-        webSocketServer = null
-        webSocketClient = null
+        FormationNetworkManager.stop()
         leaderState = null
         followerState = null
         role = DroneRole.NONE
