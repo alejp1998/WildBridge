@@ -1509,35 +1509,94 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         return isDetectionsEnabled() && getDetectionSource() == DetectionSource.YOLO_ON_PHONE
     }
 
+    private sealed interface EdgeDetectionStartCheck {
+        data class Ready(val sourceMode: VideoSourceMode, val modelUri: Uri) : EdgeDetectionStartCheck
+        data class UnsupportedSource(val sourceMode: VideoSourceMode) : EdgeDetectionStartCheck
+        data class MissingModel(val sourceMode: VideoSourceMode) : EdgeDetectionStartCheck
+        object WaitingForDjiVideo : EdgeDetectionStartCheck
+    }
+
     private fun startEdgeDetection() {
-        val sourceMode = getVideoSourceMode()
-        if (sourceMode == VideoSourceMode.MOCK) {
-            setDetectionsEnabled(false)
-            updateEdgeMetricsView(EdgeDetectionMetrics(status = "source", source = sourceMode.prefValue))
-            Toast.makeText(this, "Edge detection supports drone and phone camera sources", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val modelUri = getEdgeModelUri()
-        if (modelUri == null) {
-            setDetectionsEnabled(false)
-            updateEdgeMetricsView(EdgeDetectionMetrics(status = "no-model", source = sourceMode.prefValue))
-            showEdgeFilePicker(REQUEST_EDGE_MODEL_FILE, "Select YOLO TFLite model")
-            Toast.makeText(this, "Select a YOLO .tflite model first", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val streamer = webRTCStreamer
-        if (sourceMode == VideoSourceMode.DJI && streamer == null) {
-            Toast.makeText(this, "Edge detector will be ready after video starts", Toast.LENGTH_SHORT).show()
-            return
-        }
         if (edgeDetectionController != null) return
+
+        val startCheck = edgeDetectionStartCheck(getVideoSourceMode(), getEdgeModelUri(), webRTCStreamer)
+        if (startCheck !is EdgeDetectionStartCheck.Ready) {
+            handleEdgeDetectionStartFailure(startCheck)
+            return
+        }
+
         clearAutoSensingState()
-        val controller = EdgeDetectionController(
+
+        val controller = createEdgeDetectionController(startCheck)
+        edgeDetectionController = controller
+
+        configureDetectionOverlay(startCheck.sourceMode)
+        controller.start()
+        updateDetectionTelemetryState()
+        rebuildTelemetryCache()
+
+        attachEdgeDetectionSource(startCheck.sourceMode, controller)
+        showEdgeDetectionEnabledMessage()
+    }
+
+    private fun edgeDetectionStartCheck(
+        sourceMode: VideoSourceMode,
+        modelUri: Uri?,
+        streamer: WebRTCStreamer?
+    ): EdgeDetectionStartCheck {
+        return when {
+            sourceMode == VideoSourceMode.MOCK -> {
+                EdgeDetectionStartCheck.UnsupportedSource(sourceMode)
+            }
+            modelUri == null -> {
+                EdgeDetectionStartCheck.MissingModel(sourceMode)
+            }
+            sourceMode == VideoSourceMode.DJI && streamer == null -> {
+                EdgeDetectionStartCheck.WaitingForDjiVideo
+            }
+            else -> {
+                EdgeDetectionStartCheck.Ready(sourceMode = sourceMode, modelUri = modelUri)
+            }
+        }
+    }
+
+    private fun handleEdgeDetectionStartFailure(startCheck: EdgeDetectionStartCheck) {
+        when (startCheck) {
+            is EdgeDetectionStartCheck.UnsupportedSource -> {
+                setDetectionsEnabled(false)
+                updateEdgeMetricsView(
+                    EdgeDetectionMetrics(status = "source", source = startCheck.sourceMode.prefValue)
+                )
+                Toast.makeText(
+                    this,
+                    "Edge detection supports drone and phone camera sources",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            is EdgeDetectionStartCheck.MissingModel -> {
+                setDetectionsEnabled(false)
+                updateEdgeMetricsView(
+                    EdgeDetectionMetrics(status = "no-model", source = startCheck.sourceMode.prefValue)
+                )
+                showEdgeFilePicker(REQUEST_EDGE_MODEL_FILE, "Select YOLO TFLite model")
+                Toast.makeText(this, "Select a YOLO .tflite model first", Toast.LENGTH_SHORT).show()
+            }
+            EdgeDetectionStartCheck.WaitingForDjiVideo -> {
+                Toast.makeText(this, "Edge detector will be ready after video starts", Toast.LENGTH_SHORT).show()
+            }
+            is EdgeDetectionStartCheck.Ready -> Unit
+        }
+    }
+
+    private fun createEdgeDetectionController(
+        startCheck: EdgeDetectionStartCheck.Ready
+    ): EdgeDetectionController {
+        return EdgeDetectionController(
             context = applicationContext,
             config = EdgeDetectionConfig(
-                modelUri = modelUri,
+                modelUri = startCheck.modelUri,
                 labels = getEdgeLabels(),
-                sourceLabel = sourceMode.prefValue,
+                sourceLabel = startCheck.sourceMode.prefValue,
                 confidenceThreshold = getEdgeConfidenceThreshold()
             ),
             onTargets = { targets ->
@@ -1550,26 +1609,38 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 mainHandler.post { updateEdgeMetricsView(metrics) }
             }
         )
-        edgeDetectionController = controller
-        if (sourceMode == VideoSourceMode.DJI) {
-            detectionOverlay?.setVideoScaleMode(DetectionOverlayView.VideoScaleMode.CENTER_INSIDE)
-            detectionOverlay?.setSourceFrameSize(
-                lastWebRTCMetrics.sourceWidth.takeIf { it > 0 } ?: 16,
-                lastWebRTCMetrics.sourceHeight.takeIf { it > 0 } ?: 9
-            )
-        } else if (sourceMode == VideoSourceMode.PHONE) {
-            detectionOverlay?.setVideoScaleMode(DetectionOverlayView.VideoScaleMode.CENTER_CROP)
+    }
+
+    private fun configureDetectionOverlay(sourceMode: VideoSourceMode) {
+        when (sourceMode) {
+            VideoSourceMode.DJI -> {
+                detectionOverlay?.setVideoScaleMode(DetectionOverlayView.VideoScaleMode.CENTER_INSIDE)
+                detectionOverlay?.setSourceFrameSize(
+                    lastWebRTCMetrics.sourceWidth.takeIf { it > 0 } ?: 16,
+                    lastWebRTCMetrics.sourceHeight.takeIf { it > 0 } ?: 9
+                )
+            }
+            VideoSourceMode.PHONE -> {
+                detectionOverlay?.setVideoScaleMode(DetectionOverlayView.VideoScaleMode.CENTER_CROP)
+            }
+            VideoSourceMode.MOCK -> Unit
         }
-        controller.start()
-        updateDetectionTelemetryState()
-        rebuildTelemetryCache()
+    }
+
+    private fun attachEdgeDetectionSource(
+        sourceMode: VideoSourceMode,
+        controller: EdgeDetectionController
+    ) {
         if (sourceMode == VideoSourceMode.DJI) {
-            streamer?.setEdgeDetectionFrameListener(controller)
-        } else {
-            streamer?.setEdgeDetectionFrameListener(null)
-            stopPhoneCameraPreview()
-            updatePhonePreviewVisibility()
+            webRTCStreamer?.setEdgeDetectionFrameListener(controller)
+            return
         }
+        webRTCStreamer?.setEdgeDetectionFrameListener(null)
+        stopPhoneCameraPreview()
+        updatePhonePreviewVisibility()
+    }
+
+    private fun showEdgeDetectionEnabledMessage() {
         Toast.makeText(this, "Edge detection enabled", Toast.LENGTH_SHORT).show()
         Log.i(TAG, "Edge detection enabled")
     }
@@ -3156,5 +3227,8 @@ private fun NetworkInterface.ipv4Candidates(): List<DeviceIpCandidate> {
     return Collections.list(inetAddresses)
         .filterIsInstance<Inet4Address>()
         .filterNot { it.isLoopbackAddress }
-        .map { DeviceIpCandidate(ip = it.hostAddress, interfaceName = interfaceName) }
+        .mapNotNull { address ->
+            val ip = address.hostAddress ?: return@mapNotNull null
+            DeviceIpCandidate(ip = ip, interfaceName = interfaceName)
+        }
 }

@@ -67,6 +67,7 @@ Focused refactors completed so far:
 - `WildBridgeDefaultLayoutActivity`: extracted pure HTTP command parsing for stick, gimbal, waypoint, and trajectory POST payloads into `WildBridgeHttpCommandParser` with JVM tests, then moved POST command routing into a route-map based `WildBridgeHttpCommandHandler`. `handlePostRequest` no longer appears as a Detekt `LongMethod`, `CyclomaticComplexMethod`, `NestedBlockDepth`, or `ReturnCount` finding, and `SimpleHttpServer` no longer appears as `TooManyFunctions`; remaining HTTP debt is the broad command-handler safety catch and the larger Activity ownership boundary.
 - `WildBridgeDefaultLayoutActivity`: collapsed duplicate options-menu branches into grouped actions. `handleWildBridgeMenuItem` no longer appears as a Detekt `LongMethod` or `CyclomaticComplexMethod` finding.
 - `WildBridgeDefaultLayoutActivity`: flattened device IP lookup into top-level network-interface candidate helpers. `getDeviceIpAddress` no longer appears as a Detekt `NestedBlockDepth` or `ReturnCount` finding.
+- `WildBridgeDefaultLayoutActivity`: split edge-detection startup into explicit precheck, failure handling, controller creation, overlay configuration, and source attachment helpers. `startEdgeDetection` no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
 
 Reports to inspect:
 
@@ -117,6 +118,7 @@ Done already:
 - POST command routing now lives behind `WildBridgeHttpCommandHandler`, leaving `SimpleHttpServer` focused on socket IO and response writing.
 - Options-menu dispatch now groups duplicate stream/detection settings entries into one action path.
 - Device IP lookup now scans IPv4 interface candidates separately from the Activity method, preserving Wi-Fi preference while keeping the method flat.
+- Edge-detection startup now has a small coordinator method with dedicated helper stages so UI messaging and source wiring remain explicit without deep branching.
 
 ### 2. WebRTC Flow Complexity
 
