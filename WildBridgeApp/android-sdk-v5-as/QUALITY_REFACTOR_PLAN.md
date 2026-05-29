@@ -68,6 +68,7 @@ Focused refactors completed so far:
 - `WildBridgeDefaultLayoutActivity`: collapsed duplicate options-menu branches into grouped actions. `handleWildBridgeMenuItem` no longer appears as a Detekt `LongMethod` or `CyclomaticComplexMethod` finding.
 - `WildBridgeDefaultLayoutActivity`: flattened device IP lookup into top-level network-interface candidate helpers. `getDeviceIpAddress` no longer appears as a Detekt `NestedBlockDepth` or `ReturnCount` finding.
 - `WildBridgeDefaultLayoutActivity`: split edge-detection startup into explicit precheck, failure handling, controller creation, overlay configuration, and source attachment helpers. `startEdgeDetection` no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
+- `WildBridgeDefaultLayoutActivity`: decomposed SDK key listener registration into focused setup stages (battery/RTH, storage, flight-state, telemetry). `setupKeyListeners` no longer appears as a Detekt `CyclomaticComplexMethod` finding.
 
 Reports to inspect:
 
@@ -119,6 +120,7 @@ Done already:
 - Options-menu dispatch now groups duplicate stream/detection settings entries into one action path.
 - Device IP lookup now scans IPv4 interface candidates separately from the Activity method, preserving Wi-Fi preference while keeping the method flat.
 - Edge-detection startup now has a small coordinator method with dedicated helper stages so UI messaging and source wiring remain explicit without deep branching.
+- SDK key listener wiring now keeps flight-state transitions and telemetry cache updates in separate setup stages, making the listener lifecycle easier to audit.
 
 ### 2. WebRTC Flow Complexity
 

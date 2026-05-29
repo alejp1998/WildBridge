@@ -1797,6 +1797,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun setupKeyListeners() {
+        setupBatteryAndRthListeners()
+        setupStorageListeners()
+        setupFlightStateListeners()
+        setupTelemetryListeners()
+    }
+
+    private fun setupBatteryAndRthListeners() {
         KeyManager.getInstance().listen(chargeRemainingKey, this) { _, newValue ->
             chargeRemainingProcessor.onNext(newValue ?: 0)
         }
@@ -1812,11 +1819,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         KeyManager.getInstance().listen(timeNeededToLandKey, this) { _, newValue ->
             timeNeededToLandProcessor.onNext(newValue?.timeNeededToLand ?: 0)
         }
+    }
+
+    private fun setupStorageListeners() {
         KeyManager.getInstance().listen(cameraStorageInfosKey, this) { _, newValue ->
             if (isSdCardInserted(newValue)) {
                 preferSdCardStorage(newValue)
             }
         }
+    }
+
+    private fun setupFlightStateListeners() {
         // Keep isAirborne in DroneController in sync with FC telemetry — used by
         // VirtualStickVM to gate manual-override detection: only fire when airborne
         // (prevents ground-level RC drift false-positives) or during autonomous flight.
@@ -1844,6 +1857,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 }, 10_000L)
             }
         }
+        setupRthModeOverrideListener()
+    }
+
+    private fun setupRthModeOverrideListener() {
         // Detect RTH triggered from the RC controller (not from our server HTTP request).
         // When the server triggers RTH it calls startReturnToHome() which sets droneStatus
         // to RETURNING_HOME BEFORE the DJI SDK switches to GO_HOME flight mode.
@@ -1856,6 +1873,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 mainHandler.post { DroneController.activateManualOverride() }
             }
         }
+    }
+
+    private fun setupTelemetryListeners() {
         // Keep altitude display in sync with every position update
         KeyManager.getInstance().listen(location3DKey, this) { _, newValue ->
             mainHandler.post { updateAltitudeView(newValue?.altitude ?: 0.0) }
