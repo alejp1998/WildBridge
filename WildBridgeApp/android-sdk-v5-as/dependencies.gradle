@@ -84,6 +84,7 @@ ext {
 
     // Testing
     deps.junit4 = "junit:junit:4.12"
+    deps.json = "org.json:json:20240303"
     deps.jnitCore = 'androidx.test:core:1.5.0'
     deps.testRunner = 'androidx.test:runner:1.5.0'
     deps.junitExt = 'androidx.test.ext:junit:1.1.5'

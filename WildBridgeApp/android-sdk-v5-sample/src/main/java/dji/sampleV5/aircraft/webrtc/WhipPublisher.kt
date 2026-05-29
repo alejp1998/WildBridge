@@ -484,13 +484,15 @@ class WhipPublisher(
     }
 }
 
-private fun absoluteWhipResourceUrl(url: URL, location: String?): String? {
+internal fun absoluteWhipResourceUrl(url: URL, location: String?): String? {
     return when {
         location == null -> null
         location.startsWith("http") -> location
-        else -> "${url.protocol}://${url.host}:${url.port}$location"
+        else -> "${url.protocol}://${url.host}${url.portSegment()}$location"
     }
 }
+
+private fun URL.portSegment(): String = if (port >= 0) ":$port" else ""
 
 private fun sleepBeforeReconnect(delayMs: Long): Boolean {
     return try {

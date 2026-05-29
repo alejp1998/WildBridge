@@ -58,6 +58,7 @@ Focused refactors completed so far:
 - `WhipPublisher`: replaced ad-hoc publish precondition throws, flattened WHIP POST handling, and simplified reconnect-loop control.
 - `DroneController`: fixed a small constant declaration and wrapped mission/trajectory lines before the larger controller split.
 - `WildBridgeDefaultLayoutActivity`: converted required listener no-ops to explicit `Unit` bodies and removed an unused edge-detection setter.
+- Added characterization tests for refactored WebRTC metadata parsing, stream metrics labels, and WHIP resource URL handling; fixed relative WHIP resource URLs for endpoints without explicit ports.
 
 Reports to inspect:
 

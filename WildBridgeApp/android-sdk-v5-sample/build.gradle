@@ -193,4 +193,5 @@ dependencies {
     implementation 'org.tensorflow:tensorflow-lite:2.16.1'
 
     testImplementation deps.junit4
+    testImplementation deps.json
 }
