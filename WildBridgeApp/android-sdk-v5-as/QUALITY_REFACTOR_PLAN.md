@@ -63,6 +63,7 @@ Focused refactors completed so far:
 - `DroneController`: replaced wildcard imports with explicit SDK/math imports, made required no-op callbacks explicit, logged best-effort abort cleanup failures, and wrapped the remaining simple long lines. Remaining DroneController findings are now structural control-loop size/return-count items that should be handled with focused tests or pure helper extraction first.
 - `DroneController`: extracted the control-loop continuation decision into `ControlLoopContinuation`, covered the cancellation, stale-loop, manual-override, grace-period, and virtual-stick-disabled branches with JVM tests, and removed `shouldControlLoopContinue` from the Detekt return-count findings.
 - `DroneController`: extracted pure trajectory progress, lookahead, speed limiting, yaw scaling, and final-waypoint decisions into `TrajectoryControl` with JVM tests. The trajectory control-loop `run` body no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
+- `DroneController`: extracted waypoint speed limiting, body-frame velocity conversion, arrival checks, and waypoint hold-cooldown decisions into `WaypointControl` with JVM tests. The waypoint PID `run` body no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
 
 Reports to inspect:
 
@@ -223,7 +224,8 @@ Done already:
 - `DroneControlProfile` no longer has a long constructor; flight-control constants are grouped by role without changing call sites.
 - `DroneController` no longer has wildcard-import, empty-callback-block, swallowed abort-cleanup exception, or simple formatting/naming findings. The remaining `run` loop findings should be treated as behavior-sensitive flight-control work and covered before extracting.
 - Control-loop continuation now has pure unit coverage before further flight-control refactoring. The next controller step should apply the same pattern to the waypoint and trajectory `run` bodies before changing their flow.
-- Trajectory control now has pure unit coverage for segment progress, lookahead interpolation, slowdown, yaw speed scaling, and final reach detection. The remaining DroneController method-level hotspot is the waypoint PID `run` body.
+- Trajectory control now has pure unit coverage for segment progress, lookahead interpolation, slowdown, yaw speed scaling, and final reach detection.
+- Waypoint PID control now has pure unit coverage for speed limiting, body-frame velocity conversion, arrival checks, and hold-cooldown behavior. The remaining DroneController findings are class-level size/function-count signals, so the next step should be splitting responsibilities rather than trimming individual loops.
 
 Done already:
 
