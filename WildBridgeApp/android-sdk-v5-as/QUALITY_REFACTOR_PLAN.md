@@ -64,7 +64,7 @@ Focused refactors completed so far:
 - `DroneController`: extracted the control-loop continuation decision into `ControlLoopContinuation`, covered the cancellation, stale-loop, manual-override, grace-period, and virtual-stick-disabled branches with JVM tests, and removed `shouldControlLoopContinue` from the Detekt return-count findings.
 - `DroneController`: extracted pure trajectory progress, lookahead, speed limiting, yaw scaling, and final-waypoint decisions into `TrajectoryControl` with JVM tests. The trajectory control-loop `run` body no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
 - `DroneController`: extracted waypoint speed limiting, body-frame velocity conversion, arrival checks, and waypoint hold-cooldown decisions into `WaypointControl` with JVM tests. The waypoint PID `run` body no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
-- `WildBridgeDefaultLayoutActivity`: extracted pure HTTP command parsing for stick, gimbal, waypoint, and trajectory POST payloads into `WildBridgeHttpCommandParser` with JVM tests, then split POST routing into flight, gimbal/camera, navigation, and state groups. `handlePostRequest` no longer appears as a Detekt `LongMethod`, `CyclomaticComplexMethod`, `NestedBlockDepth`, or `ReturnCount` finding; the remaining local HTTP debt is structural `TooManyFunctions` on `SimpleHttpServer`, so the next slice should move the command handler out of the Activity/server inner class.
+- `WildBridgeDefaultLayoutActivity`: extracted pure HTTP command parsing for stick, gimbal, waypoint, and trajectory POST payloads into `WildBridgeHttpCommandParser` with JVM tests, then moved POST command routing into a route-map based `WildBridgeHttpCommandHandler`. `handlePostRequest` no longer appears as a Detekt `LongMethod`, `CyclomaticComplexMethod`, `NestedBlockDepth`, or `ReturnCount` finding, and `SimpleHttpServer` no longer appears as `TooManyFunctions`; remaining HTTP debt is the broad command-handler safety catch and the larger Activity ownership boundary.
 
 Reports to inspect:
 
@@ -112,6 +112,7 @@ Done already:
 - Aircraft connection source-switching logic was named as `shouldSwitchToDroneVideoSource`, reducing condition complexity in `applyAircraftConnectionState`.
 - Removed the constant mock-video gate so preview visibility follows `isMockVideoEnabled()` directly.
 - POST payload parsing for stick, gimbal, waypoint, PID waypoint, trajectory, and native trajectory commands is now pure Kotlin and covered by JVM tests before the Activity calls DJI/SDK side effects.
+- POST command routing now lives behind `WildBridgeHttpCommandHandler`, leaving `SimpleHttpServer` focused on socket IO and response writing.
 
 ### 2. WebRTC Flow Complexity
 
