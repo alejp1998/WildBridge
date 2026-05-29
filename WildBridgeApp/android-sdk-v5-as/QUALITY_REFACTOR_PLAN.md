@@ -60,6 +60,7 @@ Focused refactors completed so far:
 - `WildBridgeDefaultLayoutActivity`: converted required listener no-ops to explicit `Unit` bodies and removed an unused edge-detection setter.
 - Added characterization tests for refactored WebRTC metadata parsing, stream metrics labels, and WHIP resource URL handling; fixed relative WHIP resource URLs for endpoints without explicit ports.
 - `WhipPublisher`: added characterization tests for first-frame wait/recovery behavior, extracted the WHIP first-frame gate, and split publish setup into named peer-connection, SDP offer, remote-answer, and connection-wait helpers. The `publish` method no longer appears as a WildBridge Detekt `LongMethod` finding.
+- `DroneController`: replaced wildcard imports with explicit SDK/math imports, made required no-op callbacks explicit, logged best-effort abort cleanup failures, and wrapped the remaining simple long lines. Remaining DroneController findings are now structural control-loop size/return-count items that should be handled with focused tests or pure helper extraction first.
 
 Reports to inspect:
 
@@ -218,6 +219,7 @@ Done already:
 
 - Removed whitespace-only placeholder files from `aircraft/formation`; they were unreferenced and only produced `EmptyKtFile` findings.
 - `DroneControlProfile` no longer has a long constructor; flight-control constants are grouped by role without changing call sites.
+- `DroneController` no longer has wildcard-import, empty-callback-block, swallowed abort-cleanup exception, or simple formatting/naming findings. The remaining `run` loop findings should be treated as behavior-sensitive flight-control work and covered before extracting.
 
 Done already:
 
