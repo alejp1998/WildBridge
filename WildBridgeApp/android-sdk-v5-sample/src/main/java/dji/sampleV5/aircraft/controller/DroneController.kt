@@ -72,7 +72,6 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 
 object DroneController {
@@ -1013,58 +1012,15 @@ object DroneController {
         virtualStickVM?.enableVirtualStickAdvancedMode()
         val controlLoop = Handler(Looper.getMainLooper())
         var lastCommandedSpeed = 0.0
-
-        // Helper: Compute great-circle distance (meters) between two lat/lon
-        fun calculateDistance(latA: Double, lonA: Double, latB: Double, lonB: Double): Double {
-            val earthR = 6371000.0
-            val phi1 = Math.toRadians(latA)
-            val phi2 = Math.toRadians(latB)
-            val deltaPhi = Math.toRadians(latB - latA)
-            val deltaLambda = Math.toRadians(lonB - lonA)
-            val a = sin(deltaPhi/2) * sin(deltaPhi/2) +
-                    cos(phi1) * cos(phi2) *
-                    sin(deltaLambda/2) * sin(deltaLambda/2)
-            val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-            return earthR * c
-        }
-
-        // Helper: Compute bearing from (lat1, lon1) to (lat2, lon2)
-        fun calculateBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-            val phi1 = Math.toRadians(lat1)
-            val phi2 = Math.toRadians(lat2)
-            val deltaLambda = Math.toRadians(lon2 - lon1)
-            val y = sin(deltaLambda) * cos(phi2)
-            val x = cos(phi1) * sin(phi2) -
-                    sin(phi1) * cos(phi2) * cos(deltaLambda)
-            val bearing = Math.toDegrees(atan2(y, x))
-            return (bearing + 360) % 360
-        }
-
-        // Helper: Normalize angle to [-180, 180]
-        fun normalizeAngle(angle: Double): Double {
-            var a = angle % 360.0
-            if (a > 180.0) a -= 360.0
-            if (a < -180.0) a += 360.0
-            return a
-        }
-
-        // Helper: Progress along a segment (0=start, 1=end, >1=after end)
-        fun progressOnSegment(
-            start: Triple<Double, Double, Double>,
-            end: Triple<Double, Double, Double>,
-            pos: LocationCoordinate3D
-        ): Double {
-            val ax = start.first
-            val ay = start.second
-            val bx = end.first
-            val by = end.second
-            val px = pos.latitude; val py = pos.longitude
-            val dx = bx - ax; val dy = by - ay
-            val segLen2 = dx*dx + dy*dy
-            if (segLen2 == 0.0) return 0.0
-            val dot = ((px - ax) * dx + (py - ay) * dy)
-            return dot / segLen2 // 0=start, 1=end, >1=after end
-        }
+        val trajectoryConfig = TrajectoryControl.Config(
+            lookaheadDistance = lookaheadDistance,
+            cruiseSpeed = cruiseSpeed,
+            minSpeedFinal = minSpeedFinal,
+            slowdownRadius = slowdownRadius,
+            maxSpeedStep = MAX_HORIZONTAL_ACCEL_MPS2 * (updateIntervalMs / 1000.0),
+            acceptedDistance = WP_ACCEPT_DISTANCE_M,
+            acceptedAltitudeError = WP_ACCEPT_ALTITUDE_M
+        )
 
         val runnable = object : Runnable {
             override fun run() {
@@ -1082,70 +1038,21 @@ object DroneController {
                 val idxB = (currentIndex + 1).coerceAtMost(waypoints.lastIndex)
                 val start = waypoints[idxA]
                 val end = waypoints[idxB]
-
-                // Progress along the segment [start, end]
-                val progress = progressOnSegment(start, end, current)
-                // Project drone onto the segment [start, end]
-                val segLen = calculateDistance(start.first, start.second, end.first, end.second)
-                val projRatio = progress.coerceIn(0.0, 1.0)
-
-                // Pure pursuit: lookahead point further along the segment
-                val lookaheadRatio = ((segLen * projRatio) + lookaheadDistance) / segLen
-                val lookaheadRatioClamped = lookaheadRatio.coerceIn(0.0, 1.0)
-                val lookahead = Triple(
-                    start.first + (end.first - start.first) * lookaheadRatioClamped,
-                    start.second + (end.second - start.second) * lookaheadRatioClamped,
-                    start.third + (end.third - start.third) * lookaheadRatioClamped
-                )
-
-                // Target altitude is smooth
-                val targetAlt = lookahead.third
-
-                // --- Yaw Control: P controller for angular velocity ---
-                val targetYaw = calculateBearing(current.latitude, current.longitude, lookahead.first, lookahead.second)
-                val yawError = normalizeAngle(targetYaw - currentYaw)
-                val Kp_yaw = 1.0 // Tune as needed; 1.0 = 1 deg/s per deg error
-                val maxYawRate = 30.0 // degrees/sec, DJI safe max
-                val targetYawRate = (Kp_yaw * yawError).coerceIn(-maxYawRate, maxYawRate)
-
-                // Move toward lookahead
-                val moveDir = targetYaw
-                val moveDirRel = normalizeAngle(moveDir - currentYaw)
-                var targetSpeed = cruiseSpeed
-
-                // Last segment: slow down as you approach the last waypoint
                 val isLastSegment = idxB == waypoints.lastIndex
-                if (isLastSegment) {
-                    val distToEnd = calculateDistance(current.latitude, current.longitude, end.first, end.second)
-                    if (distToEnd < slowdownRadius)
-                        targetSpeed = minSpeedFinal + (cruiseSpeed - minSpeedFinal) * (distToEnd / slowdownRadius)
-                }
+                val plan = TrajectoryControl.planTick(
+                    TrajectoryControl.TickInput(
+                        current = TrajectoryControl.Point(current.latitude, current.longitude, current.altitude),
+                        currentYaw = currentYaw,
+                        start = TrajectoryControl.Point.fromTriple(start),
+                        end = TrajectoryControl.Point.fromTriple(end),
+                        isLastSegment = isLastSegment,
+                        lastCommandedSpeed = lastCommandedSpeed,
+                        config = trajectoryConfig
+                    )
+                )
+                lastCommandedSpeed = plan.targetSpeed
 
-                // Slow down while the aircraft is still turning toward the local
-                // lookahead direction. This reduces corner cutting on curved
-                // drawn trajectories and keeps Mini 4 Pro behaviour closer to
-                // the well-tested point-to-point controller.
-                val yawErrorFactor = max(0.35, 1.0 - (abs(yawError) / 45.0))
-                targetSpeed *= yawErrorFactor
-
-                val maxSpeedStep = MAX_HORIZONTAL_ACCEL_MPS2 * (updateIntervalMs / 1000.0)
-                targetSpeed = targetSpeed.coerceAtMost(lastCommandedSpeed + maxSpeedStep)
-                lastCommandedSpeed = targetSpeed
-
-                val forwardSpeed = targetSpeed * cos(Math.toRadians(moveDirRel))
-                val lateralSpeed = targetSpeed * sin(Math.toRadians(moveDirRel))
-
-                // Stop criteria: last segment, close to endpoint, and altitude close
-                val reached = isLastSegment &&
-                    calculateDistance(
-                        current.latitude,
-                        current.longitude,
-                        end.first,
-                        end.second
-                    ) < WP_ACCEPT_DISTANCE_M &&
-                    abs(targetAlt - current.altitude) < WP_ACCEPT_ALTITUDE_M
-
-                if (reached) {
+                if (plan.reached) {
                     setStick(0F, 0F, 0F, 0F)
                     _isWaypointReached = true
                     controlLoopEnabled = false
@@ -1153,28 +1060,26 @@ object DroneController {
                 }
 
                 // Passed the end of the segment: go to next
-                if (!isLastSegment && progress > 1.0) {
+                if (!isLastSegment && plan.progress > 1.0) {
                     currentIndex++
                     controlLoop.postDelayed(this, updateIntervalMs)
-                    return
-                }
+                } else {
+                    // DJI SDK V5 quirk: in BODY frame, "pitch" controls lateral movement
+                    // and "roll" controls forward/backward movement. Confirmed empirically.
+                    val flightControlParam = VirtualStickFlightControlParam().apply {
+                        this.pitch = plan.lateralSpeed
+                        this.roll = plan.forwardSpeed
+                        this.yaw = plan.targetYawRate
+                        this.verticalThrottle = plan.targetAltitude
+                        this.verticalControlMode = VerticalControlMode.POSITION
+                        this.rollPitchControlMode = RollPitchControlMode.VELOCITY
+                        this.yawControlMode = YawControlMode.ANGULAR_VELOCITY
+                        this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
+                    }
 
-                // DJI SDK V5 quirk: in BODY frame, the SDK's "pitch" field actually controls
-                // lateral (left/right) movement and "roll" controls forward/backward. This is
-                // the inverse of what the field names suggest. Confirmed empirically.
-                val flightControlParam = VirtualStickFlightControlParam().apply {
-                    this.pitch = lateralSpeed
-                    this.roll = forwardSpeed
-                    this.yaw = targetYawRate
-                    this.verticalThrottle = targetAlt
-                    this.verticalControlMode = VerticalControlMode.POSITION
-                    this.rollPitchControlMode = RollPitchControlMode.VELOCITY
-                    this.yawControlMode = YawControlMode.ANGULAR_VELOCITY
-                    this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
+                    virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
+                    controlLoop.postDelayed(this, updateIntervalMs)
                 }
-
-                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
-                controlLoop.postDelayed(this, updateIntervalMs)
             }
         }
         
