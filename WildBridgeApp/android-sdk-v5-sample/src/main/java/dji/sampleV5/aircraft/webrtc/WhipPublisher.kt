@@ -4,7 +4,21 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import org.webrtc.*
+import org.webrtc.CapturerObserver
+import org.webrtc.DataChannel
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.MediaStream
+import org.webrtc.PeerConnection
+import org.webrtc.RtpReceiver
+import org.webrtc.RtpSender
+import org.webrtc.SdpObserver
+import org.webrtc.SessionDescription
+import org.webrtc.SurfaceTextureHelper
+import org.webrtc.VideoCapturer
+import org.webrtc.VideoSink
+import org.webrtc.VideoSource
+import org.webrtc.VideoTrack
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
@@ -106,10 +120,18 @@ class WhipPublisher(
         val boundedFps = fps.coerceIn(1, 60)
         currentFps = boundedFps
         when (videoCapturer) {
-            is DJIV5VideoCapturer -> videoCapturer.changeCaptureFormat(options.videoResolutionWidth, options.videoResolutionHeight, boundedFps)
+            is DJIV5VideoCapturer -> videoCapturer.changeCaptureFormat(
+                options.videoResolutionWidth,
+                options.videoResolutionHeight,
+                boundedFps
+            )
             is SharedVideoCapturerHandle -> videoCapturer.changeFrameRate(boundedFps)
             is MockMp4VideoCapturer -> videoCapturer.changeFrameRate(boundedFps)
-            is SharedPhoneVideoCapturerHandle -> videoCapturer.changeCaptureFormat(options.videoResolutionWidth, options.videoResolutionHeight, boundedFps)
+            is SharedPhoneVideoCapturerHandle -> videoCapturer.changeCaptureFormat(
+                options.videoResolutionWidth,
+                options.videoResolutionHeight,
+                boundedFps
+            )
         }
         peerConnection?.senders?.firstOrNull()?.let { configureVideoSenderForStability(it) }
         Log.d(TAG, "WHIP frame rate changed to $boundedFps fps")
@@ -330,7 +352,10 @@ class WhipPublisher(
         Log.i(TAG, "WHIP publish started — waiting for connection")
 
         // 7. Wait until connection drops or we're stopped
-        while (isRunning.get() && (connected.get() || peerConnection?.iceConnectionState() == PeerConnection.IceConnectionState.CHECKING)) {
+        while (
+            isRunning.get() &&
+            (connected.get() || peerConnection?.iceConnectionState() == PeerConnection.IceConnectionState.CHECKING)
+        ) {
             Thread.sleep(500)
         }
 
@@ -452,7 +477,11 @@ class WhipPublisher(
             }
 
             sender.parameters = params
-            Log.d(TAG, "Sender params tuned: maxBitrate=${bitrateCap}bps, maxFps=$currentFps, prefer=MAINTAIN_FRAMERATE")
+            Log.d(
+                TAG,
+                "Sender params tuned: maxBitrate=${bitrateCap}bps, " +
+                    "maxFps=$currentFps, prefer=MAINTAIN_FRAMERATE"
+            )
         }.onFailure { e ->
             Log.w(TAG, "Unable to fully apply sender tuning: ${e.message}")
         }

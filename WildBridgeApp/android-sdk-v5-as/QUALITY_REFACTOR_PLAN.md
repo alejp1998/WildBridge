@@ -46,6 +46,7 @@ Focused refactors completed so far:
 - `DroneControlProfile`: grouped speed limits, distance PID gains, and yaw control into small value objects while preserving existing accessors.
 - `SharedPhoneCameraFrameSource`: simplified phone-frame eligibility and moved NV21 conversion into a focused helper, clearing the source from Detekt.
 - `DJIV5VideoCapturer`: split frame processing/delivery boundaries and removed its long-line and broad-catch findings.
+- `WhipPublisher`: replaced the WebRTC wildcard import and split several long diagnostic/control lines before the larger publish-flow extraction.
 
 Reports to inspect:
 
@@ -132,6 +133,7 @@ Done already:
 - Frame metadata detection parsing now uses helper methods for target arrays, source compatibility, and confidence thresholds.
 - Shared phone camera frames now delegate NV21 conversion and even-size calculations to `PhoneImageConverter`.
 - DJI V5 frame delivery now flows through a private delivery request/helper, keeping the capturer listener small.
+- WHIP publisher imports are explicit, and the simple frame-rate/logging line findings are cleared.
 
 ### 3. Edge Detection Pipeline Complexity
 
