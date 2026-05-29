@@ -64,6 +64,7 @@ Focused refactors completed so far:
 - `DroneController`: extracted the control-loop continuation decision into `ControlLoopContinuation`, covered the cancellation, stale-loop, manual-override, grace-period, and virtual-stick-disabled branches with JVM tests, and removed `shouldControlLoopContinue` from the Detekt return-count findings.
 - `DroneController`: extracted pure trajectory progress, lookahead, speed limiting, yaw scaling, and final-waypoint decisions into `TrajectoryControl` with JVM tests. The trajectory control-loop `run` body no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
 - `DroneController`: extracted waypoint speed limiting, body-frame velocity conversion, arrival checks, and waypoint hold-cooldown decisions into `WaypointControl` with JVM tests. The waypoint PID `run` body no longer appears as a Detekt `LongMethod` or `ReturnCount` finding.
+- `WildBridgeDefaultLayoutActivity`: extracted pure HTTP command parsing for stick, gimbal, waypoint, and trajectory POST payloads into `WildBridgeHttpCommandParser` with JVM tests, then moved the parsing-heavy branch bodies behind small server helpers. `handlePostRequest` dropped from 207 to 119 Detekt lines and from 49 to 34 cyclomatic complexity; the next slice should move routing itself out of the Activity/server inner class.
 
 Reports to inspect:
 
@@ -110,6 +111,7 @@ Done already:
 
 - Aircraft connection source-switching logic was named as `shouldSwitchToDroneVideoSource`, reducing condition complexity in `applyAircraftConnectionState`.
 - Removed the constant mock-video gate so preview visibility follows `isMockVideoEnabled()` directly.
+- POST payload parsing for stick, gimbal, waypoint, PID waypoint, trajectory, and native trajectory commands is now pure Kotlin and covered by JVM tests before the Activity calls DJI/SDK side effects.
 
 ### 2. WebRTC Flow Complexity
 
