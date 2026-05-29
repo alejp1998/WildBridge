@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -194,18 +196,39 @@ def run_discovery_socket(sock, target):
         sock.close()
 
 
+def get_subnet_broadcast_addresses():
+    broadcasts = ["255.255.255.255"]
+    try:
+        # Run ip addr show
+        output = subprocess.check_output(["ip", "addr", "show"], text=True)
+        # Find all lines containing "inet ... brd ..."
+        for line in output.split("\n"):
+            if "inet " in line and " brd " in line:
+                match = re.search(r"brd\s+(\d+\.\d+\.\d+\.\d+)", line)
+                if match:
+                    addr = match.group(1)
+                    if addr not in broadcasts:
+                        broadcasts.append(addr)
+    except Exception:
+        pass
+    return broadcasts
+
+
 def discover_now():
     log_event("discovery_started", drones=DRONE_NAMES or "any")
-    try:
-        broadcast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        threading.Thread(
-            target=run_discovery_socket,
-            args=(broadcast_sock, ("255.255.255.255", DISCOVERY_PORT)),
-            daemon=True,
-        ).start()
-    except Exception as exc:
-        log_event("discovery_error", transport="broadcast", error=str(exc))
+    
+    # Broadcast to all resolved interface broadcast addresses (forces physical Wi-Fi routing alongside defaults)
+    for broadcast_ip in get_subnet_broadcast_addresses():
+        try:
+            broadcast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            threading.Thread(
+                target=run_discovery_socket,
+                args=(broadcast_sock, (broadcast_ip, DISCOVERY_PORT)),
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            log_event("discovery_error", transport=f"broadcast-{broadcast_ip}", error=str(exc))
 
     try:
         multicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -257,10 +280,14 @@ def _mark_telemetry_connected(name, ip):
 
 def configure_mediamtx_path(drone_name, mode, source_url=None):
     try:
-        if mode == "rtsp" and source_url:
+        normalized_mode = (mode or "").lower()
+        if normalized_mode == "rtsp" and source_url:
             body = json.dumps({"source": source_url}).encode("utf-8")
-        else:
+        elif normalized_mode in {"rtmp", "webrtc"}:
             body = json.dumps({"source": "publisher"}).encode("utf-8")
+        else:
+            # Other modes are not relayed through MediaMTX.
+            return
         
         # Try to patch first
         req = urllib.request.Request(
@@ -306,27 +333,37 @@ def _handle_telemetry_line(name, line, last_sample_log):
     # Check streaming config from telemetry!
     streaming = telemetry.get("streaming")
     if streaming:
-        mode = streaming.get("mode")
+        mode = (streaming.get("mode") or "").lower()
         if mode == "rtsp":
-            # Construct RTSP url
-            ip = drones[name].get("ip")
-            port = streaming.get("rtspPort", 8554)
-            user = streaming.get("rtspUser", "")
-            pwd = streaming.get("rtspPwd", "")
-            if user and pwd:
-                source_url = f"rtsp://{user}:{pwd}@{ip}:{port}/live"
-            else:
-                source_url = f"rtsp://{ip}:{port}/live"
+            # Construct RTSP url, utilizing consumptionPath from telemetry if available
+            source_url = streaming.get("consumptionPath")
+            if isinstance(source_url, str):
+                source_url = source_url.strip()
+                if source_url.endswith("/live"):
+                    source_url = f"{source_url}/livestream"
+                if source_url.endswith("/live/livestream"):
+                    source_url = source_url[: -len("/live/livestream")] + "/streaming/live/1"
+            if not source_url or not source_url.startswith("rtsp://"):
+                ip = drones[name].get("ip")
+                port = streaming.get("rtspPort", 8554)
+                user = streaming.get("rtspUser", "")
+                pwd = streaming.get("rtspPwd", "")
+                if user and pwd:
+                    source_url = f"rtsp://{user}:{pwd}@{ip}:{port}/streaming/live/1"
+                else:
+                    source_url = f"rtsp://{ip}:{port}/streaming/live/1"
             
             # Let's keep track of last applied mode/url to avoid redundant API calls
             last_applied = drones[name].get("last_applied_stream_source")
-            if last_applied != source_url:
-                drones[name]["last_applied_stream_source"] = source_url
+            desired_state = f"rtsp:{source_url}"
+            if last_applied != desired_state:
+                drones[name]["last_applied_stream_source"] = desired_state
                 configure_mediamtx_path(name, "rtsp", source_url)
-        else:
+        elif mode in {"rtmp", "webrtc"}:
             last_applied = drones[name].get("last_applied_stream_source")
-            if last_applied != "publisher":
-                drones[name]["last_applied_stream_source"] = "publisher"
+            desired_state = f"{mode}:publisher"
+            if last_applied != desired_state:
+                drones[name]["last_applied_stream_source"] = desired_state
                 configure_mediamtx_path(name, mode)
 
     now = time.time()
@@ -484,6 +521,52 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             self.send_json(404, {"error": "Drone not found"})
 
+    def handle_streaming_mode_post(self, path):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) != 5: # /api/drones/<name>/streaming/mode
+            self.send_error(404)
+            return
+        name = unquote(parts[2])
+        body = self.read_json_body()
+        mode = body.get("mode")
+        if not mode:
+            self.send_json(400, {"error": "Missing mode parameter"})
+            return
+
+        with lock:
+            drone = drones.get(name)
+            if not drone:
+                self.send_json(404, {"error": "Drone not found"})
+                return
+            ip = drone.get("ip")
+
+        if not ip:
+            self.send_json(400, {"error": "Drone IP not available (not discovered yet)"})
+            return
+
+        try:
+            req = urllib.request.Request(
+                f"http://{ip}:8080/send/streaming/mode",
+                data=mode.encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "text/plain"}
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                reply = resp.read().decode("utf-8")
+            
+            with lock:
+                if not drones[name].get("lastTelemetry"):
+                    drones[name]["lastTelemetry"] = {}
+                if not drones[name]["lastTelemetry"].get("streaming"):
+                    drones[name]["lastTelemetry"]["streaming"] = {}
+                drones[name]["lastTelemetry"]["streaming"]["mode"] = mode.lower()
+            emit_state()
+
+            self.send_json(200, {"ok": True, "message": reply})
+        except Exception as exc:
+            self.send_json(502, {"error": f"Failed to send command to phone: {str(exc)}"})
+
+
     def handle_client_stats_post(self):
         try:
             body = self.read_json_body()
@@ -531,6 +614,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/drones/") and path.endswith("/ignore"):
             self.handle_ignore_post(path)
+            return
+        if path.startswith("/api/drones/") and path.endswith("/streaming/mode"):
+            self.handle_streaming_mode_post(path)
             return
         if path == "/api/client-stats":
             self.handle_client_stats_post()

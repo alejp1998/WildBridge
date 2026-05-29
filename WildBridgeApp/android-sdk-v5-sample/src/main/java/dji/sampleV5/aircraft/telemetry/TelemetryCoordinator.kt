@@ -84,6 +84,7 @@ class TelemetryCoordinator {
     @Volatile var rtspUser: String = ""
     @Volatile var rtspPwd: String = ""
     @Volatile var rtmpUrl: String = ""
+    @Volatile var consumptionPath: String = ""
 
     @Volatile private var cachedTelemetryJson: String = "{}"
 
@@ -111,7 +112,7 @@ class TelemetryCoordinator {
     }
 
     fun streamingTelemetryJson(): String {
-        return """{"mode":"$streamingMode","rtspPort":$rtspPort,"rtspUser":"${escapeJson(rtspUser)}","rtspPwd":"${escapeJson(rtspPwd)}","rtmpUrl":"${escapeJson(rtmpUrl)}"}"""
+        return """{"mode":"$streamingMode","rtspPort":$rtspPort,"rtspUser":"${escapeJson(rtspUser)}","rtspPwd":"${escapeJson(rtspPwd)}","rtmpUrl":"${escapeJson(rtmpUrl)}","consumptionPath":"${escapeJson(consumptionPath)}"}"""
     }
 
     fun buildTelemetryJson(): String {

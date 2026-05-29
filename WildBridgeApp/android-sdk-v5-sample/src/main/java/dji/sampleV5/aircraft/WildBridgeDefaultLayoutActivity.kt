@@ -21,12 +21,16 @@ import android.content.Context
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.hardware.Sensor
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.content.res.ColorStateList
 import android.graphics.ImageFormat
 import android.graphics.Matrix
@@ -56,6 +60,7 @@ import android.net.wifi.WifiManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.HandlerThread
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.edge.EdgeDetectionController
@@ -181,6 +186,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private const val PREF_RTSP_PORT = "rtsp_port"
         private const val PREF_RTSP_USER = "rtsp_user"
         private const val PREF_RTSP_PWD = "rtsp_pwd"
+        private const val DJI_RTSP_STREAM_PATH = "/streaming/live/1"
         private const val PREF_AGORA_CHANNEL = "agora_channel"
         private const val PREF_AGORA_TOKEN = "agora_token"
         private const val PREF_AGORA_UID = "agora_uid"
@@ -267,6 +273,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var telemetryServer: TelemetryServer? = null
     private var webRTCStreamer: WebRTCStreamer? = null
     @Volatile private var lastWhipUrl: String? = null  // Remembered for FPS/Quality mode restarts
+    @Volatile private var lastClientIp: String? = null
     
     private var droneSerialNumber: String = "UNKNOWN"
     
@@ -294,6 +301,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var batteryManager: BatteryManager? = null
         private var mockPreviewPlayer: MediaPlayer? = null
     @Volatile private var lastWebRTCMetrics = WebRTCStreamMetrics()
+    @Volatile private var lastNativeStreamStatus: String = "idle"
     
     private var phoneHeading: Double = 0.0
     private var phonePressure: Float = 0.0f
@@ -340,6 +348,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var phoneImageReader: ImageReader? = null
     private val phoneInferenceBusy = AtomicBoolean(false)
     @Volatile private var lastPhoneEdgeFrameNs = 0L
+    private var pendingEdgePickerRequestCode: Int? = null
+    private val edgeFilePickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val requestCode = pendingEdgePickerRequestCode
+        pendingEdgePickerRequestCode = null
+        if (requestCode == null || result.resultCode != RESULT_OK) return@registerForActivityResult
+        val uri = result.data?.data ?: return@registerForActivityResult
+        when (requestCode) {
+            REQUEST_EDGE_MODEL_FILE -> storeEdgeModelSelection(uri)
+            REQUEST_EDGE_LABELS_FILE -> storeEdgeFileSelection(uri, PREF_EDGE_LABELS_URI, PREF_EDGE_LABELS_NAME, "Edge labels")
+        }
+    }
 
     private val autoSensingInfoListener = object : AutoSensingInfoListener {
         override fun onAutoSensingInfoUpdate(info: AutoSensingInfo) {
@@ -595,6 +614,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             setDetectionsEnabled(false)
             Toast.makeText(this, "YOLO edge detection deactivated (only supported in WebRTC mode)", Toast.LENGTH_LONG).show()
         }
+        rebuildTelemetryCache()
+        updateStreamingFooter()
     }
 
     private fun getRtmpUrl(clientIp: String): String {
@@ -609,10 +630,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun getRtspPort(): Int = sharedPreferences.getInt(PREF_RTSP_PORT, 8554)
     private fun setRtspPort(port: Int) = sharedPreferences.edit().putInt(PREF_RTSP_PORT, port).apply()
 
-    private fun getRtspUsername(): String = sharedPreferences.getString(PREF_RTSP_USER, "") ?: ""
+    private fun resolveRtspPortForStart(): Int {
+        val configuredPort = getRtspPort()
+        if (!NetworkUtils.isPortInUse(configuredPort)) {
+            return configuredPort
+        }
+        val fallbackPorts = intArrayOf(18554, 28554, 38554)
+        return fallbackPorts.firstOrNull { !NetworkUtils.isPortInUse(it) } ?: configuredPort
+    }
+
+    private fun getRtspUsername(): String = sharedPreferences.getString(PREF_RTSP_USER, "admin") ?: "admin"
     private fun setRtspUsername(user: String) = sharedPreferences.edit().putString(PREF_RTSP_USER, user.trim()).apply()
 
-    private fun getRtspPassword(): String = sharedPreferences.getString(PREF_RTSP_PWD, "") ?: ""
+    private fun getRtspPassword(): String = sharedPreferences.getString(PREF_RTSP_PWD, "wildbridge") ?: "wildbridge"
     private fun setRtspPassword(pwd: String) = sharedPreferences.edit().putString(PREF_RTSP_PWD, pwd).apply()
 
     private fun getAgoraChannel(): String = sharedPreferences.getString(PREF_AGORA_CHANNEL, "") ?: ""
@@ -697,16 +727,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             } else {
                 Toast.makeText(this, "Phone camera source unavailable without camera permission", Toast.LENGTH_SHORT).show()
             }
-        }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        when (requestCode) {
-            REQUEST_EDGE_MODEL_FILE -> storeEdgeModelSelection(uri)
-            REQUEST_EDGE_LABELS_FILE -> storeEdgeFileSelection(uri, PREF_EDGE_LABELS_URI, PREF_EDGE_LABELS_NAME, "Edge labels")
         }
     }
 
@@ -937,7 +957,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             putExtra(Intent.EXTRA_TITLE, title)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
-        startActivityForResult(intent, requestCode)
+        pendingEdgePickerRequestCode = requestCode
+        edgeFilePickerLauncher.launch(intent)
     }
 
     private fun isMockVideoEnabled(): Boolean {
@@ -1029,7 +1050,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun configurePhonePreviewTransform(preview: TextureView, sourceWidth: Int, sourceHeight: Int) {
         val viewWidth = preview.width.toFloat().takeIf { it > 0f } ?: return
         val viewHeight = preview.height.toFloat().takeIf { it > 0f } ?: return
-        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation else windowManager.defaultDisplay.rotation
+        val rotation = display?.rotation ?: Surface.ROTATION_0
         val matrix = Matrix()
         val viewRect = RectF(0f, 0f, viewWidth, viewHeight)
         val centerX = viewRect.centerX()
@@ -1128,7 +1149,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
             }
             val surfaces = listOfNotNull(surface, phoneImageReader?.surface)
-            camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+            val callback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     phoneCameraSession = session
                     runCatching { session.setRepeatingRequest(request.build(), null, phoneCameraHandler) }
@@ -1139,7 +1160,23 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     Log.e(TAG, "Phone camera preview session configure failed")
                     stopPhoneCameraPreview()
                 }
-            }, phoneCameraHandler)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val outputConfigs = surfaces.map { OutputConfiguration(it) }
+                val executor = phoneCameraHandler?.let { handler ->
+                    java.util.concurrent.Executor { command -> handler.post(command) }
+                } ?: mainExecutor
+                val sessionConfig = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    outputConfigs,
+                    executor,
+                    callback
+                )
+                camera.createCaptureSession(sessionConfig)
+            } else {
+                @Suppress("DEPRECATION")
+                camera.createCaptureSession(surfaces, callback, phoneCameraHandler)
+            }
         }.onFailure { error ->
             Log.e(TAG, "Failed to create phone camera preview session: ${error.message}", error)
             stopPhoneCameraPreview()
@@ -1304,7 +1341,39 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         if (metrics.sourceWidth > 0 && metrics.sourceHeight > 0) {
             detectionOverlay?.setSourceFrameSize(metrics.sourceWidth, metrics.sourceHeight)
         }
-        findViewById<TextView>(R.id.text_webrtc_metrics)?.text = metrics.compactLabel()
+        updateStreamingFooter()
+    }
+
+    private fun updateStreamingFooter() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { updateStreamingFooter() }
+            return
+        }
+        val footer = findViewById<TextView>(R.id.text_webrtc_metrics) ?: return
+        val mode = getStreamingMode()
+        val message = when (mode) {
+            StreamingMode.WEBRTC -> lastWebRTCMetrics.compactLabel()
+            StreamingMode.RTMP -> {
+                val serverIp = lastClientIp ?: NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1"
+                val rtmpUrl = getRtmpUrl(serverIp)
+                "RTMP ${if (liveStreamVM.isStreaming()) "running" else "idle"} url $rtmpUrl $lastNativeStreamStatus"
+            }
+            StreamingMode.RTSP -> {
+                val port = getRtspPort()
+                val user = getRtspUsername()
+                val userPrefix = if (user.isNotEmpty()) "$user@" else ""
+                "RTSP ${if (liveStreamVM.isStreaming()) "running" else "idle"} ${userPrefix}port $port path $DJI_RTSP_STREAM_PATH $lastNativeStreamStatus"
+            }
+            StreamingMode.AGORA -> {
+                val channel = getAgoraChannel().ifBlank { "-" }
+                "AGORA ${if (liveStreamVM.isStreaming()) "running" else "idle"} ch $channel $lastNativeStreamStatus"
+            }
+            StreamingMode.GB28181 -> {
+                val server = "${getGbServerIp()}:${getGbServerPort()}"
+                "GB28181 ${if (liveStreamVM.isStreaming()) "running" else "idle"} server $server $lastNativeStreamStatus"
+            }
+        }
+        footer.text = message
     }
 
     private fun WebRTCStreamMetrics.toTelemetryJson(): String {
@@ -1318,112 +1387,211 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
      * Called automatically when the bridge connects to the telemetry server.
      */
     private fun startActiveStreaming(clientIp: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { startActiveStreaming(clientIp) }
+            return
+        }
         val mode = getStreamingMode()
         Log.i(TAG, "Starting active streaming in mode: ${mode.menuLabel}")
-        
-        stopActiveStreaming()
 
-        when (mode) {
-            StreamingMode.WEBRTC -> {
-                val whipUrl = buildWhipUrl(clientIp)
-                lastWhipUrl = whipUrl
-                val streamer = webRTCStreamer
-                if (streamer == null) {
-                    Log.w(TAG, "Cannot start WHIP — WebRTCStreamer not initialized yet")
-                    return
+        webRTCStreamer?.stop()
+
+        val startSelectedMode = {
+            lastNativeStreamStatus = "starting"
+            updateStreamingFooter()
+
+            when (mode) {
+                StreamingMode.WEBRTC -> {
+                    val whipUrl = buildWhipUrl(clientIp)
+                    lastWhipUrl = whipUrl
+                    val streamer = webRTCStreamer
+                    if (streamer == null) {
+                        Log.w(TAG, "Cannot start WHIP - WebRTCStreamer not initialized yet")
+                        lastNativeStreamStatus = "error: streamer not initialized"
+                        updateStreamingFooter()
+                    } else {
+                        runCatching {
+                            streamer.startWhip(whipUrl)
+                            Log.i(TAG, "WHIP publishing started: $whipUrl")
+                            lastNativeStreamStatus = "running"
+                            updateStreamingFooter()
+                        }.onFailure { error ->
+                            Log.e(TAG, "Failed to start WHIP publishing: ${error.message}", error)
+                            lastNativeStreamStatus = "error: ${error.message ?: "start failed"}"
+                            updateStreamingFooter()
+                        }
+                    }
                 }
-                runCatching {
-                    streamer.startWhip(whipUrl)
-                    Log.i(TAG, "WHIP publishing started: $whipUrl")
-                }.onFailure { error ->
-                    Log.e(TAG, "Failed to start WHIP publishing: ${error.message}", error)
+                StreamingMode.RTMP -> {
+                    val rtmpUrl = getRtmpUrl(clientIp)
+                    fun fallbackRtmpUrl(url: String): String? {
+                        val match = Regex("^rtmp://([^/]+)/([^/]+)$").matchEntire(url.trim()) ?: return null
+                        val hostPort = match.groupValues[1]
+                        val stream = match.groupValues[2]
+                        return "rtmp://$hostPort/live/$stream"
+                    }
+
+                    fun startRtmp(url: String, fallbackAttempt: Boolean = false) {
+                        Log.i(TAG, "Starting native DJI RTMP streaming to: $url")
+                        liveStreamVM.setRTMPConfig(url)
+                        liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
+                            override fun onSuccess() {
+                                if (url != rtmpUrl) {
+                                    setRtmpUrl(url)
+                                }
+                                Log.i(TAG, "Native DJI RTMP streaming started successfully")
+                                lastNativeStreamStatus = "running"
+                                mainHandler.post { updateStreamingFooter() }
+                                showStreamToast("RTMP stream started")
+                            }
+
+                            override fun onFailure(error: IDJIError) {
+                                val message = error.description()
+                                if (!fallbackAttempt) {
+                                    val fallback = fallbackRtmpUrl(url)
+                                    if (fallback != null && fallback != url) {
+                                        Log.w(TAG, "RTMP failed for $url ($message), retrying with $fallback")
+                                        lastNativeStreamStatus = "retrying with $fallback"
+                                        mainHandler.post { updateStreamingFooter() }
+                                        startRtmp(fallback, true)
+                                        return
+                                    }
+                                }
+                                Log.e(TAG, "Failed to start native DJI RTMP stream: $message")
+                                lastNativeStreamStatus = "error: $message"
+                                mainHandler.post { updateStreamingFooter() }
+                                showStreamToast("RTMP failed: $message")
+                            }
+                        })
+                    }
+
+                    startRtmp(rtmpUrl)
+                }
+                StreamingMode.RTSP -> {
+                    val requestedPort = getRtspPort()
+                    val port = resolveRtspPortForStart()
+                    if (port != requestedPort) {
+                        setRtspPort(port)
+                        Log.w(TAG, "RTSP port $requestedPort is in use, switching to $port")
+                        rebuildTelemetryCache()
+                        updateStreamingFooter()
+                        showStreamToast("RTSP port $requestedPort busy, switched to $port")
+                    }
+                    val user = getRtspUsername()
+                    val pwd = getRtspPassword()
+                    Log.i(TAG, "Starting native DJI RTSP server on port $port")
+                    liveStreamVM.setRTSPConfig(user, pwd, port)
+                    liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
+                        override fun onSuccess() {
+                            Log.i(TAG, "Native DJI RTSP server started successfully")
+                            lastNativeStreamStatus = "running"
+                            mainHandler.post { updateStreamingFooter() }
+                            showStreamToast("RTSP server started on port $port")
+                        }
+                        override fun onFailure(error: IDJIError) {
+                            Log.e(TAG, "Failed to start native DJI RTSP: ${error.description()}")
+                            lastNativeStreamStatus = "error: ${error.description()}"
+                            mainHandler.post { updateStreamingFooter() }
+                            showStreamToast("RTSP failed: ${error.description()}")
+                        }
+                    })
+                }
+                StreamingMode.AGORA -> {
+                    val channel = getAgoraChannel()
+                    val token = getAgoraToken()
+                    val uid = getAgoraUid()
+                    Log.i(TAG, "Starting Agora streaming on channel $channel")
+                    liveStreamVM.setAgoraConfig(channel, token, uid)
+                    liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
+                        override fun onSuccess() {
+                            Log.i(TAG, "Agora streaming started successfully")
+                            lastNativeStreamStatus = "running"
+                            mainHandler.post { updateStreamingFooter() }
+                            showStreamToast("Agora stream started")
+                        }
+                        override fun onFailure(error: IDJIError) {
+                            Log.e(TAG, "Failed to start Agora: ${error.description()}")
+                            lastNativeStreamStatus = "error: ${error.description()}"
+                            mainHandler.post { updateStreamingFooter() }
+                            showStreamToast("Agora failed: ${error.description()}")
+                        }
+                    })
+                }
+                StreamingMode.GB28181 -> {
+                    val ip = getGbServerIp()
+                    val port = getGbServerPort()
+                    val serverId = getGbServerId()
+                    val agentId = getGbAgentId()
+                    val channel = getGbChannel()
+                    val localPort = getGbLocalPort()
+                    val pwd = getGbPassword()
+                    Log.i(TAG, "Starting GB28181 streaming to $ip:$port")
+                    liveStreamVM.setGB28181(ip, port, serverId, agentId, channel, localPort, pwd)
+                    liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
+                        override fun onSuccess() {
+                            Log.i(TAG, "GB28181 streaming started successfully")
+                            lastNativeStreamStatus = "running"
+                            mainHandler.post { updateStreamingFooter() }
+                            showStreamToast("GB28181 stream started")
+                        }
+                        override fun onFailure(error: IDJIError) {
+                            Log.e(TAG, "Failed to start GB28181: ${error.description()}")
+                            lastNativeStreamStatus = "error: ${error.description()}"
+                            mainHandler.post { updateStreamingFooter() }
+                            showStreamToast("GB28181 failed: ${error.description()}")
+                        }
+                    })
                 }
             }
-            StreamingMode.RTMP -> {
-                val rtmpUrl = getRtmpUrl(clientIp)
-                Log.i(TAG, "Starting native DJI RTMP streaming to: $rtmpUrl")
-                liveStreamVM.setRTMPConfig(rtmpUrl)
-                liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() {
-                        Log.i(TAG, "Native DJI RTMP streaming started successfully")
-                        showStreamToast("RTMP stream started")
-                    }
-                    override fun onFailure(error: IDJIError) {
-                        Log.e(TAG, "Failed to start native DJI RTMP stream: ${error.description()}")
-                        showStreamToast("RTMP failed: ${error.description()}")
-                    }
-                })
-            }
-            StreamingMode.RTSP -> {
-                val port = getRtspPort()
-                val user = getRtspUsername()
-                val pwd = getRtspPassword()
-                Log.i(TAG, "Starting native DJI RTSP server on port $port")
-                liveStreamVM.setRTSPConfig(user, pwd, port)
-                liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() {
-                        Log.i(TAG, "Native DJI RTSP server started successfully")
-                        showStreamToast("RTSP server started on port $port")
-                    }
-                    override fun onFailure(error: IDJIError) {
-                        Log.e(TAG, "Failed to start native DJI RTSP: ${error.description()}")
-                        showStreamToast("RTSP failed: ${error.description()}")
-                    }
-                })
-            }
-            StreamingMode.AGORA -> {
-                val channel = getAgoraChannel()
-                val token = getAgoraToken()
-                val uid = getAgoraUid()
-                Log.i(TAG, "Starting Agora streaming on channel $channel")
-                liveStreamVM.setAgoraConfig(channel, token, uid)
-                liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() {
-                        Log.i(TAG, "Agora streaming started successfully")
-                        showStreamToast("Agora stream started")
-                    }
-                    override fun onFailure(error: IDJIError) {
-                        Log.e(TAG, "Failed to start Agora: ${error.description()}")
-                        showStreamToast("Agora failed: ${error.description()}")
-                    }
-                })
-            }
-            StreamingMode.GB28181 -> {
-                val ip = getGbServerIp()
-                val port = getGbServerPort()
-                val serverId = getGbServerId()
-                val agentId = getGbAgentId()
-                val channel = getGbChannel()
-                val localPort = getGbLocalPort()
-                val pwd = getGbPassword()
-                Log.i(TAG, "Starting GB28181 streaming to $ip:$port")
-                liveStreamVM.setGB28181(ip, port, serverId, agentId, channel, localPort, pwd)
-                liveStreamVM.startStream(object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() {
-                        Log.i(TAG, "GB28181 streaming started successfully")
-                        showStreamToast("GB28181 stream started")
-                    }
-                    override fun onFailure(error: IDJIError) {
-                        Log.e(TAG, "Failed to start GB28181: ${error.description()}")
-                        showStreamToast("GB28181 failed: ${error.description()}")
-                    }
-                })
-            }
+        }
+
+        if (liveStreamVM.isStreaming()) {
+            Log.i(TAG, "Stopping currently active native DJI livestream before restart")
+            liveStreamVM.stopStream(object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    Log.i(TAG, "Native DJI livestream stopped successfully")
+                    lastNativeStreamStatus = "stopped"
+                    mainHandler.post { updateStreamingFooter() }
+                    startSelectedMode()
+                }
+
+                override fun onFailure(error: IDJIError) {
+                    Log.w(TAG, "Failed to stop native DJI livestream before restart: ${error.description()}")
+                    lastNativeStreamStatus = "stop failed: ${error.description()}"
+                    mainHandler.post { updateStreamingFooter() }
+                    startSelectedMode()
+                }
+            })
+        } else {
+            startSelectedMode()
         }
     }
 
     private fun stopActiveStreaming() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { stopActiveStreaming() }
+            return
+        }
         Log.i(TAG, "Stopping active streaming...")
         webRTCStreamer?.stop()
+        lastNativeStreamStatus = "stopping"
+        mainHandler.post { updateStreamingFooter() }
         if (liveStreamVM.isStreaming()) {
             liveStreamVM.stopStream(object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
                     Log.i(TAG, "Native DJI livestream stopped successfully")
+                    lastNativeStreamStatus = "stopped"
+                    mainHandler.post { updateStreamingFooter() }
                 }
                 override fun onFailure(error: IDJIError) {
                     Log.w(TAG, "Failed to stop native DJI livestream: ${error.description()}")
+                    lastNativeStreamStatus = "stop failed: ${error.description()}"
+                    mainHandler.post { updateStreamingFooter() }
                 }
             })
+        } else {
+            lastNativeStreamStatus = "stopped"
+            mainHandler.post { updateStreamingFooter() }
         }
     }
 
@@ -1434,7 +1602,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun restartActiveStreaming() {
-        val lastIp = lastWhipUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1"
+        val lastIp = lastClientIp ?: lastWhipUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1"
         startActiveStreaming(lastIp)
     }
 
@@ -2760,7 +2928,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 telemetryServer = TelemetryServer(TELEMETRY_PORT, ::getTelemetryJson)
                 telemetryServer?.onFirstClientConnected = { clientIp ->
                     Log.i(TAG, "First telemetry client from $clientIp — starting active streaming")
-                    Thread { startActiveStreaming(clientIp) }.start()
+                    lastClientIp = clientIp
+                    mainHandler.post {
+                        rebuildTelemetryCache()
+                        startActiveStreaming(clientIp)
+                    }
                 }
                 telemetryServer?.start()
                 Log.i(TAG, "Telemetry server started on $deviceIp:$TELEMETRY_PORT")
@@ -2805,7 +2977,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             if (pendingUrl != null) {
                 val pendingIp = runCatching { Uri.parse(pendingUrl).host }.getOrNull() ?: "127.0.0.1"
                 Log.i(TAG, "Deferred streaming start: $pendingIp")
-                Thread { startActiveStreaming(pendingIp) }.start()
+                mainHandler.post { startActiveStreaming(pendingIp) }
             }
         }.onFailure { error ->
             Log.e(TAG, "Error creating WebRTC streamer: ${error.message}", error)
@@ -3001,11 +3173,33 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         telemetryCoordinator.droneName = droneName
 
         // Streaming Config
-        telemetryCoordinator.streamingMode = getStreamingMode().prefValue
+        val activeMode = getStreamingMode()
+        telemetryCoordinator.streamingMode = activeMode.prefValue
         telemetryCoordinator.rtspPort = getRtspPort()
         telemetryCoordinator.rtspUser = getRtspUsername()
         telemetryCoordinator.rtspPwd = getRtspPassword()
-        telemetryCoordinator.rtmpUrl = getRtmpUrl(NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1")
+        val serverIp = lastClientIp ?: "127.0.0.1"
+        telemetryCoordinator.rtmpUrl = getRtmpUrl(serverIp)
+
+        // Compute exact consumption path dynamically for backend and telemetry exposure
+        val phoneIp = NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1"
+        val user = getRtspUsername()
+        val pwd = getRtspPassword()
+        val port = getRtspPort()
+        val path = when (activeMode) {
+            StreamingMode.WEBRTC -> "whip"
+            StreamingMode.RTSP -> {
+                if (user.isNotEmpty() && pwd.isNotEmpty()) {
+                    "rtsp://$user:$pwd@$phoneIp:$port$DJI_RTSP_STREAM_PATH"
+                } else {
+                    "rtsp://$phoneIp:$port$DJI_RTSP_STREAM_PATH"
+                }
+            }
+            StreamingMode.RTMP -> getRtmpUrl(serverIp)
+            StreamingMode.AGORA -> "agora://${getAgoraChannel()}"
+            StreamingMode.GB28181 -> "gb28181://${getGbServerIp()}:${getGbServerPort()}/${getGbChannel()}"
+        }
+        telemetryCoordinator.consumptionPath = path
 
         if (isMock) {
             val sdkMock = TelemetryProvider.currentMockTelemetry(droneName)
@@ -3033,13 +3227,25 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         telemetryCoordinator.phoneHeading = phoneHeading
         telemetryCoordinator.phonePressure = phonePressure
         telemetryCoordinator.phoneBattery = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-        telemetryCoordinator.wifiRssi = wifiManager?.connectionInfo?.rssi ?: -100
+        telemetryCoordinator.wifiRssi = currentWifiRssi()
 
         // WebRTC Metrics
         telemetryCoordinator.webRtcMetricsJson = lastWebRTCMetrics.toTelemetryJson()
 
         // Rebuild cache inside the coordinator
         telemetryCoordinator.rebuildTelemetryCache()
+    }
+
+    private fun currentWifiRssi(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val network = connectivityManager?.activeNetwork ?: return -100
+            val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return -100
+            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return -100
+            return (capabilities.transportInfo as? android.net.wifi.WifiInfo)?.rssi ?: -100
+        }
+        @Suppress("DEPRECATION")
+        return wifiManager?.connectionInfo?.rssi ?: -100
     }
 
     private fun rebuildRealTelemetryCache() {
@@ -3310,6 +3516,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             },
             "/get/autoSensing/targets" to {
                 DetectedTarget.listToJsonArray(currentDetectedTargets).toString()
+            },
+            "/send/streaming/mode" to { postData ->
+                val modeStr = postData.trim().lowercase()
+                val selectedMode = StreamingMode.entries.find { it.prefValue == modeStr }
+                if (selectedMode != null) {
+                    mainHandler.post {
+                        setStreamingMode(selectedMode)
+                        restartActiveStreaming()
+                    }
+                    "Streaming mode successfully changed to $modeStr"
+                } else {
+                    "Invalid streaming mode: $postData"
+                }
             }
         )
 

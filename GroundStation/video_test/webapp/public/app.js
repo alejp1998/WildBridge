@@ -17,6 +17,9 @@ const modalStats = document.querySelector('#modalStats');
 const modalRecovery = document.querySelector('#modalRecovery');
 const modalEvent = document.querySelector('#modalEvent');
 const modalVideoHost = document.querySelector('#modalVideoHost');
+const modalStreamingSelect = document.querySelector('#modalStreamingSelect');
+const modalStreamingPath = document.querySelector('#modalStreamingPath');
+
 
 const players = new Map();
 const healthCards = new Map();
@@ -30,6 +33,18 @@ let latestState = null;
 let selectedDroneName = null;
 let modalMountedPlayer = null;
 let modalReturnAnchor = null;
+
+function getRelayBaseUrl() {
+  const configured = latestState?.mediamtxWebrtcUrl;
+  if (typeof configured === 'string' && configured.trim()) {
+    return configured.trim().replace(/\/$/, '');
+  }
+  return `http://${location.hostname}:8889`;
+}
+
+function getRelayWhepUrl(streamName) {
+  return `${getRelayBaseUrl()}/${encodeURIComponent(streamName)}/whep`;
+}
 
 const droneColors = ['#42d392', '#6fb6ff', '#ffcc66', '#ff6b6b', '#c48cff', '#4dd0e1', '#f48fb1', '#a3e635'];
 const receiverBufferPolicy = {
@@ -192,7 +207,7 @@ class WhepPlayer {
     this.isConnecting = true;
     this.close();
     this.setStatus('connecting', 'status-warn');
-    const whepUrl = `http://${location.hostname}:8889/${encodeURIComponent(this.drone.streamName)}/whep`;
+    const whepUrl = getRelayWhepUrl(this.drone.streamName);
 
     try {
       this.pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
@@ -242,8 +257,9 @@ class WhepPlayer {
       this.report('whep_answer_set', { url: whepUrl, recovery: this.latestSdpRecovery.summary });
       this.startStats();
     } catch (error) {
+      const mode = this.drone.lastTelemetry?.streaming?.mode?.toLowerCase() || 'webrtc';
       this.setStatus('error', 'status-bad');
-      this.report('connect_error', { error: error.message });
+      this.report('connect_error', { error: error.message, mode, relayUrl: whepUrl });
       this.scheduleReconnect();
     } finally {
       this.isConnecting = false;
@@ -474,11 +490,14 @@ class WhepPlayer {
   }
 
   scheduleReconnect() {
-    if (!this.drone.mediaMtx?.ready || this.reconnectTimer) return;
+    if (this.reconnectTimer) return;
+    // Always consume through MediaMTX relay, regardless of source mode.
+    if (!this.drone.mediaMtx?.ready) return;
+    const delay = 2500;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, 2500);
+    }, delay);
   }
 
   close() {
@@ -626,6 +645,7 @@ function renderVideoTiles(state) {
     updateText(ignoreButton, drone.ignored ? 'Use' : 'Ignore');
     ignoreButton.setAttribute('aria-pressed', String(!!drone.ignored));
     updateTelemetryStats(player.tile, drone);
+
     if (drone.ignored) {
       player.close();
       player.setStatus('ignored', 'status-warn');
@@ -637,7 +657,7 @@ function renderVideoTiles(state) {
         player.setStatus('camera feed lost', 'status-bad');
         updateText(player.events, lostMessage);
       } else {
-        player.setStatus(drone.status || 'waiting', drone.telemetryConnected ? 'status-warn' : 'status-bad');
+        player.setStatus('awaiting relay…', drone.telemetryConnected ? 'status-warn' : 'status-bad');
       }
     }
   }
@@ -683,6 +703,9 @@ function updateHealthCard(card, drone) {
   const telemetry = drone.lastTelemetry || {};
   const phone = telemetry.phoneLocation || {};
   const sender = telemetry.webRtc || {};
+  const streamMode = telemetry.streaming?.mode?.toUpperCase() || 'WEBRTC';
+  const senderLabel = streamMode === 'WEBRTC' ? 'Sender FPS' : `${streamMode} Source FPS`;
+  const processingLabel = streamMode === 'WEBRTC' ? 'Sender Processing' : `${streamMode} Source Processing`;
   const media = drone.mediaMtx || {};
   const browser = drone.browserStats || {};
   const recovery = browser.sdpRecovery || emptySdpRecovery();
@@ -701,8 +724,8 @@ function updateHealthCard(card, drone) {
   updateDetailList(card.metrics, [
     ['wifi', 'Wi-Fi RSSI', phone.wifiRssi === undefined ? '-' : `${phone.wifiRssi} dBm`],
     ['phoneBattery', 'Phone Battery', phone.battery === undefined ? '-' : `${phone.battery}%`],
-    ['senderFps', 'Sender FPS', sender.outputFps === undefined ? '-' : `${Number(sender.outputFps).toFixed(1)} / ${sender.targetFps || '-'}`],
-    ['senderProcessing', 'Sender Processing', sender.averageFrameProcessingMs === undefined ? '-' : `${Number(sender.averageFrameProcessingMs).toFixed(1)} ms/frame`],
+    ['senderFps', senderLabel, sender.outputFps === undefined ? '-' : `${Number(sender.outputFps).toFixed(1)} / ${sender.targetFps || '-'}`],
+    ['senderProcessing', processingLabel, sender.averageFrameProcessingMs === undefined ? '-' : `${Number(sender.averageFrameProcessingMs).toFixed(1)} ms/frame`],
     ['browserFps', 'Browser FPS', browser.fps === undefined ? '-' : Number(browser.fps).toFixed(1)],
     ['bitrate', 'Bitrate', browser.bitrateKbps === undefined ? '-' : `${browser.bitrateKbps} kbps`],
     ['loss', 'Loss / Drop', `${browser.packetsLost ?? '-'} / ${browser.framesDropped ?? '-'}`],
@@ -1164,6 +1187,9 @@ function updateModalForDrone(name) {
   if (!drone) return;
   const telemetry = drone.lastTelemetry || {};
   const sender = telemetry.webRtc || {};
+  const streamMode = telemetry.streaming?.mode?.toUpperCase() || 'WEBRTC';
+  const senderLabel = streamMode === 'WEBRTC' ? 'Sender FPS' : `${streamMode} Source FPS`;
+  const processingLabel = streamMode === 'WEBRTC' ? 'Sender Processing' : `${streamMode} Source Processing`;
   const media = drone.mediaMtx || {};
   const browserStats = modalMountedPlayer?.latestStats || drone.browserStats || {};
   const recovery = browserStats.sdpRecovery || emptySdpRecovery();
@@ -1182,8 +1208,8 @@ function updateModalForDrone(name) {
     ['speed', 'Speed', Number.isFinite(magnitude(speed.x, speed.y, speed.z)) ? `${magnitude(speed.x, speed.y, speed.z).toFixed(2)} m/s` : '-'],
     ['phoneBattery', 'Phone Battery', telemetry.phoneLocation?.battery === undefined ? '-' : `${telemetry.phoneLocation.battery}%`],
     ['wifiRssi', 'Wi-Fi RSSI', telemetry.phoneLocation?.wifiRssi],
-    ['senderFps', 'Sender FPS', sender.outputFps === undefined ? '-' : `${Number(sender.outputFps).toFixed(1)} / ${sender.targetFps || '-'}`],
-    ['senderProcessing', 'Sender Processing', sender.averageFrameProcessingMs === undefined ? '-' : `${Number(sender.averageFrameProcessingMs).toFixed(1)} ms/frame`],
+    ['senderFps', senderLabel, sender.outputFps === undefined ? '-' : `${Number(sender.outputFps).toFixed(1)} / ${sender.targetFps || '-'}`],
+    ['senderProcessing', processingLabel, sender.averageFrameProcessingMs === undefined ? '-' : `${Number(sender.averageFrameProcessingMs).toFixed(1)} ms/frame`],
     ['lastError', 'Last Error', drone.lastError || '-'],
   ]);
   updateDetailList(modalStats, [
@@ -1228,6 +1254,45 @@ function updateModalForDrone(name) {
   } else if (!media.ready && modalMountedPlayer?.pc?.connectionState !== 'connected') {
     modalMountedPlayer?.setStatus(drone.telemetryConnected ? 'waiting for stream' : 'waiting for telemetry', drone.telemetryConnected ? 'status-warn' : 'status-bad');
   }
+
+  if (modalStreamingSelect) {
+    modalStreamingSelect.value = telemetry.streaming?.mode?.toLowerCase() || 'webrtc';
+  }
+  if (modalStreamingPath) {
+    modalStreamingPath.textContent = getConsumptionPath(drone);
+  }
+}
+
+function getConsumptionPath(drone) {
+  const telemetry = drone.lastTelemetry || {};
+  const mode = telemetry.streaming?.mode?.toLowerCase() || 'webrtc';
+  const droneIp = drone.ip || 'PHONE_IP';
+  const rawPath = telemetry.streaming?.consumptionPath;
+  let info = '';
+
+  switch (mode) {
+    case 'webrtc':
+      info = `WHIP Ingest (Phone) → MediaMTX relay WHEP (Browser): ${getRelayWhepUrl(drone.streamName)}`;
+      break;
+    case 'rtsp': {
+      const rtspPort = telemetry.streaming?.rtspPort || 8554;
+      const rtspUser = telemetry.streaming?.rtspUser || 'admin';
+      const rtspPwd  = telemetry.streaming?.rtspPwd  || 'wildbridge';
+      info = `RTSP Server (Phone): rtsp://${rtspUser}:${rtspPwd}@${droneIp}:${rtspPort}/streaming/live/1 → MediaMTX pulling & bridging to WHEP`;
+      break;
+    }
+    case 'rtmp':
+      info = `RTMP Publisher (Phone): rtmp://${location.hostname}:1935/${encodeURIComponent(drone.streamName)} → MediaMTX receiving & bridging to WHEP`;
+      break;
+    default:
+      info = `Unknown streaming protocol: ${mode}`;
+      break;
+  }
+
+  if (rawPath) {
+    info += `\n(Raw Telemetry Path: ${rawPath})`;
+  }
+  return info;
 }
 
 function openDroneModal(name) {
@@ -1248,7 +1313,12 @@ function closeDroneModal() {
 }
 
 async function loadState() { const response = await fetch('/api/drones'); render(await response.json()); }
-function reconnectAll() { for (const player of players.values()) if (!player.drone.ignored && player.drone.mediaMtx?.ready) player.connect(); }
+function reconnectAll() {
+  for (const player of players.values()) {
+    if (player.drone.ignored) continue;
+    if (player.drone.mediaMtx?.ready) player.connect();
+  }
+}
 
 function renderTreeNode(label, value, options = {}) {
   const { open = false, hideLabel = false, path = label, state = null } = options;
@@ -1318,6 +1388,39 @@ function escapeHtml(value) {
 document.querySelector('#discoverBtn').addEventListener('click', () => { fetch('/api/discover', { method: 'POST' }).catch(() => {}); });
 document.querySelector('#reconnectBtn').addEventListener('click', reconnectAll);
 modalCloseBtn.addEventListener('click', closeDroneModal);
+
+if (modalStreamingSelect) {
+  modalStreamingSelect.addEventListener('change', async (event) => {
+    const selectedMode = event.target.value;
+    if (!selectedDroneName) return;
+    
+    modalStreamingSelect.disabled = true;
+    modalStreamingPath.textContent = 'Switching streaming protocol... Phone is restarting streams...';
+    
+    try {
+      const response = await fetch(`/api/drones/${encodeURIComponent(selectedDroneName)}/streaming/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: selectedMode })
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to switch protocol');
+      }
+      console.log('Remote protocol switch successful:', result);
+      setTimeout(loadState, 1500);
+    } catch (error) {
+      alert(`Failed to switch streaming protocol: ${error.message}`);
+      const drone = getDrone(selectedDroneName);
+      if (drone) {
+        modalStreamingSelect.value = drone.lastTelemetry?.streaming?.mode?.toLowerCase() || 'webrtc';
+        modalStreamingPath.textContent = getConsumptionPath(drone);
+      }
+    } finally {
+      modalStreamingSelect.disabled = false;
+    }
+  });
+}
 droneModal.addEventListener('close', closeDroneModal);
 droneModal.addEventListener('click', (event) => { if (event.target === droneModal) closeDroneModal(); });
 
