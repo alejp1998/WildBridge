@@ -42,6 +42,13 @@ import sys
 # Add parent path to import djiInterface
 sys.path.insert(0, os.path.dirname(__file__))
 from djiInterface import DJIInterface
+from wildbridge_groundstation.mavlink_helpers import (
+    climb_rate_mps,
+    gps_fix_type,
+    ground_speed_mps,
+    heartbeat_base_mode,
+    is_armed_flight_mode,
+)
 
 
 class MAVLinkProxy:
@@ -196,16 +203,15 @@ class MAVLinkProxy:
                 telemetry = self.dji.getTelemetry()
                 dji_mode = telemetry.get("flightMode", "UNKNOWN") if telemetry else "UNKNOWN"
 
-                # Determine base mode flags
-                base_mode = mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-                if self.armed:
-                    base_mode |= mavlink.MAV_MODE_FLAG_SAFETY_ARMED
-
-                # Check if GPS is active
                 sat_count = telemetry.get("satelliteCount", 0) if telemetry else 0
-                if sat_count > 5:
-                    base_mode |= mavlink.MAV_MODE_FLAG_STABILIZE_ENABLED
-                    base_mode |= mavlink.MAV_MODE_FLAG_GUIDED_ENABLED
+                base_mode = heartbeat_base_mode(
+                    armed=self.armed,
+                    satellite_count=sat_count,
+                    custom_mode_enabled_flag=mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                    safety_armed_flag=mavlink.MAV_MODE_FLAG_SAFETY_ARMED,
+                    stabilize_enabled_flag=mavlink.MAV_MODE_FLAG_STABILIZE_ENABLED,
+                    guided_enabled_flag=mavlink.MAV_MODE_FLAG_GUIDED_ENABLED,
+                )
 
                 # Custom mode (PX4-style)
                 custom_mode = self.DJI_TO_MAV_MODE.get(dji_mode, 0)
@@ -245,7 +251,7 @@ class MAVLinkProxy:
 
                 # Update armed state from flight mode
                 dji_mode = telemetry.get("flightMode", "UNKNOWN")
-                self.armed = dji_mode not in ["UNKNOWN", "MANUAL", ""]
+                self.armed = is_armed_flight_mode(dji_mode)
                 self.mode = dji_mode
                 self.manual_override = telemetry.get("isManualOverrideActive", False)
 
@@ -322,12 +328,9 @@ class MAVLinkProxy:
         lon = int(location.get("longitude", 0) * 1e7)
         alt = int(location.get("altitude", 0) * 1000)  # mm
 
-        # GPS fix type
-        fix_type = 3 if sat_count >= 6 else (2 if sat_count >= 4 else 0)
-
         msg = self.mav.gps_raw_int_encode(
             time_usec=int(time.time() * 1e6),
-            fix_type=fix_type,
+            fix_type=gps_fix_type(sat_count),
             lat=lat,
             lon=lon,
             alt=alt,
@@ -394,10 +397,7 @@ class MAVLinkProxy:
         speed = telemetry.get("speed", {})
         heading = telemetry.get("heading", 0)
 
-        # Calculate ground speed
-        vx = speed.get("x", 0)
-        vy = speed.get("y", 0)
-        groundspeed = math.sqrt(vx**2 + vy**2)
+        groundspeed = ground_speed_mps(speed)
 
         msg = self.mav.vfr_hud_encode(
             airspeed=groundspeed,
@@ -405,7 +405,7 @@ class MAVLinkProxy:
             heading=int(heading) % 360,
             throttle=50,  # Unknown
             alt=location.get("altitude", 0),
-            climb=-speed.get("z", 0),  # Positive = climbing
+            climb=climb_rate_mps(speed),
         )
         self._send_mavlink(msg)
 

@@ -30,18 +30,15 @@ python3 -m compileall -q GroundStation/Python GroundStation/ROS GroundStation/vi
 
 Current result:
 
-- Syntax compilation passed before refactoring and still passes after the first slice.
+- Syntax compilation passed before refactoring and still passes after each slice.
 - The repository now has `pyproject.toml`, `.pre-commit-config.yaml`, and `scripts/check_radon_complexity.py`.
 - The local `.venv` has the Python quality toolchain needed for Ruff, pre-commit, Radon, mypy, Bandit, and pytest.
- The strict Radon gate requires B-or-better complexity. C/D/E/F blocks fail the check.
- Current strict Radon result after shared-helper extraction: A: 451, B: 27, C: 0, D: 0, E: 0, F: 0.
-1. Extracted `parse_discovery_response`, `parse_discovery_response_tuple`, `candidate_subnet_ips`, `build_command_url`, `parse_telemetry_line`, and `parse_telemetry_chunk` into the shared `wildbridge_groundstation` package.
-2. Added pytest tests for valid, invalid, partial, legacy tuple, subnet candidate, and chunked telemetry inputs.
-3. Kept `wildbridge_dji_helpers.py` as a compatibility shim for older imports.
-4. Wired `Python/djiInterface.py`, `ROS/dji_controller/.../dji_interface.py`, and `ROS/wildbridge_mavros/.../dji_interface.py` to the shared helpers.
-5. Refactored C-or-worse complexity blocks across the plain DJI interface, ROS DJI interfaces, MAVLink proxy, MAVROS bridge, launch helpers, and video test webapp.
-6. Re-ran compileall, Ruff, pytest, strict Radon, mypy, Bandit, and pre-commit successfully.
-- GroundStation pytest suite: 19 passed.
+- The strict Radon gate requires B-or-better complexity. C/D/E/F blocks fail the check.
+- Current strict Radon result after shared-helper extraction: A: 451, B: 27, C: 0, D: 0, E: 0, F: 0.
+- GroundStation pytest suite: 25 passed.
+
+## Main Issues To Fix
+
 ### 1. Duplicate DJI Interface Implementations
 
 Primary files:
@@ -197,6 +194,12 @@ Completed third slice:
 1. Split shared DJI discovery response parsing into decode, prefix, payload, and fallback helpers.
 2. Kept the existing discovery helper tests green and reduced the helper module's discovery parser from B complexity to A complexity.
 
+Completed fourth slice:
+
+1. Extracted pure MAVLink helper functions for armed-state mapping, heartbeat base-mode flags, GPS fix type, ground speed, and climb-rate conversion.
+2. Added pytest coverage for those MAVLink decisions without importing `pymavlink` or opening sockets.
+3. Wired `Python/mavlink_proxy.py` to the helpers, reducing heartbeat-loop complexity while preserving MAVLink message boundaries in the proxy.
+
 ## Current Green Checks
 
 Run from the repository root:
@@ -212,4 +215,4 @@ Current result:
 - Radon complexity, B-or-better only: passed.
 - mypy gradual typing: passed.
 - Bandit security scan: passed.
-- Helper pytest suite: 19 passed.
+- Helper pytest suite: 25 passed.
