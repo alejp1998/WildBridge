@@ -51,6 +51,7 @@ Focused refactors completed so far:
 - `MockMp4VideoCapturer`: replaced ad-hoc throws/catches with precondition helpers and `runCatching`, and cleared its targeted formatting findings.
 - `SharedDJIFrameSource`: simplified camera-index fallback and cleaned listener registration/recovery logging before tackling the larger frame-broadcast method.
 - `WildBridgeDefaultLayoutActivity.shouldAllowMockVideo`: removed the constant helper and used the mock source-mode check directly.
+- `WildBridgeFlightLogger`: split DJI log syncing and storage resolution out of the logger object, flattened directory fallback handling, and removed the logger from Detekt.
 
 Reports to inspect:
 

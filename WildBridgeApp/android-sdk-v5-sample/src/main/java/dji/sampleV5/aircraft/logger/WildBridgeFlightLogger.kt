@@ -7,6 +7,7 @@ import dji.v5.utils.common.ContextUtil
 import org.json.JSONObject
 import java.io.File
 import java.io.FileWriter
+import java.io.IOException
 import java.io.PrintWriter
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -72,7 +73,7 @@ object WildBridgeFlightLogger {
     fun startSession() {
         if (sessionActive) endSession("session_restart")
         try {
-            val dir = resolveLogDir()
+            val dir = FlightLogStorage.resolveLogDir()
             if (dir == null) {
                 Log.e(TAG, "Cannot resolve log directory — logging disabled for this session")
                 return
@@ -84,7 +85,9 @@ object WildBridgeFlightLogger {
             sessionActive = true
             commitLog("SESSION_START", mapOf("drone" to droneName, "logDir" to dir.absolutePath))
             Log.i(TAG, "Flight log started → ${file.absolutePath}")
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to start flight log: ${e.message}")
+        } catch (e: SecurityException) {
             Log.e(TAG, "Failed to start flight log: ${e.message}")
         }
     }
@@ -138,197 +141,159 @@ object WildBridgeFlightLogger {
      * Returns the number of files newly copied.
      */
     fun syncDjiFlightLogs(djiLogPath: String): Int {
-        if (djiLogPath.isBlank()) {
-            Log.w(TAG, "syncDjiFlightLogs: empty source path")
-            return 0
-        }
-        val sourceDir = File(djiLogPath)
-        if (!sourceDir.isDirectory) {
-            Log.w(TAG, "syncDjiFlightLogs: source does not exist: $djiLogPath")
-            return 0
-        }
-        val destDir = resolveDjiSyncDir()
-        if (destDir == null) {
-            Log.e(TAG, "syncDjiFlightLogs: could not create destination directory")
-            return 0
-        }
-        return try {
-            // Walk the tree recursively — DJI SDK may place records in subdirectories.
-            val allFiles = sourceDir.walk().filter { f ->
-                f.isFile && f.extension.lowercase() in setOf("txt", "csv", "clog")
-            }
-
-            var copied = 0
-            for (src in allFiles) {
-                val dest = File(destDir, src.name)
-                if (!dest.exists()) {
-                    try {
-                        src.copyTo(dest)
-                        Log.i(TAG, "DJI log synced: ${src.name}")
-                        copied++
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to sync ${src.name}: ${e.message}")
-                    }
-                }
-            }
-            Log.i(TAG, "syncDjiFlightLogs: $copied new file(s) copied to ${destDir.absolutePath}")
-            copied
-        } catch (e: Exception) {
-            Log.e(TAG, "syncDjiFlightLogs error: ${e.message}")
-            0
-        }
-    }
-
-    /**
-     * Resolve the fixed directory where DJI TXT logs are synced.
-     * Uses the same storage-priority chain as [resolveLogDir] but writes to
-     * `WildBridge/DJI_FlightRecords/` — a flat, date-independent folder so all
-     * DJI logs live in one place regardless of when they were produced.
-     */
-    private fun resolveDjiSyncDir(): File? {
-        val subPath = "WildBridge/DJI_FlightRecords"
-        val ctx = ContextUtil.getContext()
-        val hasFullAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-                Environment.isExternalStorageManager()
-
-        // 1. Removable SD card root — survives both uninstalls and reflashing.
-        //    Requires MANAGE_EXTERNAL_STORAGE on Android 11+ to write outside app-private.
-        if (hasFullAccess) {
-            try {
-                val externalDirs = ctx.getExternalFilesDirs(null)
-                for (i in 1 until externalDirs.size) {
-                    val d = externalDirs[i] ?: continue
-                    var root = d; repeat(4) { root = root.parentFile ?: root }
-                    val dir = File(root, subPath)
-                    if (dir.mkdirs() || dir.isDirectory) {
-                        Log.i(TAG, "resolveDjiSyncDir: using SD card root: ${dir.absolutePath}")
-                        return dir
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "resolveDjiSyncDir: SD card root check failed: ${e.message}")
-            }
-        }
-
-        // 2. Documents folder — survives uninstalls; needs MANAGE_EXTERNAL_STORAGE on API 30+.
-        if (hasFullAccess) {
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), subPath)
-            if (dir.mkdirs() || dir.isDirectory) {
-                Log.i(TAG, "resolveDjiSyncDir: using Documents: ${dir.absolutePath}")
-                return dir
-            }
-        }
-
-        // 3. App-external fallback — does NOT survive uninstalls.
-        Log.w(TAG, "resolveDjiSyncDir: MANAGE_EXTERNAL_STORAGE not granted, falling back to app-external")
-        return try {
-            val dir = File(ctx.getExternalFilesDir(null), "DJI_FlightRecords")
-            if (dir.mkdirs() || dir.isDirectory) {
-                Log.w(TAG, "resolveDjiSyncDir: using app-external fallback: ${dir.absolutePath}")
-                dir
-            } else {
-                Log.e(TAG, "resolveDjiSyncDir: all storage options failed")
-                null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "resolveDjiSyncDir: fallback failed: ${e.message}")
-            null
-        }
+        return DjiFlightLogSync.sync(djiLogPath, FlightLogStorage.resolveDjiSyncDir())
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /**
-     * Resolve the directory where the log file for today's date should live.
-     *
-     * Priority chain (highest to lowest durability):
-     *   1. Removable microSD card root — survives both uninstalls and OS reflashing.
-     *      Requires MANAGE_EXTERNAL_STORAGE on Android 11+ (requested at startup).
-     *   2. Public Documents folder — survives app uninstalls; visible in file managers.
-     *      Requires MANAGE_EXTERNAL_STORAGE on Android 11+ (requested at startup).
-     *   3. App-external files dir — does NOT survive uninstalls (last-resort fallback).
-     */
-    private fun resolveLogDir(): File? {
-        val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        val subPath = "WildBridge/FlightLogs/$dateStr"
-        val ctx = ContextUtil.getContext()
-        val hasFullAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-                Environment.isExternalStorageManager()
-
-        // 1. Removable SD card root — survives both uninstalls and reflashing.
-        //    Requires MANAGE_EXTERNAL_STORAGE on Android 11+ to write outside app-private.
-        if (hasFullAccess) {
-            try {
-                val externalDirs = ctx.getExternalFilesDirs(null)
-                for (i in 1 until externalDirs.size) {
-                    val appPrivateOnCard = externalDirs[i] ?: continue
-                    var cardRoot: File = appPrivateOnCard
-                    repeat(4) { cardRoot = cardRoot.parentFile ?: cardRoot }
-                    val dir = File(cardRoot, subPath)
-                    if (dir.mkdirs() || dir.isDirectory) {
-                        Log.i(TAG, "Using removable SD card root: ${dir.absolutePath}")
-                        return dir
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Removable SD card root check failed: ${e.message}")
-            }
-        }
-
-        // 2. Public Documents/WildBridge/FlightLogs — needs MANAGE_EXTERNAL_STORAGE on API 30+.
-        if (hasFullAccess) {
-            val documentsRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-            val dir = File(documentsRoot, "WildBridge/FlightLogs/$dateStr")
-            if (dir.mkdirs() || dir.isDirectory) {
-                Log.i(TAG, "Using Documents folder: ${dir.absolutePath}")
-                return dir
-            }
-        }
-
-        // 3. App-external fallback — does NOT survive uninstalls.
-        Log.w(TAG, "MANAGE_EXTERNAL_STORAGE not granted, falling back to app-external files dir")
-        return try {
-            val fallback = File(ctx.getExternalFilesDir(null), "FlightLogs/$dateStr")
-            fallback.mkdirs()
-            if (fallback.isDirectory) fallback else null
-        } catch (e: Exception) {
-            Log.e(TAG, "Cannot resolve any log directory: ${e.message}")
-            null
-        }
-    }
-
     private fun commitLog(type: String, fields: Map<String, Any> = emptyMap()) {
         if (!sessionActive) return
-        try {
+        runCatching {
             val obj = JSONObject()
             obj.put("t", System.currentTimeMillis() / 1000)
             obj.put("type", type)
             fields.forEach { (k, v) -> obj.put(k, v) }
             writeLine(obj.toString())
-        } catch (e: Exception) {
-            Log.w(TAG, "commitLog error: ${e.message}")
-        }
+        }.onFailure { failure -> Log.w(TAG, "commitLog error: ${failure.message}") }
     }
 
     @Synchronized
     private fun writeLine(line: String) {
-        try {
+        runCatching {
             writer?.println(line)
             writer?.flush()
-        } catch (e: Exception) {
-            Log.w(TAG, "writeLine error: ${e.message}")
-        }
+        }.onFailure { failure -> Log.w(TAG, "writeLine error: ${failure.message}") }
     }
 
     @Synchronized
     private fun flushAndClose() {
-        try {
+        runCatching {
             writer?.flush()
             writer?.close()
-        } catch (e: Exception) {
-            Log.w(TAG, "flushAndClose error: ${e.message}")
-        } finally {
-            writer = null
+        }.onFailure { failure ->
+            Log.w(TAG, "flushAndClose error: ${failure.message}")
         }
+        writer = null
+    }
+}
+
+private object DjiFlightLogSync {
+    private const val TAG = "WildBridgeFlightLogger"
+    private val djiFlightRecordExtensions = setOf("txt", "csv", "clog")
+
+    fun sync(djiLogPath: String, destDir: File?): Int {
+        val sourceDir = djiLogPath.takeIf { it.isNotBlank() }?.let(::File)
+        return when {
+            sourceDir == null -> logSkipped("empty source path")
+            !sourceDir.isDirectory -> logSkipped("source does not exist: $djiLogPath")
+            destDir == null -> logFailed("could not create destination directory")
+            else -> copyDjiFlightLogs(sourceDir, destDir)
+        }
+    }
+
+    private fun copyDjiFlightLogs(sourceDir: File, destDir: File): Int {
+        return runCatching {
+            sourceDir.walk()
+                .filter { it.isDjiFlightRecord() }
+                .count { source -> copyDjiFlightLogIfNew(source, File(destDir, source.name)) }
+        }.onSuccess { copied ->
+            Log.i(TAG, "syncDjiFlightLogs: $copied new file(s) copied to ${destDir.absolutePath}")
+        }.onFailure { failure ->
+            Log.e(TAG, "syncDjiFlightLogs error: ${failure.message}")
+        }.getOrDefault(0)
+    }
+
+    private fun copyDjiFlightLogIfNew(source: File, dest: File): Boolean {
+        if (dest.exists()) return false
+        return runCatching {
+            source.copyTo(dest)
+            Log.i(TAG, "DJI log synced: ${source.name}")
+            true
+        }.onFailure { failure ->
+            Log.w(TAG, "Failed to sync ${source.name}: ${failure.message}")
+        }.getOrDefault(false)
+    }
+
+    private fun File.isDjiFlightRecord(): Boolean {
+        return isFile && extension.lowercase() in djiFlightRecordExtensions
+    }
+
+    private fun logSkipped(reason: String): Int {
+        Log.w(TAG, "syncDjiFlightLogs: $reason")
+        return 0
+    }
+
+    private fun logFailed(reason: String): Int {
+        Log.e(TAG, "syncDjiFlightLogs: $reason")
+        return 0
+    }
+}
+
+private object FlightLogStorage {
+    private const val TAG = "WildBridgeFlightLogger"
+    private const val DJI_SYNC_SUB_PATH = "WildBridge/DJI_FlightRecords"
+
+    fun resolveDjiSyncDir(): File? {
+        return resolveDurableDir(DJI_SYNC_SUB_PATH, "resolveDjiSyncDir")
+            ?: resolveAppExternalDir("DJI_FlightRecords", "resolveDjiSyncDir")
+    }
+
+    fun resolveLogDir(): File? {
+        val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val subPath = "WildBridge/FlightLogs/$dateStr"
+        return resolveDurableDir(subPath, "resolveLogDir")
+            ?: resolveAppExternalDir("FlightLogs/$dateStr", "resolveLogDir")
+    }
+
+    private fun resolveDurableDir(subPath: String, label: String): File? {
+        if (!hasFullStorageAccess()) return null
+        return removableStorageDir(subPath, label) ?: documentsDir(subPath, label)
+    }
+
+    private fun removableStorageDir(subPath: String, label: String): File? {
+        val context = ContextUtil.getContext()
+        return runCatching {
+            context.getExternalFilesDirs(null)
+                .drop(1)
+                .mapNotNull { appPrivateOnCard -> appPrivateOnCard?.cardRoot() }
+                .firstNotNullOfOrNull { root -> ensureDirectory(File(root, subPath)) }
+        }.onSuccess { dir ->
+            dir?.let { Log.i(TAG, "$label: using SD card root: ${it.absolutePath}") }
+        }.onFailure { failure ->
+            Log.w(TAG, "$label: SD card root check failed: ${failure.message}")
+        }.getOrNull()
+    }
+
+    private fun documentsDir(subPath: String, label: String): File? {
+        val documentsRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        val dir = ensureDirectory(File(documentsRoot, subPath))
+        dir?.let { Log.i(TAG, "$label: using Documents: ${it.absolutePath}") }
+        return dir
+    }
+
+    private fun resolveAppExternalDir(subPath: String, label: String): File? {
+        Log.w(TAG, "$label: falling back to app-external files dir")
+        val context = ContextUtil.getContext()
+        return runCatching {
+            context.getExternalFilesDir(null)?.let { root -> ensureDirectory(File(root, subPath)) }
+        }.onSuccess { dir ->
+            dir?.let { Log.w(TAG, "$label: using app-external fallback: ${it.absolutePath}") }
+        }.onFailure { failure ->
+            Log.e(TAG, "$label: fallback failed: ${failure.message}")
+        }.getOrNull()
+    }
+
+    private fun hasFullStorageAccess(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+    }
+
+    private fun File.cardRoot(): File {
+        var root = this
+        repeat(4) { root = root.parentFile ?: root }
+        return root
+    }
+
+    private fun ensureDirectory(dir: File): File? {
+        return dir.takeIf { it.mkdirs() || it.isDirectory }
     }
 }
