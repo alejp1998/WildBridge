@@ -43,6 +43,7 @@ Focused refactors completed so far:
 - `EdgeDetectionController`: introduced `EdgeDetectionConfig`, shared frame-admission logic, and `runCatching` inference paths; the controller is now absent from the WildBridge Detekt report.
 - Empty placeholder files in `aircraft/formation` were removed; active formation logic remains in `aircraft/controller/FormationController.kt`.
 - Cleared remaining `NewLineAtEndOfFile` findings in small WildBridge Kotlin files.
+- `DroneControlProfile`: grouped speed limits, distance PID gains, and yaw control into small value objects while preserving existing accessors.
 
 Reports to inspect:
 
@@ -191,6 +192,7 @@ What we should do:
 Done already:
 
 - Removed whitespace-only placeholder files from `aircraft/formation`; they were unreferenced and only produced `EmptyKtFile` findings.
+- `DroneControlProfile` no longer has a long constructor; flight-control constants are grouped by role without changing call sites.
 
 Done already:
 

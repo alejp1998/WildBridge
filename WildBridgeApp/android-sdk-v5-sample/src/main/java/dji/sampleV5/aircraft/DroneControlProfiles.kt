@@ -7,50 +7,67 @@ import dji.v5.et.get
 
 enum class DroneControlProfile(
     val displayName: String,
-    val maxHorizontalSpeedMps: Double,
-    val maxGotoWpSpeedMps: Double,
-    val distanceKp: Double,
-    val distanceKi: Double,
-    val distanceKd: Double,
-    val yawKp: Double,
-    val maxYawRateDegS: Double,
-    val defaultCruiseSpeedMps: Double
+    private val speedLimits: DroneSpeedLimits,
+    private val distancePid: DronePidGains,
+    private val yawControl: DroneYawControl
 ) {
     MAVIC_3_ENTERPRISE(
         displayName = "Mavic 3 Enterprise",
-        maxHorizontalSpeedMps = 15.0,
-        maxGotoWpSpeedMps = 5.0,
-        distanceKp = 0.65,
-        distanceKi = 0.0001,
-        distanceKd = 0.001,
-        yawKp = 3.0,
-        maxYawRateDegS = 30.0,
-        defaultCruiseSpeedMps = 5.0
+        speedLimits = DroneSpeedLimits(
+            maxHorizontalSpeedMps = 15.0,
+            maxGotoWpSpeedMps = 5.0,
+            defaultCruiseSpeedMps = 5.0
+        ),
+        distancePid = DronePidGains(kp = 0.65, ki = 0.0001, kd = 0.001),
+        yawControl = DroneYawControl(kp = 3.0, maxYawRateDegS = 30.0)
     ),
     MATRICE_350_RTK(
         displayName = "Matrice 350 RTK",
-        maxHorizontalSpeedMps = 3.0,
-        maxGotoWpSpeedMps = 3.0,
-        distanceKp = 0.34,
-        distanceKi = 0.0001,
-        distanceKd = 0.001,
-        yawKp = 3.0,
-        maxYawRateDegS = 30.0,
-        defaultCruiseSpeedMps = 3.0
+        speedLimits = DroneSpeedLimits(
+            maxHorizontalSpeedMps = 3.0,
+            maxGotoWpSpeedMps = 3.0,
+            defaultCruiseSpeedMps = 3.0
+        ),
+        distancePid = DronePidGains(kp = 0.34, ki = 0.0001, kd = 0.001),
+        yawControl = DroneYawControl(kp = 3.0, maxYawRateDegS = 30.0)
     ),
     MINI_4_PRO(
         displayName = "DJI Mini 4 Pro",
-        maxHorizontalSpeedMps = 15.0,
-        maxGotoWpSpeedMps = 5.0,
-        distanceKp = 0.65,
-        distanceKi = 0.0001,
-        distanceKd = 0.001,
-        yawKp = 3.0,
-        maxYawRateDegS = 30.0,
-        defaultCruiseSpeedMps = 2.0
-    )
+        speedLimits = DroneSpeedLimits(
+            maxHorizontalSpeedMps = 15.0,
+            maxGotoWpSpeedMps = 5.0,
+            defaultCruiseSpeedMps = 2.0
+        ),
+        distancePid = DronePidGains(kp = 0.65, ki = 0.0001, kd = 0.001),
+        yawControl = DroneYawControl(kp = 3.0, maxYawRateDegS = 30.0)
+    );
+
+    val maxHorizontalSpeedMps: Double get() = speedLimits.maxHorizontalSpeedMps
+    val maxGotoWpSpeedMps: Double get() = speedLimits.maxGotoWpSpeedMps
+    val defaultCruiseSpeedMps: Double get() = speedLimits.defaultCruiseSpeedMps
+    val distanceKp: Double get() = distancePid.kp
+    val distanceKi: Double get() = distancePid.ki
+    val distanceKd: Double get() = distancePid.kd
+    val yawKp: Double get() = yawControl.kp
+    val maxYawRateDegS: Double get() = yawControl.maxYawRateDegS
 }
 
+private data class DroneSpeedLimits(
+    val maxHorizontalSpeedMps: Double,
+    val maxGotoWpSpeedMps: Double,
+    val defaultCruiseSpeedMps: Double
+)
+
+private data class DronePidGains(
+    val kp: Double,
+    val ki: Double,
+    val kd: Double
+)
+
+private data class DroneYawControl(
+    val kp: Double,
+    val maxYawRateDegS: Double
+)
 
 object DroneControlProfiles {
     fun activeProfile(): DroneControlProfile {
