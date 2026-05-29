@@ -20,15 +20,19 @@ from contextlib import suppress
 from datetime import datetime
 
 import requests
-from wildbridge_dji_helpers import (
+from wildbridge_groundstation.dji_helpers import (
     build_command_url,
     parse_discovery_response,
-    parse_telemetry_line,
+    parse_telemetry_chunk,
 )
 
 # Discovery Configuration
 DISCOVERY_PORT = 30000
 DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
+
+
+def _telemetry_timestamp():
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")
 
 
 def discover_drone(timeout=5.0):
@@ -162,19 +166,14 @@ class DJIInterface:
                     if not data:
                         break
 
-                    buffer += data.decode("utf-8")
-
-                    # Process complete JSON objects (separated by newlines)
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
-                        telemetry = parse_telemetry_line(
-                            line,
-                            timestamp=datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f"),
-                        )
-                        if telemetry:
-                            with self._telemetry_lock:
-                                self._telemetry = telemetry
+                    buffer, telemetry_items = parse_telemetry_chunk(
+                        buffer,
+                        data,
+                        timestamp_factory=_telemetry_timestamp,
+                    )
+                    for telemetry in telemetry_items:
+                        with self._telemetry_lock:
+                            self._telemetry = telemetry
 
             except TimeoutError:
                 continue

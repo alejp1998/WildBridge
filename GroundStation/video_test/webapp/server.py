@@ -11,6 +11,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from video_events import (
+    build_event_entry,
+    format_sse_message,
+    parse_discovery_response,
+    serialize_ndjson_entry,
+)
+
 PORT = int(os.environ.get("PORT", "8090"))
 TELEMETRY_PORT = int(os.environ.get("TELEMETRY_PORT", "8081"))
 DISCOVERY_INTERVAL_MS = int(os.environ.get("DISCOVERY_INTERVAL_MS", "5000"))
@@ -18,7 +25,6 @@ MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", "http://127.0.0.1:9997").r
 MEDIAMTX_WEBRTC_URL = os.environ.get("MEDIAMTX_WEBRTC_URL", "http://127.0.0.1:8889").rstrip("/")
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/logs"))
 DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
-DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
 DISCOVERY_PORT = 30000
 MULTICAST_GROUP = "239.255.42.99"
 MULTICAST_PORT = 30001
@@ -78,7 +84,7 @@ for fallback_name in FALLBACK_IPS:
 
 
 def write_sse(payload):
-    data = f"data: {json.dumps(payload)}\n\n".encode()
+    data = format_sse_message(payload["type"], payload["payload"])
     dead = []
     for handler in list(sse_clients):
         try:
@@ -107,20 +113,10 @@ def emit_state():
 
 
 def log_event(event_type, **payload):
-    entry = {"ts": utc_now(), "type": event_type, **payload}
+    entry = build_event_entry(event_type, payload, utc_now)
     with EVENT_LOG.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        file.write(serialize_ndjson_entry(entry))
     write_sse({"type": event_type, "payload": entry})
-
-
-def parse_discovery_response(message, remote_ip):
-    if not message.startswith(DISCOVERY_RESPONSE_PREFIX):
-        return None
-    payload = message[len(DISCOVERY_RESPONSE_PREFIX) :]
-    if ":" not in payload:
-        return {"ip": remote_ip, "name": payload or remote_ip}
-    ip, name = payload.split(":", 1)
-    return {"ip": ip or remote_ip, "name": name.strip() or remote_ip}
 
 
 def _existing_drone_name(found):
@@ -451,9 +447,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             sse_clients.append(self)
             try:
-                self.wfile.write(
-                    f"data: {json.dumps({'type': 'state', 'payload': public_state()})}\n\n".encode()
-                )
+                self.wfile.write(format_sse_message("state", public_state()))
                 self.wfile.flush()
                 while self in sse_clients:
                     time.sleep(1)

@@ -20,14 +20,20 @@ from contextlib import suppress
 from datetime import datetime
 
 import requests
+from wildbridge_groundstation.dji_helpers import (
+    build_command_url,
+    candidate_subnet_ips,
+    parse_discovery_response_tuple,
+    parse_telemetry_chunk,
+)
 
 # Discovery Configuration
 DISCOVERY_PORT = 30000
 DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
-DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
-COMMON_DISCOVERY_RANGES = (
-    list(range(1, 51)) + list(range(100, 121)) + list(range(150, 171)) + list(range(200, 221))
-)
+
+
+def _telemetry_timestamp():
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")
 
 
 def _close_socket_quietly(sock):
@@ -36,19 +42,7 @@ def _close_socket_quietly(sock):
 
 
 def _parse_discovery_response(data, addr):
-    try:
-        message = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    if not message.startswith(DISCOVERY_RESPONSE_PREFIX):
-        return None
-
-    parts = message.split(":")
-    drone_ip = parts[1] if len(parts) > 1 else addr[0]
-    if not drone_ip:
-        return None
-    drone_name = parts[2] if len(parts) > 2 else "UNKNOWN"
-    return drone_ip, drone_name
+    return parse_discovery_response_tuple(data, fallback_ip=addr[0])
 
 
 def _remember_discovered_drone(found_drones, discovery, verbose):
@@ -63,14 +57,7 @@ def _remember_discovered_drone(found_drones, discovery, verbose):
 
 
 def _candidate_subnet_ips(local_ips):
-    ips_to_scan = []
-    for local_ip in local_ips:
-        parts = local_ip.split(".")
-        subnet = f"{parts[0]}.{parts[1]}.{parts[2]}"
-        ips_to_scan.extend(
-            f"{subnet}.{i}" for i in COMMON_DISCOVERY_RANGES if f"{subnet}.{i}" != local_ip
-        )
-    return ips_to_scan
+    return candidate_subnet_ips(local_ips)
 
 
 def _probe_single_ip(ip, timeout):
@@ -291,23 +278,15 @@ class DJIInterface:
         self._telemetry_socket.settimeout(5.0)
         self._telemetry_socket.connect((self.IP_RC, self.telemetryPort))
 
-    def _store_telemetry_line(self, line):
-        line = line.strip()
-        if not line:
-            return
-        try:
-            telemetry = json.loads(line)
-        except json.JSONDecodeError:
-            return
-        with self._telemetry_lock:
-            self._telemetry = telemetry
-            self._telemetry["timestamp"] = datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")
-
     def _process_telemetry_data(self, buffer, data):
-        buffer += data.decode("utf-8")
-        while "\n" in buffer:
-            line, buffer = buffer.split("\n", 1)
-            self._store_telemetry_line(line)
+        buffer, telemetry_items = parse_telemetry_chunk(
+            buffer,
+            data,
+            timestamp_factory=_telemetry_timestamp,
+        )
+        for telemetry in telemetry_items:
+            with self._telemetry_lock:
+                self._telemetry = telemetry
         return buffer
 
     def _read_telemetry_stream(self, buffer):
@@ -500,7 +479,9 @@ class DJIInterface:
             print(f"No IP_RC provided, returning empty string for request at {endPoint}")
             return ""
         try:
-            response = requests.post(self.baseCommandUrl + endPoint, str(data), timeout=5)
+            response = requests.post(
+                build_command_url(self.baseCommandUrl, endPoint), str(data), timeout=5
+            )
             if verbose:
                 print("EP : " + endPoint + "\t" + str(response.content, encoding="utf-8"))
             return response.content.decode("utf-8")

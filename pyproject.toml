@@ -45,7 +45,7 @@ line-ending = "lf"
 skip-magic-trailing-comma = false
 
 [tool.pytest.ini_options]
-pythonpath = ["GroundStation/Python"]
+pythonpath = ["GroundStation/Python", "GroundStation/video_test/webapp"]
 testpaths = ["GroundStation/tests"]
 
 [tool.mypy]
@@ -69,6 +69,7 @@ exclude = [
     "GroundStation/video_test/logs",
 ]
 files = [
+    "GroundStation/Python/wildbridge_groundstation",
     "GroundStation/Python/wildbridge_dji_helpers.py",
 ]
 
