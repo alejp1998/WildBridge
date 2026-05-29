@@ -192,6 +192,11 @@ Completed second slice:
 4. Added Docker `PYTHONPATH` configuration so the GroundStation runtime can import the shared helper package.
 5. Extracted pure video-grid event helpers for NDJSON entries, SSE messages, and discovery parsing, then covered them with pytest tests.
 
+Completed third slice:
+
+1. Split shared DJI discovery response parsing into decode, prefix, payload, and fallback helpers.
+2. Kept the existing discovery helper tests green and reduced the helper module's discovery parser from B complexity to A complexity.
+
 ## Current Green Checks
 
 Run from the repository root:

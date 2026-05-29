@@ -24,27 +24,46 @@ def parse_discovery_response(
     fallback_ip: str | None = None,
 ) -> DiscoveryResponse | None:
     """Parse a WildBridge UDP discovery response."""
-    if isinstance(payload, bytes):
-        try:
-            message = payload.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-    else:
-        message = payload
+    message = _decode_discovery_message(payload)
+    if message is None:
+        return None
 
-    message = message.strip()
+    response_payload = _strip_discovery_prefix(message)
+    if response_payload is None:
+        return None
+
+    return _parse_discovery_payload(response_payload, fallback_ip=fallback_ip)
+
+
+def _decode_discovery_message(payload: bytes | str) -> str | None:
+    if isinstance(payload, str):
+        return payload.strip()
+    try:
+        return payload.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+
+
+def _strip_discovery_prefix(message: str) -> str | None:
     if not message.startswith(DISCOVERY_RESPONSE_PREFIX):
         return None
+    return message[len(DISCOVERY_RESPONSE_PREFIX) :]
 
-    parts = message.split(":")
-    ip_address = parts[1].strip() if len(parts) > 1 else ""
-    if not ip_address and fallback_ip:
-        ip_address = fallback_ip
-    if not ip_address:
+
+def _parse_discovery_payload(payload: str, fallback_ip: str | None) -> DiscoveryResponse | None:
+    parts = payload.split(":")
+    ip_address = _first_non_empty(parts[0] if parts else "", fallback_ip)
+    if ip_address is None:
         return None
-
-    name = parts[2].strip() if len(parts) > 2 and parts[2].strip() else "UNKNOWN"
+    name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "UNKNOWN"
     return DiscoveryResponse(ip_address=ip_address, name=name)
+
+
+def _first_non_empty(*values: str | None) -> str | None:
+    for value in values:
+        if value and value.strip():
+            return value.strip()
+    return None
 
 
 def parse_discovery_response_tuple(
