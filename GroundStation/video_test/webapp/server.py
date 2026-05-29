@@ -255,6 +255,39 @@ def _mark_telemetry_connected(name, ip):
     emit_state()
 
 
+def configure_mediamtx_path(drone_name, mode, source_url=None):
+    try:
+        if mode == "rtsp" and source_url:
+            body = json.dumps({"source": source_url}).encode("utf-8")
+        else:
+            body = json.dumps({"source": "publisher"}).encode("utf-8")
+        
+        # Try to patch first
+        req = urllib.request.Request(
+            f"{MEDIAMTX_API_URL}/v3/config/paths/patch/{drone_name}",
+            data=body,
+            method="PATCH",
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code == 404: # Doesn't exist yet, try to add
+                req = urllib.request.Request(
+                    f"{MEDIAMTX_API_URL}/v3/config/paths/add/{drone_name}",
+                    data=body,
+                    method="POST",
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    pass
+            else:
+                raise
+    except Exception as exc:
+        log_event("mediamtx_config_error", drone=drone_name, error=str(exc))
+
+
 def _handle_telemetry_line(name, line, last_sample_log):
     with lock:
         drone = drones[name]
@@ -269,6 +302,33 @@ def _handle_telemetry_line(name, line, last_sample_log):
 
     with lock:
         drones[name]["lastTelemetry"] = telemetry
+
+    # Check streaming config from telemetry!
+    streaming = telemetry.get("streaming")
+    if streaming:
+        mode = streaming.get("mode")
+        if mode == "rtsp":
+            # Construct RTSP url
+            ip = drones[name].get("ip")
+            port = streaming.get("rtspPort", 8554)
+            user = streaming.get("rtspUser", "")
+            pwd = streaming.get("rtspPwd", "")
+            if user and pwd:
+                source_url = f"rtsp://{user}:{pwd}@{ip}:{port}/live"
+            else:
+                source_url = f"rtsp://{ip}:{port}/live"
+            
+            # Let's keep track of last applied mode/url to avoid redundant API calls
+            last_applied = drones[name].get("last_applied_stream_source")
+            if last_applied != source_url:
+                drones[name]["last_applied_stream_source"] = source_url
+                configure_mediamtx_path(name, "rtsp", source_url)
+        else:
+            last_applied = drones[name].get("last_applied_stream_source")
+            if last_applied != "publisher":
+                drones[name]["last_applied_stream_source"] = "publisher"
+                configure_mediamtx_path(name, mode)
+
     now = time.time()
     if now - last_sample_log <= 1:
         return last_sample_log

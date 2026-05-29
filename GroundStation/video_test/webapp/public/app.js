@@ -203,13 +203,21 @@ class WhepPlayer {
         if (event.streams?.[0]) {
           this.video.srcObject = event.streams[0];
           this.video.play().catch(() => {});
-          this.setStatus('playing', 'status-good');
+          const mode = this.drone.lastTelemetry?.streaming?.mode?.toUpperCase() || 'WEBRTC';
+          const modeLabel = mode === 'WEBRTC' ? 'WebRTC' : mode;
+          this.setStatus(`playing (${modeLabel})`, 'status-good');
           this.report('track_attached');
         }
       };
       this.pc.onconnectionstatechange = () => {
         const state = this.pc?.connectionState || 'closed';
-        this.setStatus(state, state === 'connected' ? 'status-good' : 'status-warn');
+        if (state === 'connected') {
+          const mode = this.drone.lastTelemetry?.streaming?.mode?.toUpperCase() || 'WEBRTC';
+          const modeLabel = mode === 'WEBRTC' ? 'WebRTC' : mode;
+          this.setStatus(`playing (${modeLabel})`, 'status-good');
+        } else {
+          this.setStatus(state, state === 'connected' ? 'status-good' : 'status-warn');
+        }
         if (state === 'failed' || state === 'disconnected') {
           this.connectionLosses += 1;
           this.report('peer_connection_loss', { state });

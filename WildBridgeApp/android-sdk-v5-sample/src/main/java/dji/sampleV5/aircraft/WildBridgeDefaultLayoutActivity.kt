@@ -599,7 +599,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun getRtmpUrl(clientIp: String): String {
         val stored = sharedPreferences.getString(PREF_RTMP_URL, "")?.trim().orEmpty()
-        return stored.ifEmpty { "rtmp://$clientIp:1935/live/$droneName" }
+        return stored.ifEmpty { "rtmp://$clientIp:1935/$droneName" }
     }
 
     private fun setRtmpUrl(url: String) {
@@ -2999,6 +2999,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         val isMock = shouldUseMockTelemetry()
         telemetryCoordinator.isMockEnabled = isMock
         telemetryCoordinator.droneName = droneName
+
+        // Streaming Config
+        telemetryCoordinator.streamingMode = getStreamingMode().prefValue
+        telemetryCoordinator.rtspPort = getRtspPort()
+        telemetryCoordinator.rtspUser = getRtspUsername()
+        telemetryCoordinator.rtspPwd = getRtspPassword()
+        telemetryCoordinator.rtmpUrl = getRtmpUrl(NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1")
 
         if (isMock) {
             val sdkMock = TelemetryProvider.currentMockTelemetry(droneName)
