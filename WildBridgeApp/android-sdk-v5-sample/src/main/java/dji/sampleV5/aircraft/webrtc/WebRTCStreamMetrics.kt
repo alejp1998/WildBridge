@@ -32,18 +32,37 @@ data class WebRTCStreamMetrics(
         }
 
     fun compactLabel(): String {
-        val source = if (sourceWidth > 0 && sourceHeight > 0) "${sourceWidth}x${sourceHeight}" else "waiting"
-        val requested = if (requestedWidth > 0 && requestedHeight > 0) "${requestedWidth}x${requestedHeight}" else "native"
         val saturationLabel = if (saturationState != "ok") " sat $saturationState" else ""
-        val fpsLabel = if (configuredFps > 0 && configuredFps != targetFps) {
+        val errorLabel = if (processingErrors > 0) " err $processingErrors" else ""
+        val recoveryLabel = if (recoveryCount > 0) " fix $recoveryCount" else ""
+            return buildString {
+                append("WEBRTC $status$saturationLabel out $resolutionLabel")
+                append(" req ${requestedLabel()} src ${sourceLabel()}")
+                append(" fps ${fpsLabel()} drop ${droppedFps.format1()}")
+                append(" resize ${averageFrameProcessingMs.format1()}ms")
+                append(" scale $scaleMode clients $observerCount")
+                append(errorLabel)
+                append(recoveryLabel)
+            }
+    }
+
+        private fun requestedLabel(): String = if (requestedWidth > 0 && requestedHeight > 0) {
+            "${requestedWidth}x${requestedHeight}"
+        } else {
+            "native"
+        }
+
+        private fun sourceLabel(): String = if (sourceWidth > 0 && sourceHeight > 0) {
+            "${sourceWidth}x${sourceHeight}"
+        } else {
+            "waiting"
+        }
+
+        private fun fpsLabel(): String = if (configuredFps > 0 && configuredFps != targetFps) {
             "${outputFps.format1()}/${targetFps} cfg $configuredFps"
         } else {
             "${outputFps.format1()}/${targetFps}"
         }
-        val errorLabel = if (processingErrors > 0) " err $processingErrors" else ""
-        val recoveryLabel = if (recoveryCount > 0) " fix $recoveryCount" else ""
-        return "WEBRTC $status$saturationLabel out $resolutionLabel req $requested src $source fps $fpsLabel drop ${droppedFps.format1()} resize ${averageFrameProcessingMs.format1()}ms scale $scaleMode clients $observerCount$errorLabel$recoveryLabel"
-    }
 
     private fun Double.format1(): String = String.format(java.util.Locale.US, "%.1f", this)
 }

@@ -38,6 +38,7 @@ Focused refactors completed so far:
 - `shouldSwitchToDroneVideoSource`: extracted from `WildBridgeDefaultLayoutActivity`, making aircraft connection source switching explicit and removing its condition complexity finding.
 - `TelemetryProvider.captureMetadata`: split into mock and cached metadata builders, removing the telemetry long-method finding.
 - `WebRTCStreamer.startWhip`: split publisher reuse, listener wiring, and source-loss checks into helpers; local IP lookup was flattened and now catches `SocketException`.
+- `WebRTCStreamMetrics.compactLabel`: split the status label into small helpers and removed the metrics file's Detekt formatting findings.
 - `EdgeDetectionController`: introduced `EdgeDetectionConfig`, shared frame-admission logic, and `runCatching` inference paths; the controller is now absent from the WildBridge Detekt report.
 
 Reports to inspect:
@@ -121,6 +122,7 @@ Done already:
 - Metadata capture now delegates to separate mock and cached metadata builders.
 - WHIP startup now delegates publisher reuse, callbacks, and source-loss checks to named helpers.
 - Local IP lookup now delegates address scanning to a helper and catches `SocketException` specifically.
+- WebRTC stream metric labels now build from focused helper methods instead of one long interpolated string.
 
 ### 3. Edge Detection Pipeline Complexity
 
