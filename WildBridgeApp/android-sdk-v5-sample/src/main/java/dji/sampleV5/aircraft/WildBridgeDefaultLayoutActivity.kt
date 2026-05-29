@@ -2352,69 +2352,21 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun handleWildBridgeMenuItem(itemId: Int): Boolean {
-        return when (itemId) {
-            1 -> {
-                showDroneNameDialog(isFirstTime = false)
-                true
-            }
-            20 -> {
-                showStreamSettingsDialog()
-                true
-            }
-            21 -> {
-                setDetectionsEnabled(!isDetectionActiveForUi())
-                true
-            }
-            2 -> {
-                showStreamSettingsDialog()
-                true
-            }
-            5 -> {
-                showStreamSettingsDialog()
-                true
-            }
-            7 -> {
-                showStreamSettingsDialog()
-                true
-            }
-            9 -> {
-                showStreamSettingsDialog()
-                true
-            }
-            10 -> {
-                showDetectionSettingsDialog()
-                true
-            }
-            8 -> {
-                showDetectionSettingsDialog()
-                true
-            }
-            11 -> {
-                showEdgeFilePicker(REQUEST_EDGE_MODEL_FILE, "Select YOLO TFLite model")
-                true
-            }
-            12 -> {
-                showEdgeFilePicker(REQUEST_EDGE_LABELS_FILE, "Select model labels")
-                true
-            }
-            13 -> {
-                showEdgeConfidenceDialog()
-                true
-            }
-            6 -> {
-                showVideoSourceDialog()
-                true
-            }
-            3 -> {
-                showFormatStorageDialog(CameraStorageLocation.SDCARD, "SD card")
-                true
-            }
-            4 -> {
-                showFormatStorageDialog(CameraStorageLocation.INTERNAL, "internal storage")
-                true
-            }
-            else -> false
+        val action = when (itemId) {
+            1 -> { { showDroneNameDialog(isFirstTime = false) } }
+            2, 5, 7, 9, 20 -> ::showStreamSettingsDialog
+            21 -> { { setDetectionsEnabled(!isDetectionActiveForUi()) } }
+            8, 10 -> ::showDetectionSettingsDialog
+            11 -> { { showEdgeFilePicker(REQUEST_EDGE_MODEL_FILE, "Select YOLO TFLite model") } }
+            12 -> { { showEdgeFilePicker(REQUEST_EDGE_LABELS_FILE, "Select model labels") } }
+            13 -> ::showEdgeConfidenceDialog
+            6 -> ::showVideoSourceDialog
+            3 -> { { showFormatStorageDialog(CameraStorageLocation.SDCARD, "SD card") } }
+            4 -> { { showFormatStorageDialog(CameraStorageLocation.INTERNAL, "internal storage") } }
+            else -> return false
         }
+        action()
+        return true
     }
 
     // ==================== Utility Methods ====================
