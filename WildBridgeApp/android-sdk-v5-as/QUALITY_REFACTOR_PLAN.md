@@ -47,6 +47,7 @@ Focused refactors completed so far:
 - `SharedPhoneCameraFrameSource`: simplified phone-frame eligibility and moved NV21 conversion into a focused helper, clearing the source from Detekt.
 - `DJIV5VideoCapturer`: split frame processing/delivery boundaries and removed its long-line and broad-catch findings.
 - `WhipPublisher`: replaced the WebRTC wildcard import and split several long diagnostic/control lines before the larger publish-flow extraction.
+- `TelemetryServer`: split client accept, broadcast, disconnect cleanup, and interruption handling; the server no longer appears in Detekt.
 
 Reports to inspect:
 
@@ -82,6 +83,7 @@ What we should do:
 - Move embedded HTTP/control routing out of the Activity.
 - Move edge detection UI/state coordination into a small controller class.
 - Move network/IP/discovery helpers into a separate utility or service.
+- Keep standalone server loops flat and explicit so network errors do not hide cleanup paths.
 - Keep the Activity as the UI wiring layer, not the owner of all behavior.
 
 Good first extraction target:

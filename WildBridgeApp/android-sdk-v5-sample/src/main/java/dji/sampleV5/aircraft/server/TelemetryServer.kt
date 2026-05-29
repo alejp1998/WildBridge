@@ -26,7 +26,7 @@ class TelemetryServer(
         if (isRunning) return
 
         serverThread = thread(name = "TelemetryServer-$port", start = true) {
-            try {
+            runCatching {
                 serverSocket = ServerSocket(port)
                 isRunning = true
                 Log.i("TelemetryServer", "Server started on port $port")
@@ -35,70 +35,74 @@ class TelemetryServer(
                 executor.submit { sendTelemetryData() }
 
                 while (isRunning && !serverSocket!!.isClosed) {
-                    try {
-                        val clientSocket = serverSocket!!.accept()
-                        val clientIp = clientSocket.inetAddress.hostAddress ?: "unknown"
-                        Log.i("TelemetryServer", "Client connected: $clientIp")
-                        val writer = PrintWriter(clientSocket.getOutputStream(), true)
-                        clients[clientSocket] = writer
-                        onFirstClientConnected?.invoke(clientIp)
-                    } catch (e: Exception) {
-                        if (isRunning) {
-                            Log.e("TelemetryServer", "Error accepting connection: ${e.message}")
-                        }
-                    }
+                    acceptNextClient()
                 }
-            } catch (e: Exception) {
-                Log.e("TelemetryServer", "Server error: ${e.message}")
+            }.onFailure { error ->
+                Log.e("TelemetryServer", "Server error: ${error.message}")
+            }
+        }
+    }
+
+    private fun acceptNextClient() {
+        runCatching {
+            val clientSocket = serverSocket!!.accept()
+            val clientIp = clientSocket.inetAddress.hostAddress ?: "unknown"
+            Log.i("TelemetryServer", "Client connected: $clientIp")
+            val writer = PrintWriter(clientSocket.getOutputStream(), true)
+            clients[clientSocket] = writer
+            onFirstClientConnected?.invoke(clientIp)
+        }.onFailure { error ->
+            if (isRunning) {
+                Log.e("TelemetryServer", "Error accepting connection: ${error.message}")
             }
         }
     }
 
     private fun sendTelemetryData() {
         while (isRunning) {
-            try {
+            runCatching {
                 val telemetryJson = telemetryProvider()
-                val clientsToRemove = mutableListOf<Socket>()
-
-                for ((socket, writer) in clients) {
-                    if (socket.isClosed || !socket.isConnected) {
-                        clientsToRemove.add(socket)
-                        continue
-                    }
-                    try {
-                        writer.println(telemetryJson)
-                        if (writer.checkError()) {
-                            // Error occurred, likely client disconnected
-                            clientsToRemove.add(socket)
-                        }
-                    } catch (e: Exception) {
-                        Log.e("TelemetryServer", "Error sending data to client: ${e.message}")
-                        clientsToRemove.add(socket)
-                    }
-                }
-
-                // Remove disconnected clients
-                clientsToRemove.forEach { socket ->
-                    try {
-                        socket.close()
-                    } catch (e: Exception) {
-                        // Ignore
-                    }
-                    clients.remove(socket)
-                    Log.i("TelemetryServer", "Client disconnected and removed.")
-                }
-
+                removeDisconnectedClients(sendTelemetryToClients(telemetryJson))
                 Thread.sleep(10) // Send data at ~100Hz (cache rebuilt by SDK listeners)
-            } catch (e: Exception) {
-                Log.e("TelemetryServer", "Error in telemetry sending loop: ${e.message}")
+            }.onFailure { error ->
+                handleTelemetryLoopError(error)
             }
+        }
+    }
+
+    private fun sendTelemetryToClients(telemetryJson: String): List<Socket> {
+        return clients.mapNotNull { (socket, writer) ->
+            if (socket.isClosed || !socket.isConnected) {
+                socket
+            } else {
+                writer.println(telemetryJson)
+                socket.takeIf { writer.checkError() }
+            }
+        }
+    }
+
+    private fun removeDisconnectedClients(clientsToRemove: List<Socket>) {
+        clientsToRemove.forEach { socket ->
+            runCatching { socket.close() }
+                .onFailure { error -> Log.d("TelemetryServer", "Socket close ignored: ${error.message}") }
+            clients.remove(socket)
+            Log.i("TelemetryServer", "Client disconnected and removed.")
+        }
+    }
+
+    private fun handleTelemetryLoopError(error: Throwable) {
+        if (error is InterruptedException) {
+            Thread.currentThread().interrupt()
+            isRunning = false
+        } else {
+            Log.e("TelemetryServer", "Error in telemetry sending loop: ${error.message}")
         }
     }
 
     fun stop() {
         isRunning = false
         onFirstClientConnected = null
-        try {
+        runCatching {
             clients.values.forEach { it.close() }
             clients.keys.forEach { it.close() }
             clients.clear()
@@ -109,9 +113,7 @@ class TelemetryServer(
                 serverThread?.join(1000)
             }
             serverThread = null
-        } catch (e: Exception) {
-            Log.e("TelemetryServer", "Error stopping server: ${e.message}")
-        }
+        }.onFailure { error -> Log.e("TelemetryServer", "Error stopping server: ${error.message}") }
     }
 }
 
