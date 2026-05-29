@@ -56,6 +56,7 @@ Focused refactors completed so far:
 - `WhipPublisher`: converted required no-op WebRTC callbacks to explicit `Unit` expression bodies so the remaining findings focus on publish-flow complexity.
 - `SharedDJIFrameSource`: introduced an `Nv21Frame` value and private frame processor so the hot DJI frame callback only snapshots recipients and delegates delivery.
 - `WhipPublisher`: replaced ad-hoc publish precondition throws, flattened WHIP POST handling, and simplified reconnect-loop control.
+- `DroneController`: fixed a small constant declaration and wrapped mission/trajectory lines before the larger controller split.
 
 Reports to inspect:
 

@@ -233,7 +233,7 @@ object DroneController {
     private var controlLoopStartTime: Long = 0
     
     // Grace period (ms) to allow virtual stick to enable before checking its state
-    private val VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS = 1000L
+    private const val VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS = 1000L
 
     /**
      * Cancel any active control loop (gotoWP, gotoYaw, gotoAltitude, navigateTrajectory, etc.)
@@ -1082,8 +1082,13 @@ object DroneController {
 
                 // Stop criteria: last segment, close to endpoint, and altitude close
                 val reached = isLastSegment &&
-                        (calculateDistance(current.latitude, current.longitude, end.first, end.second) < WP_ACCEPT_DISTANCE_M) &&
-                        (abs(targetAlt - current.altitude) < WP_ACCEPT_ALTITUDE_M)
+                    calculateDistance(
+                        current.latitude,
+                        current.longitude,
+                        end.first,
+                        end.second
+                    ) < WP_ACCEPT_DISTANCE_M &&
+                    abs(targetAlt - current.altitude) < WP_ACCEPT_ALTITUDE_M
 
                 if (reached) {
                     setStick(0F, 0F, 0F, 0F)
@@ -1486,10 +1491,13 @@ object DroneController {
 
         // Attempt to stop any previous mission we started
         if (lastMissionNameNoExt.isNotEmpty()) {
-            WaypointMissionManager.getInstance().stopMission(lastMissionNameNoExt, object : CommonCallbacks.CompletionCallback {
-                override fun onSuccess() { /* no-op */ }
-                override fun onFailure(error: IDJIError) { /* ignore */ }
-            })
+            WaypointMissionManager.getInstance().stopMission(
+                lastMissionNameNoExt,
+                object : CommonCallbacks.CompletionCallback {
+                    override fun onSuccess() { /* no-op */ }
+                    override fun onFailure(error: IDJIError) { /* ignore */ }
+                }
+            )
         }
 
         // Init WPMZ (idempotent)
@@ -1550,14 +1558,17 @@ object DroneController {
             })
             return
         }
-        WaypointMissionManager.getInstance().stopMission(lastMissionNameNoExt, object : CommonCallbacks.CompletionCallback {
-            override fun onSuccess() {
-                ToastUtils.showToast("Mission stopped: $lastMissionNameNoExt")
+        WaypointMissionManager.getInstance().stopMission(
+            lastMissionNameNoExt,
+            object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    ToastUtils.showToast("Mission stopped: $lastMissionNameNoExt")
+                }
+                override fun onFailure(error: IDJIError) {
+                    ToastUtils.showToast("Stop mission failed: ${error.description()}")
+                }
             }
-            override fun onFailure(error: IDJIError) {
-                ToastUtils.showToast("Stop mission failed: ${error.description()}")
-            }
-        })
+        )
     }
 
     // Getter pour isWaypointReached
