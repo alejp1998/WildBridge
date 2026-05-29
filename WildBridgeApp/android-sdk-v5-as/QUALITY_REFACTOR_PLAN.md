@@ -34,6 +34,7 @@ Focused refactors completed so far:
 - `AdaptiveFrameRatePolicy`: extracted from `WebRTCStreamer`, covered by unit tests, and removed the `maybeAdaptFrameRate` complexity findings from `WebRTCStreamer`.
 - `LetterboxTransform`: extracted from `YoloTfliteDetector`, covered by unit tests, and removed the detector's coordinate-mapping Detekt findings.
 - `PID`: anti-windup limit checks are now explicit, covered by unit tests, and no longer appear in the WildBridge Detekt findings.
+- `MockTelemetryOrigin`: extracted from `TelemetryProvider`, covered by unit tests, and removed mock-location condition complexity from telemetry setup.
 
 Reports to inspect:
 
@@ -108,6 +109,7 @@ Done already:
 
 - `SdpUtils` was refactored and covered by `SdpUtilsTest`.
 - Adaptive frame-rate decisions were extracted into `AdaptiveFrameRatePolicy` and covered by `AdaptiveFrameRatePolicyTest`.
+- Mock telemetry origin validation was extracted into `MockTelemetryOrigin` and covered by `MockTelemetryOriginTest`.
 
 ### 3. Edge Detection Pipeline Complexity
 

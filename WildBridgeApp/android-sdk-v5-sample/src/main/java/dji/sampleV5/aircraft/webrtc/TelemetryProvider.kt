@@ -142,9 +142,9 @@ object TelemetryProvider {
             mockStartTimeMs = System.currentTimeMillis()
         }
         mockTelemetryEnabled = enabled
-        if (baseLatitude != null && baseLongitude != null && (baseLatitude != 0.0 || baseLongitude != 0.0)) {
-            mockBaseLatitude = baseLatitude
-            mockBaseLongitude = baseLongitude
+        MockTelemetryOrigin.fromNullable(baseLatitude, baseLongitude)?.let { origin ->
+            mockBaseLatitude = origin.latitude
+            mockBaseLongitude = origin.longitude
         }
         if (baseAltitude != null && baseAltitude.isFinite()) {
             mockBaseAltitude = baseAltitude
