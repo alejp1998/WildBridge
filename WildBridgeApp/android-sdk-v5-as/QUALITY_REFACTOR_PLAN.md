@@ -44,6 +44,7 @@ Focused refactors completed so far:
 - Empty placeholder files in `aircraft/formation` were removed; active formation logic remains in `aircraft/controller/FormationController.kt`.
 - Cleared remaining `NewLineAtEndOfFile` findings in small WildBridge Kotlin files.
 - `DroneControlProfile`: grouped speed limits, distance PID gains, and yaw control into small value objects while preserving existing accessors.
+- `SharedPhoneCameraFrameSource`: simplified phone-frame eligibility and moved NV21 conversion into a focused helper, clearing the source from Detekt.
 
 Reports to inspect:
 
@@ -128,6 +129,7 @@ Done already:
 - Local IP lookup now delegates address scanning to a helper and catches `SocketException` specifically.
 - WebRTC stream metric labels now build from focused helper methods instead of one long interpolated string.
 - Frame metadata detection parsing now uses helper methods for target arrays, source compatibility, and confidence thresholds.
+- Shared phone camera frames now delegate NV21 conversion and even-size calculations to `PhoneImageConverter`.
 
 ### 3. Edge Detection Pipeline Complexity
 

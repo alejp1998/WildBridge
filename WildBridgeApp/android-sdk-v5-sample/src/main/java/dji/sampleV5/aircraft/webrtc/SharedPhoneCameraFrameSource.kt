@@ -78,16 +78,14 @@ object SharedPhoneCameraFrameSource {
     }
 
     fun offerImage(image: Image, timestampNs: Long): Boolean {
-        val activeClients = clients.values.filter { it.running }
-        if (activeClients.isEmpty()) return false
-
-        val eligibleClients = activeClients.filter { client ->
-            timestampNs - client.lastFrameNs >= 1_000_000_000L / client.fps.coerceAtLeast(1)
+        val eligibleClients = clients.values.filter { client ->
+            val frameIntervalNs = 1_000_000_000L / client.fps.coerceAtLeast(1)
+            client.running && timestampNs - client.lastFrameNs >= frameIntervalNs
         }
         if (eligibleClients.isEmpty()) return false
 
         return runCatching {
-            val nv21 = imageToNv21(image)
+            val nv21 = PhoneImageConverter.toNv21(image)
             val sourceWidth = image.width
             val sourceHeight = image.height
             val frameNumber = frameCounter.incrementAndGet()
@@ -98,10 +96,21 @@ object SharedPhoneCameraFrameSource {
             eligibleClients.forEach { client ->
                 client.lastFrameNs = timestampNs
                 val sourceBuffer = NV21Buffer(nv21, sourceWidth, sourceHeight, null)
-                val outputWidth = even(client.width.coerceAtMost(sourceWidth).coerceAtLeast(2))
-                val outputHeight = even(client.height.coerceAtMost(sourceHeight).coerceAtLeast(2))
+                val outputWidth = PhoneImageConverter.even(
+                    client.width.coerceAtMost(sourceWidth).coerceAtLeast(2)
+                )
+                val outputHeight = PhoneImageConverter.even(
+                    client.height.coerceAtMost(sourceHeight).coerceAtLeast(2)
+                )
                 val outputBuffer = if (outputWidth != sourceWidth || outputHeight != sourceHeight) {
-                    val scaled = sourceBuffer.cropAndScale(0, 0, sourceWidth, sourceHeight, outputWidth, outputHeight)
+                    val scaled = sourceBuffer.cropAndScale(
+                        0,
+                        0,
+                        sourceWidth,
+                        sourceHeight,
+                        outputWidth,
+                        outputHeight
+                    )
                     sourceBuffer.release()
                     scaled
                 } else {
@@ -114,41 +123,52 @@ object SharedPhoneCameraFrameSource {
                     videoFrame.release()
                 }
             }
-            Log.v(TAG, "Shared phone frame delivered: #$frameNumber ${sourceWidth}x${sourceHeight} clients=${eligibleClients.size}")
+            Log.v(
+                TAG,
+                "Shared phone frame delivered: #$frameNumber " +
+                    "${sourceWidth}x${sourceHeight} clients=${eligibleClients.size}"
+            )
             true
         }.onFailure {
             Log.e(TAG, "Failed to deliver phone frame to WebRTC: ${it.message}", it)
         }.getOrDefault(false)
     }
+}
 
-    private fun imageToNv21(image: Image): ByteArray {
+private object PhoneImageConverter {
+    private data class PlaneCopyTarget(
+        val output: ByteArray,
+        val offset: Int,
+        val pixelStride: Int
+    )
+
+    fun toNv21(image: Image): ByteArray {
         val width = image.width
         val height = image.height
         val output = ByteArray(width * height * 3 / 2)
-        copyPlane(image.planes[0], width, height, output, 0, 1)
+        copyPlane(image.planes[0], width, height, PlaneCopyTarget(output, 0, 1))
         val chromaOffset = width * height
-        copyPlane(image.planes[2], width / 2, height / 2, output, chromaOffset, 2)
-        copyPlane(image.planes[1], width / 2, height / 2, output, chromaOffset + 1, 2)
+        copyPlane(image.planes[2], width / 2, height / 2, PlaneCopyTarget(output, chromaOffset, 2))
+        copyPlane(image.planes[1], width / 2, height / 2, PlaneCopyTarget(output, chromaOffset + 1, 2))
         return output
     }
 
-    private fun copyPlane(plane: Image.Plane, width: Int, height: Int, output: ByteArray, outputOffset: Int, outputPixelStride: Int) {
+    private fun copyPlane(plane: Image.Plane, width: Int, height: Int, target: PlaneCopyTarget) {
         val buffer = plane.buffer
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
-        var outputIndex = outputOffset
+        var outputIndex = target.offset
         for (row in 0 until height) {
             val rowStart = row * rowStride
             for (column in 0 until width) {
-                output[outputIndex] = buffer.get(rowStart + column * pixelStride)
-                outputIndex += outputPixelStride
+                target.output[outputIndex] = buffer.get(rowStart + column * pixelStride)
+                outputIndex += target.pixelStride
             }
         }
     }
 
-    private fun even(value: Int): Int = (value - value % 2).coerceAtLeast(2)
+    fun even(value: Int): Int = (value - value % 2).coerceAtLeast(2)
 }
-
 
 class SharedPhoneVideoCapturerHandle(
     private val clientId: String,
