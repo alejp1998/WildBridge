@@ -41,6 +41,7 @@ Focused refactors completed so far:
 - `WebRTCStreamMetrics.compactLabel`: split the status label into small helpers and removed the metrics file's Detekt formatting findings.
 - `FrameMetadata.fromJson`: moved detection compatibility parsing into named helpers, removing the metadata parser's Detekt formatting findings.
 - `EdgeDetectionController`: introduced `EdgeDetectionConfig`, shared frame-admission logic, and `runCatching` inference paths; the controller is now absent from the WildBridge Detekt report.
+- Empty placeholder files in `aircraft/formation` were removed; active formation logic remains in `aircraft/controller/FormationController.kt`.
 
 Reports to inspect:
 
@@ -185,6 +186,10 @@ What we should do:
 - Remove unused private formation/collision code if it is truly dead, or wire it intentionally if it is planned behavior.
 - Keep DJI SDK calls in adapter-like boundaries.
 - Add tests around PID, target-position math, and any collision-risk calculation before changing behavior.
+
+Done already:
+
+- Removed whitespace-only placeholder files from `aircraft/formation`; they were unreferenced and only produced `EmptyKtFile` findings.
 
 Done already:
 
