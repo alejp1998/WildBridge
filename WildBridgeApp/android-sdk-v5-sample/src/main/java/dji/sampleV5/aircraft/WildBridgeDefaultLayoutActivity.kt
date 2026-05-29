@@ -60,6 +60,7 @@ import androidx.core.app.ActivityCompat
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.edge.EdgeDetectionController
 import dji.sampleV5.aircraft.edge.EdgeDetectionController.EdgeDetectionMetrics
+import dji.sampleV5.aircraft.edge.EdgeDetectionConfig
 import dji.v5.ux.detection.DetectedTarget
 import dji.v5.ux.detection.DetectionOverlayView
 import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
@@ -1541,10 +1542,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         clearAutoSensingState()
         val controller = EdgeDetectionController(
             context = applicationContext,
-            modelUri = modelUri,
-            labels = getEdgeLabels(),
-            sourceLabel = sourceMode.prefValue,
-            confidenceThreshold = getEdgeConfidenceThreshold(),
+            config = EdgeDetectionConfig(
+                modelUri = modelUri,
+                labels = getEdgeLabels(),
+                sourceLabel = sourceMode.prefValue,
+                confidenceThreshold = getEdgeConfidenceThreshold()
+            ),
             onTargets = { targets ->
                 if (activeDetectionSource() == DetectionSource.YOLO_ON_PHONE) {
                     applyDetectedTargets(targets)

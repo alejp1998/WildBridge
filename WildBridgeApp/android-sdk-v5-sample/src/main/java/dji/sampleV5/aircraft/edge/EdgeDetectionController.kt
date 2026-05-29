@@ -9,12 +9,16 @@ import dji.v5.ux.detection.DetectedTarget
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
+data class EdgeDetectionConfig(
+    val modelUri: Uri?,
+    val labels: List<String>,
+    val sourceLabel: String,
+    val confidenceThreshold: Float = 0.25f
+)
+
 class EdgeDetectionController(
     context: Context,
-    private val modelUri: Uri?,
-    private val labels: List<String>,
-    private val sourceLabel: String,
-    private val confidenceThreshold: Float = 0.25f,
+    private val config: EdgeDetectionConfig,
     private val onTargets: (List<DetectedTarget>) -> Unit,
     private val onMetrics: (EdgeDetectionMetrics) -> Unit = {}
 ) : SharedDJIFrameSource.EdgeDetectionFrameListener {
@@ -52,7 +56,13 @@ class EdgeDetectionController(
     ) {
         fun compactLabel(): String {
             val errorLabel = lastError?.takeIf { it.isNotBlank() }?.let { " err" } ?: ""
-            return "EDGE $status src $source th ${(confidenceThreshold * 100).toInt()} fps ${inferenceFps.format1()}/$targetFps in ${inputFps.format1()} drop ${droppedFps.format1()} infer ${averageInferenceMs.format1()}ms targets $targetCount$errorLabel"
+            return buildString {
+                append("EDGE $status src $source th ${(confidenceThreshold * 100).toInt()}")
+                append(" fps ${inferenceFps.format1()}/$targetFps")
+                append(" in ${inputFps.format1()} drop ${droppedFps.format1()}")
+                append(" infer ${averageInferenceMs.format1()}ms")
+                append(" targets $targetCount$errorLabel")
+            }
         }
 
         private fun Double.format1(): String = String.format(java.util.Locale.US, "%.1f", this)
@@ -60,7 +70,7 @@ class EdgeDetectionController(
 
     fun start() {
         if (running) return
-        val selectedModelUri = modelUri
+        val selectedModelUri = config.modelUri
         if (selectedModelUri == null) {
             status = "no-model"
             emitImmediateMetrics(targetCount = 0, lastError = "No model selected")
@@ -72,7 +82,12 @@ class EdgeDetectionController(
         emitImmediateMetrics(targetCount = 0)
         executor.execute {
             runCatching {
-                detector = YoloTfliteDetector.fromUri(appContext, selectedModelUri, labels, confidenceThreshold)
+                detector = YoloTfliteDetector.fromUri(
+                    context = appContext,
+                    modelUri = selectedModelUri,
+                    labels = config.labels,
+                    confidenceThreshold = config.confidenceThreshold
+                )
                 status = "ready"
                 emitImmediateMetrics(targetCount = 0)
                 Log.i(TAG, "Edge detector loaded: $selectedModelUri")
@@ -103,80 +118,90 @@ class EdgeDetectionController(
         executor.shutdownNow()
     }
 
-    override fun onNv21Frame(frameData: ByteArray, offset: Int, length: Int, width: Int, height: Int, timestampNs: Long) {
-        if (!running || detector == null) return
+    override fun onNv21Frame(
+        frameData: ByteArray,
+        offset: Int,
+        length: Int,
+        width: Int,
+        height: Int,
+        timestampNs: Long
+    ) {
+        if (!startInferenceWindow(timestampNs)) return
+
+        val frameCopy = frameData.copyOfRange(offset, offset + length)
+        executor.execute {
+            runNv21Inference(frameCopy, width, height)
+        }
+    }
+
+    private fun startInferenceWindow(timestampNs: Long): Boolean {
+        var accepted = false
+        if (running && detector != null) {
+            accepted = acceptFrameForInference(timestampNs)
+        }
+        return accepted
+    }
+
+    private fun acceptFrameForInference(timestampNs: Long): Boolean {
         receivedInWindow++
         if (timestampNs - lastInferenceNs < FRAME_INTERVAL_NS) {
             droppedInWindow++
             maybeEmitWindowMetrics(timestampNs, targetCount = 0)
-            return
-        }
-        if (!busy.compareAndSet(false, true)) {
+        } else if (!busy.compareAndSet(false, true)) {
             droppedInWindow++
             maybeEmitWindowMetrics(timestampNs, targetCount = 0)
-            return
+        } else {
+            lastInferenceNs = timestampNs
+            return true
         }
-        lastInferenceNs = timestampNs
+        return false
+    }
 
-        val frameCopy = frameData.copyOfRange(offset, offset + length)
-        executor.execute {
-            val inferenceStartNs = System.nanoTime()
-            var targetCount = 0
-            try {
-                val targets = detector?.detectNv21(frameCopy, 0, frameCopy.size, width, height).orEmpty()
-                targetCount = targets.size
-                inferredInWindow++
-                inferenceTimeNsInWindow += System.nanoTime() - inferenceStartNs
-                status = "running"
-                if (running) onTargets(targets)
-            } catch (e: Exception) {
-                status = "error"
-                Log.e(TAG, "Edge inference failed: ${e.message}", e)
-                emitImmediateMetrics(targetCount = targetCount, lastError = e.message)
-            } finally {
-                maybeEmitWindowMetrics(System.nanoTime(), targetCount)
-                busy.set(false)
-            }
+    private fun runNv21Inference(frameCopy: ByteArray, width: Int, height: Int) {
+        val inferenceStartNs = System.nanoTime()
+        var targetCount = 0
+        try {
+            runCatching { detector?.detectNv21(frameCopy, 0, frameCopy.size, width, height).orEmpty() }
+                .onSuccess { targets ->
+                    targetCount = targets.size
+                    inferredInWindow++
+                    inferenceTimeNsInWindow += System.nanoTime() - inferenceStartNs
+                    status = "running"
+                    if (running) onTargets(targets)
+                }.onFailure { error ->
+                    status = "error"
+                    Log.e(TAG, "Edge inference failed: ${error.message}", error)
+                    emitImmediateMetrics(targetCount = targetCount, lastError = error.message)
+                }
+        } finally {
+            maybeEmitWindowMetrics(System.nanoTime(), targetCount)
+            busy.set(false)
         }
     }
 
     fun onYuv420Image(image: Image, timestampNs: Long, onComplete: () -> Unit = {}) {
-        if (!running || detector == null) {
+        if (!startInferenceWindow(timestampNs)) {
             image.close()
             onComplete()
             return
         }
-        receivedInWindow++
-        if (timestampNs - lastInferenceNs < FRAME_INTERVAL_NS) {
-            droppedInWindow++
-            maybeEmitWindowMetrics(timestampNs, targetCount = 0)
-            image.close()
-            onComplete()
-            return
-        }
-        if (!busy.compareAndSet(false, true)) {
-            droppedInWindow++
-            maybeEmitWindowMetrics(timestampNs, targetCount = 0)
-            image.close()
-            onComplete()
-            return
-        }
-        lastInferenceNs = timestampNs
 
         executor.execute {
             val inferenceStartNs = System.nanoTime()
             var targetCount = 0
             try {
-                val targets = detector?.detectYuv420(image).orEmpty()
-                targetCount = targets.size
-                inferredInWindow++
-                inferenceTimeNsInWindow += System.nanoTime() - inferenceStartNs
-                status = "running"
-                if (running) onTargets(targets)
-            } catch (e: Exception) {
-                status = "error"
-                Log.e(TAG, "Edge YUV inference failed: ${e.message}", e)
-                emitImmediateMetrics(targetCount = targetCount, lastError = e.message)
+                runCatching { detector?.detectYuv420(image).orEmpty() }
+                    .onSuccess { targets ->
+                        targetCount = targets.size
+                        inferredInWindow++
+                        inferenceTimeNsInWindow += System.nanoTime() - inferenceStartNs
+                        status = "running"
+                        if (running) onTargets(targets)
+                    }.onFailure { error ->
+                        status = "error"
+                        Log.e(TAG, "Edge YUV inference failed: ${error.message}", error)
+                        emitImmediateMetrics(targetCount = targetCount, lastError = error.message)
+                    }
             } finally {
                 image.close()
                 maybeEmitWindowMetrics(System.nanoTime(), targetCount)
@@ -195,13 +220,13 @@ class EdgeDetectionController(
         onMetrics(
             EdgeDetectionMetrics(
                 status = status,
-                source = sourceLabel,
+                source = config.sourceLabel,
                 inputFps = receivedInWindow / elapsedSeconds,
                 inferenceFps = inferred / elapsedSeconds,
                 droppedFps = droppedInWindow / elapsedSeconds,
                 averageInferenceMs = averageInferenceMs,
                 targetCount = targetCount,
-                confidenceThreshold = confidenceThreshold,
+                confidenceThreshold = config.confidenceThreshold,
             )
         )
         receivedInWindow = 0L
@@ -215,9 +240,9 @@ class EdgeDetectionController(
         onMetrics(
             EdgeDetectionMetrics(
                 status = status,
-                source = sourceLabel,
+                source = config.sourceLabel,
                 targetCount = targetCount,
-                confidenceThreshold = confidenceThreshold,
+                confidenceThreshold = config.confidenceThreshold,
                 lastError = lastError
             )
         )

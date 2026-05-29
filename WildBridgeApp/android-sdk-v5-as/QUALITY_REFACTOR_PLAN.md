@@ -38,6 +38,7 @@ Focused refactors completed so far:
 - `shouldSwitchToDroneVideoSource`: extracted from `WildBridgeDefaultLayoutActivity`, making aircraft connection source switching explicit and removing its condition complexity finding.
 - `TelemetryProvider.captureMetadata`: split into mock and cached metadata builders, removing the telemetry long-method finding.
 - `WebRTCStreamer.startWhip`: split publisher reuse, listener wiring, and source-loss checks into helpers; local IP lookup was flattened and now catches `SocketException`.
+- `EdgeDetectionController`: introduced `EdgeDetectionConfig`, shared frame-admission logic, and `runCatching` inference paths; the controller is now absent from the WildBridge Detekt report.
 
 Reports to inspect:
 
@@ -150,6 +151,8 @@ Done already:
 
 - Letterbox coordinate mapping was extracted into `LetterboxTransform` and covered by `LetterboxTransformTest`.
 - YUV conversion helpers were moved out of `YoloTfliteDetector`, reducing the detector's function count and removing its current Detekt findings.
+- `EdgeDetectionConfig` now groups model, label, source, and confidence settings for controller construction.
+- Frame admission for NV21 and YUV inference now flows through the same helper, removing duplicate throttling and busy checks.
 
 ### 4. Drone Control And Formation Logic
 
