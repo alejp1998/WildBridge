@@ -126,6 +126,7 @@ import java.net.MulticastSocket
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.concurrent.Executors
@@ -2617,38 +2618,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun getDeviceIpAddress(): String? {
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            var bestIp: String? = null
-            
-            for (networkInterface in Collections.list(interfaces)) {
-                if (!networkInterface.isUp || networkInterface.isLoopback) continue
-                
-                val addresses = networkInterface.inetAddresses
-                for (address in Collections.list(addresses)) {
-                    if (address is Inet4Address && !address.isLoopbackAddress) {
-                        val ip = address.hostAddress
-                        val name = networkInterface.name.lowercase()
-                        
-                        Log.d(TAG, "Found IP: $ip on interface: $name")
-                        
-                        // Prioritize WiFi (wlan0, etc)
-                        if (name.contains("wlan") || name.contains("ap")) {
-                            return ip
-                        }
-                        
-                        // Keep as fallback (e.g. eth0, rmnet_data0)
-                        if (bestIp == null) {
-                            bestIp = ip
-                        }
-                    }
-                }
+        return try {
+            val candidates = deviceIpCandidates()
+            candidates.forEach {
+                Log.d(TAG, "Found IP: ${it.ip} on interface: ${it.interfaceName}")
             }
-            return bestIp
-        } catch (e: Exception) {
+            (candidates.firstOrNull { it.isPreferred } ?: candidates.firstOrNull())?.ip
+        } catch (e: SocketException) {
             Log.e(TAG, "Error getting IP address: ${e.message}")
+            null
         }
-        return null
     }
 
     private fun isPortInUse(port: Int): Boolean {
@@ -3152,4 +3131,30 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             return commandHandler.handlePostRequest(uri, postData)
         }
     }
+}
+
+private data class DeviceIpCandidate(
+    val ip: String,
+    val interfaceName: String
+) {
+    val isPreferred: Boolean
+        get() = interfaceName.contains("wlan") || interfaceName.contains("ap")
+}
+
+private fun deviceIpCandidates(): List<DeviceIpCandidate> {
+    return Collections.list(NetworkInterface.getNetworkInterfaces())
+        .filter { it.isUsableNetworkInterface() }
+        .flatMap { it.ipv4Candidates() }
+}
+
+private fun NetworkInterface.isUsableNetworkInterface(): Boolean {
+    return isUp && !isLoopback
+}
+
+private fun NetworkInterface.ipv4Candidates(): List<DeviceIpCandidate> {
+    val interfaceName = name.lowercase()
+    return Collections.list(inetAddresses)
+        .filterIsInstance<Inet4Address>()
+        .filterNot { it.isLoopbackAddress }
+        .map { DeviceIpCandidate(ip = it.hostAddress, interfaceName = interfaceName) }
 }
