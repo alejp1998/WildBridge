@@ -55,6 +55,7 @@ Focused refactors completed so far:
 - `FormationController`: removed unused private formation-position/collision helpers and cleaned import/exception style, leaving only the larger controller split for later.
 - `WhipPublisher`: converted required no-op WebRTC callbacks to explicit `Unit` expression bodies so the remaining findings focus on publish-flow complexity.
 - `SharedDJIFrameSource`: introduced an `Nv21Frame` value and private frame processor so the hot DJI frame callback only snapshots recipients and delegates delivery.
+- `WhipPublisher`: replaced ad-hoc publish precondition throws, flattened WHIP POST handling, and simplified reconnect-loop control.
 
 Reports to inspect:
 

@@ -19,6 +19,7 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSink
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import java.io.IOException
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
@@ -143,31 +144,33 @@ class WhipPublisher(
         var consecutiveFailures = 0
 
         while (isRunning.get()) {
-            try {
+            val failure = runCatching {
                 publish()
-                // publish() blocks until disconnection
+            }.exceptionOrNull()
+
+            if (failure == null) {
                 consecutiveFailures = 0
-            } catch (e: Exception) {
-                if (!isRunning.get()) break
+            } else if (isRunning.get()) {
                 consecutiveFailures++
-                Log.e(TAG, "Publish failed (attempt $consecutiveFailures): ${e.message}")
-                mainHandler.post { listener?.onError(e.message ?: "Unknown error") }
-            } finally {
-                teardown()
-                isPublishing.set(false)
-                mainHandler.post { listener?.onDisconnected() }
+                Log.e(TAG, "Publish failed (attempt $consecutiveFailures): ${failure.message}")
+                mainHandler.post { listener?.onError(failure.message ?: "Unknown error") }
+                if (failure is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    isRunning.set(false)
+                }
             }
 
-            if (!isRunning.get()) break
+            teardown()
+            isPublishing.set(false)
+            mainHandler.post { listener?.onDisconnected() }
 
-            val delay = (RECONNECT_BASE_DELAY_MS * (1L shl minOf(consecutiveFailures - 1, 4)))
-                .coerceAtMost(RECONNECT_MAX_DELAY_MS)
-            Log.i(TAG, "Reconnecting in ${delay}ms...")
-            try {
-                Thread.sleep(delay)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                break
+            if (isRunning.get()) {
+                val delay = (RECONNECT_BASE_DELAY_MS * (1L shl minOf(consecutiveFailures - 1, 4)))
+                    .coerceAtMost(RECONNECT_MAX_DELAY_MS)
+                Log.i(TAG, "Reconnecting in ${delay}ms...")
+                if (!sleepBeforeReconnect(delay)) {
+                    isRunning.set(false)
+                }
             }
         }
     }
@@ -209,19 +212,19 @@ class WhipPublisher(
                 if (!videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
                     Log.w(TAG, "No DJI video frames before WHIP offer; recovering capture")
                     videoCapturer.recoverCapture("no frames before WHIP offer")
-                    if (!videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_RECOVERY_TIMEOUT_MS)) {
-                        throw IllegalStateException("No DJI video frames available for WHIP publishing")
+                    check(videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_RECOVERY_TIMEOUT_MS)) {
+                        "No DJI video frames available for WHIP publishing"
                     }
                 }
             }
             is MockMp4VideoCapturer -> {
-                if (!videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
-                    throw IllegalStateException("No mock MP4 video frames available for WHIP publishing")
+                check(videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
+                    "No mock MP4 video frames available for WHIP publishing"
                 }
             }
             is SharedPhoneVideoCapturerHandle -> {
-                if (!videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
-                    throw IllegalStateException("No shared phone camera frames available for WHIP publishing")
+                check(videoCapturer.waitForOutputFrameAfter(startingFrameCount, FIRST_FRAME_TIMEOUT_MS)) {
+                    "No shared phone camera frames available for WHIP publishing"
                 }
             }
         }
@@ -321,7 +324,7 @@ class WhipPublisher(
         }, constraints)
 
         offerLatch.await(5, TimeUnit.SECONDS)
-        if (localSdp == null) throw IllegalStateException("Failed to create SDP offer")
+    check(localSdp != null) { "Failed to create SDP offer" }
 
         // 4. Wait for ICE gathering to finish (full SDP needed for WHIP)
         if (!iceGatherLatch.await(ICE_GATHER_TIMEOUT_S, TimeUnit.SECONDS)) {
@@ -329,8 +332,9 @@ class WhipPublisher(
         }
 
         // Use the local description which now contains all gathered ICE candidates
-        val offerSdp = peerConnection!!.localDescription?.description
-            ?: throw IllegalStateException("No local description after ICE gathering")
+        val offerSdp = checkNotNull(peerConnection!!.localDescription?.description) {
+            "No local description after ICE gathering"
+        }
 
         // 5. POST offer to WHIP endpoint
         val answerSdp = postWhipOffer(offerSdp)
@@ -381,18 +385,12 @@ class WhipPublisher(
             OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(offerSdp) }
 
             val status = conn.responseCode
-            if (status == 201) {
-                val location = conn.getHeaderField("Location")
-                if (location != null) {
-                    // Make absolute if relative
-                    whipResourceUrl = if (location.startsWith("http")) location
-                        else "${url.protocol}://${url.host}:${url.port}$location"
-                }
-                return conn.inputStream.bufferedReader().readText()
-            } else {
+            if (status != 201) {
                 val body = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
-                throw RuntimeException("WHIP POST failed: $status $body")
+                throw IOException("WHIP POST failed: $status $body")
             }
+            whipResourceUrl = absoluteWhipResourceUrl(url, conn.getHeaderField("Location"))
+            return conn.inputStream.bufferedReader().readText()
         } finally {
             conn.disconnect()
         }
@@ -401,7 +399,7 @@ class WhipPublisher(
     private fun deleteWhipResource() {
         val resourceUrl = whipResourceUrl ?: return
         whipResourceUrl = null
-        try {
+        runCatching {
             val conn = URL(resourceUrl).openConnection() as HttpURLConnection
             conn.requestMethod = "DELETE"
             conn.connectTimeout = 3000
@@ -409,9 +407,7 @@ class WhipPublisher(
             val status = conn.responseCode
             conn.disconnect()
             Log.d(TAG, "WHIP resource DELETE: $status")
-        } catch (e: Exception) {
-            Log.d(TAG, "WHIP resource DELETE failed: ${e.message}")
-        }
+        }.onFailure { error -> Log.d(TAG, "WHIP resource DELETE failed: ${error.message}") }
     }
 
     private fun teardown() {
@@ -485,5 +481,23 @@ class WhipPublisher(
         }.onFailure { e ->
             Log.w(TAG, "Unable to fully apply sender tuning: ${e.message}")
         }
+    }
+}
+
+private fun absoluteWhipResourceUrl(url: URL, location: String?): String? {
+    return when {
+        location == null -> null
+        location.startsWith("http") -> location
+        else -> "${url.protocol}://${url.host}:${url.port}$location"
+    }
+}
+
+private fun sleepBeforeReconnect(delayMs: Long): Boolean {
+    return try {
+        Thread.sleep(delayMs)
+        true
+    } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
     }
 }
