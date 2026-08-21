@@ -18,8 +18,22 @@ class DetectionOverlayView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
+    enum class VideoScaleMode {
+        CENTER_INSIDE,
+        CENTER_CROP
+    }
+
     @Volatile
     private var targets: List<DetectedTarget> = emptyList()
+
+    @Volatile
+    private var sourceFrameWidth: Int = 0
+
+    @Volatile
+    private var sourceFrameHeight: Int = 0
+
+    @Volatile
+    private var videoScaleMode: VideoScaleMode = VideoScaleMode.CENTER_INSIDE
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -46,6 +60,20 @@ class DetectionOverlayView @JvmOverloads constructor(
         postInvalidate()
     }
 
+    fun setSourceFrameSize(frameWidth: Int, frameHeight: Int) {
+        if (frameWidth <= 0 || frameHeight <= 0) return
+        if (sourceFrameWidth == frameWidth && sourceFrameHeight == frameHeight) return
+        sourceFrameWidth = frameWidth
+        sourceFrameHeight = frameHeight
+        postInvalidate()
+    }
+
+    fun setVideoScaleMode(scaleMode: VideoScaleMode) {
+        if (videoScaleMode == scaleMode) return
+        videoScaleMode = scaleMode
+        postInvalidate()
+    }
+
     fun clearTargets() {
         targets = emptyList()
         postInvalidate()
@@ -59,16 +87,11 @@ class DetectionOverlayView @JvmOverloads constructor(
 
         val snapshot = targets
         for (target in snapshot) {
-            val rect = RectF(
-                (target.left * w).toFloat(),
-                (target.top * h).toFloat(),
-                (target.right * w).toFloat(),
-                (target.bottom * h).toFloat()
-            )
+            val rect = target.toViewRect(w, h)
             canvas.drawRect(rect, boxPaint)
 
-            // Label
-            val label = "#${target.index} ${target.type}"
+            val confidence = target.confidence?.let { " ${(it * 100.0).coerceIn(0.0, 100.0).toInt()}%" } ?: ""
+            val label = "#${target.index} ${target.type}$confidence"
             val textWidth = labelTextPaint.measureText(label)
             val textHeight = labelTextPaint.textSize
             val labelLeft = rect.left
@@ -76,5 +99,32 @@ class DetectionOverlayView @JvmOverloads constructor(
             canvas.drawRect(labelLeft, labelTop, labelLeft + textWidth + 12f, labelTop + textHeight + 6f, labelBgPaint)
             canvas.drawText(label, labelLeft + 6f, labelTop + textHeight, labelTextPaint)
         }
+    }
+
+    private fun DetectedTarget.toViewRect(viewWidth: Float, viewHeight: Float): RectF {
+        val sourceWidth = sourceFrameWidth.takeIf { it > 0 }?.toFloat() ?: return RectF(
+            (left * viewWidth).toFloat(),
+            (top * viewHeight).toFloat(),
+            (right * viewWidth).toFloat(),
+            (bottom * viewHeight).toFloat()
+        )
+        val sourceHeight = sourceFrameHeight.takeIf { it > 0 }?.toFloat() ?: return RectF(
+            (left * viewWidth).toFloat(),
+            (top * viewHeight).toFloat(),
+            (right * viewWidth).toFloat(),
+            (bottom * viewHeight).toFloat()
+        )
+        val scale = when (videoScaleMode) {
+            VideoScaleMode.CENTER_INSIDE -> minOf(viewWidth / sourceWidth, viewHeight / sourceHeight)
+            VideoScaleMode.CENTER_CROP -> maxOf(viewWidth / sourceWidth, viewHeight / sourceHeight)
+        }
+        val dx = (viewWidth - sourceWidth * scale) / 2f
+        val dy = (viewHeight - sourceHeight * scale) / 2f
+        return RectF(
+            (left * sourceWidth * scale + dx).toFloat(),
+            (top * sourceHeight * scale + dy).toFloat(),
+            (right * sourceWidth * scale + dx).toFloat(),
+            (bottom * sourceHeight * scale + dy).toFloat()
+        )
     }
 }
