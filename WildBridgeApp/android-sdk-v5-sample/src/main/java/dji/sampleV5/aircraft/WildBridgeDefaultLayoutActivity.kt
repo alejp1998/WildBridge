@@ -111,8 +111,6 @@ import dji.sdk.keyvalue.value.camera.LaserMeasureState
 import dji.sdk.keyvalue.value.camera.ThermalTemperatureMeasureMode
 import dji.sdk.keyvalue.value.common.CameraLensType
 import dji.sdk.keyvalue.value.flightcontroller.FlightMode
-import dji.sdk.keyvalue.value.flightcontroller.FCMotorStartFailureError
-import dji.sdk.keyvalue.value.flightcontroller.GPSSignalLevel
 import dji.sdk.keyvalue.value.flightcontroller.LowBatteryRTHInfo
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotationMode
@@ -459,12 +457,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private val batteryKey: DJIKey<Int> = BatteryKey.KeyChargeRemainingInPercent.create()
     private val flightModeKey: DJIKey<FlightMode> = FlightControllerKey.KeyFlightMode.create()
     private val isFlyingKey: DJIKey<Boolean> = FlightControllerKey.KeyIsFlying.create()
-    private val areMotorsOnKey: DJIKey<Boolean> = FlightControllerKey.KeyAreMotorsOn.create()
-    private val gpsSignalLevelKey: DJIKey<GPSSignalLevel> = FlightControllerKey.KeyGPSSignalLevel.create()
-    // Tier-1 enrich keys: present in SDK jar but absent from public API docs.
-    // May return null on some aircraft/firmware -> treated as "not blocking".
-    private val notAllowMotorStartKey: DJIKey<Boolean> = FlightControllerKey.KeyNotAllowMotorStart.create()
-    private val takeoffFailureErrorKey: DJIKey<FCMotorStartFailureError> = FlightControllerKey.KeyTakeoffFailureError.create()
 
 
 
