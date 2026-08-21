@@ -369,7 +369,11 @@ object Payload {
             // index) so a dropped event can't silently drop a sibling.
             if (seenIndices.isNotEmpty()) {
                 val data = if (narrowPullSupported)
-                    mediaVM.pullAndAwait(MEDIA_PULL_TIMEOUT_MS, CAPTURE_PULL_COUNT, FileListRequestTimeOrderType.NEW_FIRST)
+                    mediaVM.pullAndAwait(
+                        MEDIA_PULL_TIMEOUT_MS,
+                        CAPTURE_PULL_COUNT,
+                        FileListRequestTimeOrderType.NEW_FIRST
+                    )
                 else
                     mediaVM.pullAndAwait(MEDIA_PULL_TIMEOUT_MS)
                 val anchor = data.filter { baselineIndex == null || it.fileIndex > baselineIndex }
@@ -400,7 +404,11 @@ object Payload {
             while (System.currentTimeMillis() < overallDeadline) {
                 val narrow = narrowPullSupported
                 val data = if (narrow)
-                    mediaVM.pullAndAwait(MEDIA_PULL_TIMEOUT_MS, CAPTURE_PULL_COUNT, FileListRequestTimeOrderType.NEW_FIRST)
+                    mediaVM.pullAndAwait(
+                        MEDIA_PULL_TIMEOUT_MS,
+                        CAPTURE_PULL_COUNT,
+                        FileListRequestTimeOrderType.NEW_FIRST
+                    )
                 else
                     mediaVM.pullAndAwait(MEDIA_PULL_TIMEOUT_MS)
 
@@ -426,7 +434,8 @@ object Payload {
                     // Both are index-encoding agnostic, so this works across the H20T/H20N/H30T.
                     val groupBase = lensGroupBase(anchor.fileName)
                     val byBase = data.filter { lensGroupBase(it.fileName) == groupBase }
-                    val byBaseline = if (baselineIndex != null) data.filter { it.fileIndex > baselineIndex } else emptyList()
+                    val byBaseline =
+                        if (baselineIndex != null) data.filter { it.fileIndex > baselineIndex } else emptyList()
                     val group = (byBase + byBaseline).distinctBy { it.fileName }.ifEmpty { listOf(anchor) }
 
                     if (group.size > bestGroup.size) bestGroup = group
