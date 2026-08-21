@@ -4058,80 +4058,100 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             }
         }
 
+        /** Parsed request line, headers and body of one HTTP request. */
+        private inner class HttpRequest(
+            val method: String,
+            val uri: String,
+            val postData: String,
+            val source: ControlAuthority.Source
+        )
+
+        private fun readRequest(reader: BufferedReader): HttpRequest? {
+            val requestLine = reader.readLine() ?: return null
+            val parts = requestLine.split(" ")
+            if (parts.size < 3) return null
+
+            var contentLength = 0
+            var safetyToken: String? = null
+            var line: String?
+            while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
+                if (line!!.startsWith("Content-Length:", ignoreCase = true)) {
+                    contentLength = line!!.substring(15).trim().toIntOrNull() ?: 0
+                } else if (line!!.startsWith(SAFETY_TOKEN_HEADER, ignoreCase = true)) {
+                    safetyToken = line!!.substring(SAFETY_TOKEN_HEADER.length).trim()
+                }
+            }
+
+            val method = parts[0]
+            var postData = ""
+            if (method == "POST" && contentLength > 0) {
+                val buffer = CharArray(contentLength)
+                reader.read(buffer, 0, contentLength)
+                postData = String(buffer)
+            }
+
+            // A request is from the Safety Computer iff it carries the configured token.
+            // Everything else (including a token mismatch) is treated as the Pilot Computer.
+            return HttpRequest(method, parts[1], postData, classifyCommandSource(safetyToken))
+        }
+
+        private val jsonEndpoints = setOf(
+            "/send/captureTemperature",
+            "/send/captureThermalImage",
+            "/send/listMedia"
+        )
+
+        private fun writeJsonResponse(writer: PrintWriter, body: String) {
+            writer.println("HTTP/1.1 200 OK")
+            writer.println("Content-Type: application/json")
+            writer.println("Content-Length: ${body.toByteArray().size}")
+            writer.println("Access-Control-Allow-Origin: *")
+            writer.println()
+            writer.print(body)
+            writer.flush()
+        }
+
+        /**
+         * Endpoints that answer with their own JSON rather than the plain-text command response.
+         *
+         * Camera capture is two-step: capture trips one shutter and returns a descriptor naming the
+         * per-lens filenames the payload stored; the files stay on the card and are fetched by name
+         * via /send/downloadMediaByName. The temperature read takes no shutter and downloads
+         * nothing — it reads the hottest point on the thermal feed synchronously.
+         *
+         * Returns null when the request is not one of these. Like every /send/ command these are
+         * behind the authority latch, so the Pilot cannot drive the payload while Safety holds control.
+         */
+        private fun handleJsonEndpoint(request: HttpRequest): String? {
+            if (request.method != "POST") return null
+            if (request.uri !in jsonEndpoints) return null
+
+            WildBridgeFlightLogger.logCommand(request.uri, request.postData)
+            // Authorise BEFORE acting: these endpoints trip a shutter or drive the payload, so a
+            // rejected request must not reach the camera.
+            if (!ControlAuthority.authorizeControlCommand(request.source)) {
+                return "{\"error\":\"REJECTED: Safety Computer is in control.\"}"
+            }
+            return when (request.uri) {
+                "/send/captureTemperature" -> {
+                    val maxTemp = readThermalMaxTempNow()
+                    "{\"thermalMaxTemp\":${maxTemp ?: "null"}}"
+                }
+                "/send/captureThermalImage" ->
+                    Payload.captureThermal(mediaVM) ?: "{\"error\":\"Failed to capture thermal image\"}"
+                else -> Payload.listAllMedia(mediaVM)
+            }
+        }
+
         private fun handleRequest(clientSocket: Socket) {
             runCatching {
                 val reader = BufferedReader(InputStreamReader(clientSocket.getInputStream()))
                 val writer = PrintWriter(OutputStreamWriter(clientSocket.getOutputStream()), true)
 
-                val requestLine = reader.readLine() ?: return
-                val parts = requestLine.split(" ")
-                if (parts.size < 3) return
+                val request = readRequest(reader) ?: return
 
-                val method = parts[0]
-                val uri = parts[1]
-
-                var contentLength = 0
-                var safetyToken: String? = null
-                var line: String?
-                while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
-                    if (line!!.startsWith("Content-Length:", ignoreCase = true)) {
-                        contentLength = line!!.substring(15).trim().toIntOrNull() ?: 0
-                    } else if (line!!.startsWith(SAFETY_TOKEN_HEADER, ignoreCase = true)) {
-                        safetyToken = line!!.substring(SAFETY_TOKEN_HEADER.length).trim()
-                    }
-                }
-
-                // A request is from the Safety Computer iff it carries the configured token.
-                // Everything else (including a token mismatch) is treated as the Pilot Computer.
-                val source = classifyCommandSource(safetyToken)
-
-                var postData = ""
-                if (method == "POST" && contentLength > 0) {
-                    val buffer = CharArray(contentLength)
-                    reader.read(buffer, 0, contentLength)
-                    postData = String(buffer)
-                }
-
-                // Camera Capture is two-step. Capture only trips one shutter and returns a JSON
-                // descriptor naming the per-lens filenames the payload stored; the lens files stay
-                // on the SD card and are downloaded by name via /send/downloadMediaByName.
-                // Temperature-only read: NO shutter, NO download. Synchronously reads the
-                // highest temperature on the thermal feed and returns {"thermalMaxTemp": °C|null}.
-                if (method == "POST" && uri == "/send/captureTemperature") {
-                    WildBridgeFlightLogger.logCommand(uri, postData)
-                    val body: String = if (!ControlAuthority.authorizeControlCommand(source)) {
-                        "{\"error\":\"REJECTED: Safety Computer is in control.\"}"
-                    } else {
-                        val maxTemp = readThermalMaxTempNow()
-                        "{\"thermalMaxTemp\":${maxTemp ?: "null"}}"
-                    }
-                    val bodyBytes = body.toByteArray()
-                    writer.println("HTTP/1.1 200 OK")
-                    writer.println("Content-Type: application/json")
-                    writer.println("Content-Length: ${bodyBytes.size}")
-                    writer.println("Access-Control-Allow-Origin: *")
-                    writer.println()
-                    writer.print(body)
-                    writer.flush()
-                    clientSocket.close()
-                    return
-                }
-
-                if (method == "POST" && uri == "/send/captureThermalImage") {
-                    WildBridgeFlightLogger.logCommand(uri, postData)
-                    val body: String = if (!ControlAuthority.authorizeControlCommand(source)) {
-                        "{\"error\":\"REJECTED: Safety Computer is in control.\"}"
-                    } else {
-                        Payload.captureThermal(mediaVM) ?: "{\"error\":\"Failed to capture thermal image\"}"
-                    }
-                    val bodyBytes = body.toByteArray()
-                    writer.println("HTTP/1.1 200 OK")
-                    writer.println("Content-Type: application/json")
-                    writer.println("Content-Length: ${bodyBytes.size}")
-                    writer.println("Access-Control-Allow-Origin: *")
-                    writer.println()
-                    writer.print(body)
-                    writer.flush()
+                handleJsonEndpoint(request)?.let { body ->
+                    writeJsonResponse(writer, body)
                     clientSocket.close()
                     return
                 }
@@ -4139,37 +4159,26 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 // Download ANY file on the SD card by name: body is the filename. Resolves against
                 // the live media list (the card's own index). Returns binary image/jpeg written
                 // straight to the socket, bypassing the text-response path below.
-                if (method == "POST" && uri == "/send/downloadMediaByName") {
-                    WildBridgeFlightLogger.logCommand(uri, postData)
+                if (request.method == "POST" && request.uri == "/send/downloadMediaByName") {
+                    WildBridgeFlightLogger.logCommand(request.uri, request.postData)
                     val outputStream = clientSocket.getOutputStream()
-                    val fileName = postData.trim()
-                    if (fileName.isEmpty()) {
-                        Payload.sendErrorResponse(outputStream, "Expected body '<fileName>'")
-                    } else {
-                        Payload.sendMediaFileByName(mediaVM, fileName, outputStream)
+                    val fileName = request.postData.trim()
+                    when {
+                        !ControlAuthority.authorizeControlCommand(request.source) ->
+                            Payload.sendErrorResponse(
+                                outputStream, "REJECTED: Safety Computer is in control."
+                            )
+                        fileName.isEmpty() ->
+                            Payload.sendErrorResponse(outputStream, "Expected body '<fileName>'")
+                        else -> Payload.sendMediaFileByName(mediaVM, fileName, outputStream)
                     }
                     clientSocket.close()
                     return
                 }
 
-                // List every file on the SD card as JSON so a client can browse and pick any to
-                // download via /send/downloadMediaByName.
-                if (method == "POST" && uri == "/send/listMedia") {
-                    WildBridgeFlightLogger.logCommand(uri, postData)
-                    val body: String = Payload.listAllMedia(mediaVM)
-                    val bodyBytes = body.toByteArray()
-                    writer.println("HTTP/1.1 200 OK")
-                    writer.println("Content-Type: application/json")
-                    writer.println("Content-Length: ${bodyBytes.size}")
-                    writer.println("Access-Control-Allow-Origin: *")
-                    writer.println()
-                    writer.print(body)
-                    writer.flush()
-                    clientSocket.close()
-                    return
-                }
-
-                val response = handleHttpRequest(method, uri, postData, source)
+                val response = handleHttpRequest(
+                    request.method, request.uri, request.postData, request.source
+                )
 
                 writer.println("HTTP/1.1 200 OK")
                 writer.println("Content-Type: text/plain")
