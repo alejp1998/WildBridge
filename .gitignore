@@ -19,6 +19,7 @@ output.json
 # IntelliJ
 *.iml
 .idea/
+.vscode/
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
@@ -73,6 +74,3 @@ diagnose_network.py
 # Documentation generated during development
 DISCOVERY_IMPROVEMENTS.md
 ANDROID_FIX_REQUIRED.md
-
-# Developer-local editor config (absolute paths differ per machine)
-.vscode/settings.json
