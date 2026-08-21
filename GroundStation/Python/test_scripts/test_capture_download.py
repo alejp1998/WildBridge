@@ -20,7 +20,7 @@ import sys
 import time
 from datetime import datetime
 
-from djiInterface import DJIInterface, LENS_KEYS
+from wildbridge_groundstation.dji_client import DJIInterface, LENS_KEYS
 
 # ----------------------------------------------------------------------------
 # Hardcode the controller (RC) IP address here (the RC's WLAN address, port 8080).

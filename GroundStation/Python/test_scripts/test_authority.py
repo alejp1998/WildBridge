@@ -16,7 +16,7 @@ Usage:
 
 import sys
 
-from djiInterface import DJIInterface
+from wildbridge_groundstation.dji_client import DJIInterface
 from djiInterfaceSafety import DJIInterfaceSafety
 
 

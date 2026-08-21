@@ -69,12 +69,14 @@ def test_command_helpers_format_requests():
     client = RecordingDJIInterface()
 
     assert client.requestSendStick(2, -2, 0.5, -0.5) == "ok"
-    assert client.requestSendGoToWPwithPID(1.0, 2.0, 3.0, 4.0, 5.5) == "ok"
+    # The waypoint modes return the seq parsed out of the response rather than the body;
+    # a response without "seq=" yields None, so the assertion is on the recorded call.
+    assert client.requestSendGoToWaypointHoldHeading(1.0, 2.0, 3.0, 4.0, 5.5) is None
     assert client.requestAbortAll() == "ok"
 
     assert client.calls == [
         ("/send/stick", "0.3000,-0.3000,0.3000,-0.3000", False),
-        ("/send/gotoWPwithPID", "1.0,2.0,3.0,4.0,5.5", False),
+        ("/send/gotoWaypointHoldHeading", "1.0,2.0,3.0,4.0,5.5", False),
         ("/send/abortAll", "", False),
     ]
 

@@ -1,13 +1,13 @@
 """
 WildBridge - DJI Safety Interface Module
 
-Safety Computer variant of the DJI interface. It subclasses djiInterface.DJIInterface
+Safety Computer variant of the DJI interface. It subclasses wildbridge_groundstation.dji_client.DJIInterface
 WITHOUT modifying it, and injects the X-Safety-Token header into every command so the
 Android app treats this client as the Safety Computer: its first command seizes
 persistent control of the drone and locks out the Pilot Computer until
 requestReleaseSafetyControl() is called.
 
-Use djiInterface.DJIInterface for the Pilot Computer (no token) and
+Use wildbridge_groundstation.dji_client.DJIInterface for the Pilot Computer (no token) and
 djiInterfaceSafety.DJIInterfaceSafety for the Safety Computer.
 
 Authors: Edouard G.A. Rolland, Kilian Meier
@@ -21,7 +21,7 @@ For more information, visit: https://github.com/WildDrone/WildBridge
 import requests
 from datetime import datetime
 
-from djiInterface import DJIInterface, EP_CAPTURE_THERMAL_IMAGE
+from wildbridge_groundstation.dji_client import DJIInterface, EP_CAPTURE_THERMAL_IMAGE
 
 # Must match SAFETY_TOKEN hardcoded in the Android app (WildBridgeDefaultLayoutActivity).
 SAFETY_TOKEN = "98"
@@ -37,7 +37,7 @@ class DJIInterfaceSafety(DJIInterface):
     etc.) is automatically authenticated as the Safety Computer. The first command seizes
     control; call requestReleaseSafetyControl() to hand authority back to the Pilot.
 
-    Nothing in djiInterface.py is modified: the token is injected by overriding the two
+    Nothing in dji_client.py is modified: the token is injected by overriding the two
     methods that issue HTTP requests (requestSend and requestCaptureThermalImage).
     """
 
