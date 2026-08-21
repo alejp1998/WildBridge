@@ -2,6 +2,7 @@ package dji.sampleV5.aircraft.controller
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import dji.sampleV5.aircraft.DroneControlProfiles
 import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
@@ -436,10 +437,13 @@ object DroneController {
         // 4. Also try to stop any DJI native waypoint mission
         try {
             if (WaylineMissionHelper.lastMissionNameNoExt.isNotEmpty()) {
-                WaypointMissionManager.getInstance().stopMission(WaylineMissionHelper.lastMissionNameNoExt, object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() { /* no-op */ }
-                    override fun onFailure(error: IDJIError) { /* no-op */ }
-                })
+                WaypointMissionManager.getInstance().stopMission(
+                    WaylineMissionHelper.lastMissionNameNoExt,
+                    object : CommonCallbacks.CompletionCallback {
+                        override fun onSuccess() { /* no-op */ }
+                        override fun onFailure(error: IDJIError) { /* no-op */ }
+                    }
+                )
             }
             // Also try pause in case there's an unnamed mission running
             WaypointMissionManager.getInstance().pauseMission(object : CommonCallbacks.CompletionCallback {
@@ -447,7 +451,9 @@ object DroneController {
                 override fun onFailure(error: IDJIError) { /* no-op */ }
             })
         } catch (e: Exception) {
-            // Ignore any errors - we just want to try our best to stop everything
+            // Best-effort: abort must not throw. Log rather than discard, so a genuine SDK
+            // failure during an abort is still visible in the flight log.
+            Log.w("DroneController", "Ignoring error while stopping DJI native mission: ${e.message}", e)
         }
     }
 
