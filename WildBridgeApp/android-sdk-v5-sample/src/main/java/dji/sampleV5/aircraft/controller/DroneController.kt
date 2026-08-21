@@ -448,6 +448,9 @@ object DroneController {
             // Also try pause in case there's an unnamed mission running
             WaypointMissionManager.getInstance().pauseMission(object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() { /* no-op */ }
+                // Fault barrier: the DJI SDK does not document an exception hierarchy for these calls, so a
+                // narrower catch would let an unanticipated type escape. This boundary must degrade, not throw.
+                @Suppress("TooGenericExceptionCaught")
                 override fun onFailure(error: IDJIError) { /* no-op */ }
             })
         } catch (e: Exception) {
