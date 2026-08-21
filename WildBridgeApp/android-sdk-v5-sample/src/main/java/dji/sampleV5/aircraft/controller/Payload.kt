@@ -195,6 +195,9 @@ object Payload {
     private var mediaWarmedUp = false
 
     // Build the SD-card media list once, in the background, so the FIRST capture isn't cold.
+    // Fault barrier: the DJI SDK does not document an exception hierarchy for these calls, so a
+    // narrower catch would let an unanticipated type escape. This boundary must degrade, not throw.
+    @Suppress("TooGenericExceptionCaught")
     fun warmUpMedia(mediaVM: MediaVM) {
         if (mediaWarmedUp) return
         mediaWarmedUp = true
@@ -300,6 +303,9 @@ object Payload {
         val elapsedMs: Long
     )
 
+    // Fault barrier: the DJI SDK does not document an exception hierarchy for these calls, so a
+    // narrower catch would let an unanticipated type escape. This boundary must degrade, not throw.
+    @Suppress("TooGenericExceptionCaught")
     private fun captureNewMediaFiles(mediaVM: MediaVM): List<MediaFile> {
         try {
             setupNewMediaListener()
@@ -700,6 +706,9 @@ object Payload {
 
     // Download a MediaFile and write it back over the socket as an image/jpeg response, or an error
     // response on failure.
+    // Fault barrier: the DJI SDK does not document an exception hierarchy for these calls, so a
+    // narrower catch would let an unanticipated type escape. This boundary must degrade, not throw.
+    @Suppress("TooGenericExceptionCaught")
     private fun streamMediaFile(mediaFile: MediaFile, label: String, outputStream: OutputStream) {
         try {
             val original = downloadToBytes(mediaFile)
@@ -774,6 +783,9 @@ object Payload {
     //
     // Blocking, call from a worker thread. payloadWidgetVM must be obtained from the host
     // activity via ViewModelProvider (created on the main thread).
+    // Fault barrier: the DJI SDK does not document an exception hierarchy for these calls, so a
+    // narrower catch would let an unanticipated type escape. This boundary must degrade, not throw.
+    @Suppress("TooGenericExceptionCaught")
     fun dropPayload(
         payloadWidgetVM: PayloadWidgetVM,
         indexType: PayloadIndexType,

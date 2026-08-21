@@ -3348,6 +3348,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         Log.i(TAG, message)
     }
 
+    // Fault barrier: the DJI SDK does not document an exception hierarchy for these calls, so a
+    // narrower catch would let an unanticipated type escape. This boundary must degrade, not throw.
+    @Suppress("TooGenericExceptionCaught")
     override fun onDestroy() {
         detachDefaultLayoutHsiWidgets()
 
