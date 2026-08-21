@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong
  * WebRTC CapturerObservers.  This eliminates duplicate NV21→scale→encode work
  * when multiple viewers are connected.
  */
+@Suppress("TooManyFunctions")
 class SharedDJIFrameSource(
     private val preferredCameraIndex: ComponentIndexType,
     private val droneName: String
@@ -41,7 +42,7 @@ class SharedDJIFrameSource(
         // Payload/accessory ports (PORT_1..PORT_8) are never video cameras — they carry
         // non-imaging payloads such as a hook on a multi-port aircraft (e.g. M400). The SDK
         // still lists them in the available-camera set, so we exclude them from auto-selection;
-        // otherwise the last-resort `first()` could bind the video stream to a payload port and
+        // otherwise the last-resort fallback could bind the video stream to a payload port and
         // the bridge shows no camera. Drop one here if it ever genuinely carries a camera.
         private val NON_CAMERA_INDICES = setOf(
             ComponentIndexType.PORT_4
@@ -57,6 +58,20 @@ class SharedDJIFrameSource(
     private val observers = ConcurrentHashMap<String, CapturerObserver>()
     private val metadataListeners = ConcurrentHashMap<String, DJIV5VideoCapturer.FrameMetadataListener>()
     private val isCapturing = AtomicBoolean(false)
+    private val edgeDetectionActive = AtomicBoolean(false)
+
+    interface EdgeDetectionFrameListener {
+        fun onNv21Frame(frame: Nv21Frame)
+    }
+
+    data class Nv21Frame(
+        val data: ByteArray,
+        val offset: Int,
+        val length: Int,
+        val width: Int,
+        val height: Int,
+        val timestampNs: Long
+    )
 
     @Volatile var targetWidth: Int = DJIV5VideoCapturer.FULL_HD_WIDTH
     @Volatile var targetHeight: Int = DJIV5VideoCapturer.FULL_HD_HEIGHT
@@ -64,6 +79,7 @@ class SharedDJIFrameSource(
     @Volatile private var targetFps: Int = 30
     @Volatile private var frameIntervalNs: Long = 1_000_000_000L / 30L
     @Volatile var metricsListener: ((WebRTCStreamMetrics) -> Unit)? = null
+    @Volatile private var edgeDetectionFrameListener: EdgeDetectionFrameListener? = null
     private val lastSentTimestampNs = AtomicLong(0L)
     private val frameCounter = AtomicLong(0)
     private val incomingFrameCounter = AtomicLong(0)
@@ -100,10 +116,10 @@ class SharedDJIFrameSource(
         // Begin observing available cameras as early as possible so we can
         // attach the frame listener to a camera index that actually exists
         // on the connected aircraft.
-        try {
+        runCatching {
             cameraStreamManager.addAvailableCameraUpdatedListener(availableCameraListener)
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not register available-camera listener: ${e.message}")
+        }.onFailure { error ->
+            Log.w(TAG, "Could not register available-camera listener: ${error.message}")
         }
     }
 
@@ -123,12 +139,9 @@ class SharedDJIFrameSource(
         // On the M400, drop payload/accessory ports (e.g. a hook on PORT_4) so they can never be
         // selected. Other aircraft keep the full list unchanged.
         val cameras = if (isMatrice400()) available.filterNot { it in NON_CAMERA_INDICES } else available
-        if (cameras.isEmpty()) return null
-        if (cameras.contains(preferredCameraIndex)) return preferredCameraIndex
-        for (candidate in CAMERA_PREFERENCE) {
-            if (cameras.contains(candidate)) return candidate
-        }
-        return cameras.first()
+        return preferredCameraIndex.takeIf { cameras.contains(it) }
+            ?: CAMERA_PREFERENCE.firstOrNull { cameras.contains(it) }
+            ?: cameras.firstOrNull()
     }
 
     @Synchronized
@@ -143,11 +156,15 @@ class SharedDJIFrameSource(
         }
         val previous = activeCameraIndex
         activeCameraIndex = resolved
-        Log.i(TAG, "Active camera index changed: $previous -> $resolved (available: $available, preferred: $preferredCameraIndex)")
+        Log.i(
+            TAG,
+            "Active camera index changed: $previous -> $resolved " +
+                "(available: $available, preferred: $preferredCameraIndex)"
+        )
 
         // If we're already streaming, re-attach the frame listener to the new index.
         if (isCapturing.get()) {
-            try {
+            runCatching {
                 cameraStreamManager.removeFrameListener(frameListener)
                 cameraStreamManager.addFrameListener(
                     activeCameraIndex,
@@ -155,11 +172,13 @@ class SharedDJIFrameSource(
                     frameListener
                 )
                 Log.i(TAG, "Re-attached frame listener on $activeCameraIndex")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to re-attach frame listener on $activeCameraIndex: ${e.message}", e)
+            }.onFailure { error ->
+                Log.e(TAG, "Failed to re-attach frame listener on $activeCameraIndex: ${error.message}", error)
             }
         }
     }
+
+    private val frameProcessor = FrameProcessor()
 
     private val frameListener = object : ICameraStreamManager.CameraFrameListener {
         override fun onFrame(
@@ -170,90 +189,150 @@ class SharedDJIFrameSource(
             height: Int,
             format: ICameraStreamManager.FrameFormat
         ) {
-            if (!isCapturing.get()) return
-            val singleObserver = if (observers.size == 1) observers.values.firstOrNull() else null
-            val currentObservers = if (singleObserver == null) observers.values.toList() else emptyList()
-            if (singleObserver == null && currentObservers.isEmpty()) return
+            if (isCapturing.get()) {
+                val frame = Nv21Frame(frameData, offset, length, width, height, System.nanoTime())
+                edgeDetectionFrameListener?.onNv21Frame(frame)
 
-            try {
-                val timestampNs = System.nanoTime()
+                val recipients = DjiFrameRecipients.capture(observers, metadataListeners)
+                if (recipients.hasObservers) {
+                    frameProcessor.process(frame, recipients)
+                }
+            }
+        }
+    }
+
+    private inner class FrameProcessor {
+        fun process(frame: Nv21Frame, recipients: DjiFrameRecipients) {
+            runCatching {
                 incomingFrameCounter.incrementAndGet()
                 inputFramesInWindow.incrementAndGet()
 
-                val previousSent = lastSentTimestampNs.get()
-                if (previousSent != 0L && (timestampNs - previousSent) < frameIntervalNs) {
-                    droppedFrameCounter.incrementAndGet()
-                    droppedFramesInWindow.incrementAndGet()
-                    maybeEmitMetrics(timestampNs)
-                    return
-                }
-                lastSentTimestampNs.set(timestampNs)
-
-                if (width != lastSourceWidth || height != lastSourceHeight) {
-                    lastSourceWidth = width
-                    lastSourceHeight = height
-                    Log.d(TAG, "Source: ${width}x${height}, Target: ${targetWidth}x${targetHeight}, Scale: $scaleToTarget")
-                }
-
-                val frameNumber = frameCounter.incrementAndGet()
-                synchronized(frameWaitLock) {
-                    frameWaitLock.notifyAll()
-                }
-                sentFramesInWindow.incrementAndGet()
-
-                val (outputWidth, outputHeight) = chooseOutputSize(width, height)
-                lastOutputWidth = outputWidth
-                lastOutputHeight = outputHeight
-
-                // Capture telemetry once and broadcast to all metadata listeners
-                val singleListener = if (metadataListeners.size == 1) metadataListeners.values.firstOrNull() else null
-                val currentListeners = if (singleListener == null) metadataListeners.values.toList() else emptyList()
-                if (singleListener != null || currentListeners.isNotEmpty()) {
-                    val metadata = TelemetryProvider.captureMetadata(
-                        frameNumber = frameNumber,
-                        timestampNs = timestampNs,
-                        frameWidth = outputWidth,
-                        frameHeight = outputHeight,
-                        droneName = droneName
-                    )
-                    if (singleListener != null) {
-                        singleListener.onFrameMetadata(metadata)
-                    } else {
-                        currentListeners.forEach { it.onFrameMetadata(metadata) }
-                    }
-                }
-
-                // Create NV21 buffer and scale ONCE
-                val buffer = NV21Buffer(frameData, width, height, null)
-
-                val needsScale = scaleToTarget && (width != outputWidth || height != outputHeight)
-                val outputBuffer = if (needsScale) {
-                    val scaled = buffer.cropAndScale(0, 0, width, height, outputWidth, outputHeight)
-                    buffer.release()
-                    scaled
+                if (shouldDropForTargetFrameRate(frame.timestampNs)) {
+                    recordDroppedFrame(frame.timestampNs)
                 } else {
-                    buffer
+                    deliverFrame(frame, recipients)
                 }
-
-                // Broadcast the same VideoFrame to every observer.
-                // Retain once per extra observer; the first consumer uses the initial ref.
-                val videoFrame = VideoFrame(outputBuffer, 0, timestampNs)
-                if (singleObserver != null) {
-                    singleObserver.onFrameCaptured(videoFrame)
-                } else {
-                    val extra = currentObservers.size - 1
-                    repeat(extra) { videoFrame.retain() }
-                    currentObservers.forEach { it.onFrameCaptured(videoFrame) }
-                }
-                videoFrame.release()
-                processingTimeNsInWindow.addAndGet(System.nanoTime() - timestampNs)
-                maybeEmitMetrics(timestampNs)
-
-            } catch (e: Exception) {
+            }.onFailure { error ->
                 processingErrorCounter.incrementAndGet()
-                lastError = e.message
-                Log.e(TAG, "Error processing frame: ${e.message}", e)
+                lastError = error.message
+                Log.e(TAG, "Error processing frame: ${error.message}", error)
             }
+        }
+
+        private fun deliverFrame(frame: Nv21Frame, recipients: DjiFrameRecipients) {
+            updateSourceSize(frame.width, frame.height)
+            val frameNumber = recordAcceptedFrame(frame.timestampNs)
+            val (outputWidth, outputHeight) = chooseOutputSize(frame.width, frame.height)
+            lastOutputWidth = outputWidth
+            lastOutputHeight = outputHeight
+
+            deliverMetadata(frameNumber, frame.timestampNs, outputWidth, outputHeight, recipients)
+            deliverVideoFrame(frame, outputWidth, outputHeight, recipients)
+            processingTimeNsInWindow.addAndGet(System.nanoTime() - frame.timestampNs)
+            maybeEmitMetrics(frame.timestampNs)
+        }
+
+        private fun shouldDropForTargetFrameRate(timestampNs: Long): Boolean {
+            val previousSent = lastSentTimestampNs.get()
+            return previousSent != 0L && (timestampNs - previousSent) < frameIntervalNs
+        }
+
+        private fun recordDroppedFrame(timestampNs: Long) {
+            droppedFrameCounter.incrementAndGet()
+            droppedFramesInWindow.incrementAndGet()
+            maybeEmitMetrics(timestampNs)
+        }
+
+        private fun updateSourceSize(width: Int, height: Int) {
+            if (width != lastSourceWidth || height != lastSourceHeight) {
+                lastSourceWidth = width
+                lastSourceHeight = height
+                Log.d(
+                    TAG,
+                    "Source: ${width}x${height}, Target: " +
+                        "${targetWidth}x${targetHeight}, Scale: $scaleToTarget"
+                )
+            }
+        }
+
+        private fun recordAcceptedFrame(timestampNs: Long): Long {
+            lastSentTimestampNs.set(timestampNs)
+            val frameNumber = frameCounter.incrementAndGet()
+            synchronized(frameWaitLock) {
+                frameWaitLock.notifyAll()
+            }
+            sentFramesInWindow.incrementAndGet()
+            return frameNumber
+        }
+
+        private fun deliverMetadata(
+            frameNumber: Long,
+            timestampNs: Long,
+            outputWidth: Int,
+            outputHeight: Int,
+            recipients: DjiFrameRecipients
+        ) {
+            if (!recipients.hasMetadataListeners) return
+            val metadata = TelemetryProvider.captureMetadata(
+                frameNumber = frameNumber,
+                timestampNs = timestampNs,
+                frameWidth = outputWidth,
+                frameHeight = outputHeight,
+                droneName = droneName
+            )
+            recipients.singleMetadataListener?.onFrameMetadata(metadata)
+                ?: recipients.metadataListeners.forEach { it.onFrameMetadata(metadata) }
+        }
+
+        private fun deliverVideoFrame(
+            frame: Nv21Frame,
+            outputWidth: Int,
+            outputHeight: Int,
+            recipients: DjiFrameRecipients
+        ) {
+            val buffer = NV21Buffer(frame.data, frame.width, frame.height, null)
+            val needsScale = scaleToTarget && (frame.width != outputWidth || frame.height != outputHeight)
+            val outputBuffer = if (needsScale) {
+                val scaled = buffer.cropAndScale(0, 0, frame.width, frame.height, outputWidth, outputHeight)
+                buffer.release()
+                scaled
+            } else {
+                buffer
+            }
+
+            val videoFrame = VideoFrame(outputBuffer, 0, frame.timestampNs)
+            try {
+                recipients.deliver(videoFrame)
+            } finally {
+                videoFrame.release()
+            }
+        }
+    }
+
+    fun setEdgeDetectionFrameListener(listener: EdgeDetectionFrameListener?) {
+        edgeDetectionFrameListener = listener
+        val shouldRun = listener != null
+        edgeDetectionActive.set(shouldRun)
+        if (shouldRun) {
+            ensureFrameListenerAttached("edge detection enabled")
+        } else if (observers.isEmpty() && isCapturing.compareAndSet(true, false)) {
+            Log.d(TAG, "No observers or edge detector left – stopping shared capture")
+            cameraStreamManager.removeFrameListener(frameListener)
+        }
+    }
+
+    @Synchronized
+    private fun ensureFrameListenerAttached(reason: String) {
+        if (isCapturing.compareAndSet(false, true)) {
+            lastSentTimestampNs.set(0L)
+            Log.d(TAG, "Starting shared capture for $reason on camera $activeCameraIndex")
+            runCatching { cameraStreamManager.enableStream(activeCameraIndex, true) }
+                .onFailure { Log.w(TAG, "Could not enable stream on $activeCameraIndex: ${it.message}") }
+            cameraStreamManager.addFrameListener(
+                activeCameraIndex,
+                ICameraStreamManager.FrameFormat.NV21,
+                frameListener
+            )
         }
     }
 
@@ -346,7 +425,11 @@ class SharedDJIFrameSource(
             targetFps = fps.coerceAtLeast(1)
             frameIntervalNs = 1_000_000_000L / targetFps.toLong()
             lastSentTimestampNs.set(0L)
-            Log.d(TAG, "Starting shared capture: ${targetWidth}x${targetHeight}@${targetFps}fps on camera $activeCameraIndex (preferred: $preferredCameraIndex)")
+            Log.d(
+                TAG,
+                "Starting shared capture: ${targetWidth}x${targetHeight}@$targetFps fps " +
+                    "on camera $activeCameraIndex (preferred: $preferredCameraIndex)"
+            )
             runCatching { cameraStreamManager.enableStream(activeCameraIndex, true) }
                 .onFailure { Log.w(TAG, "Could not enable stream on $activeCameraIndex: ${it.message}") }
             cameraStreamManager.addFrameListener(
@@ -363,7 +446,7 @@ class SharedDJIFrameSource(
         observers.remove(clientId)
         metadataListeners.remove(clientId)
         Log.d(TAG, "Client removed: $clientId (remaining: ${observers.size})")
-        if (observers.isEmpty() && isCapturing.compareAndSet(true, false)) {
+        if (observers.isEmpty() && !edgeDetectionActive.get() && isCapturing.compareAndSet(true, false)) {
             Log.d(TAG, "No observers left – stopping shared capture")
             cameraStreamManager.removeFrameListener(frameListener)
         }
@@ -376,7 +459,9 @@ class SharedDJIFrameSource(
         applyResolutionRequest(width, height)
         Log.d(
             TAG,
-            "Changing target resolution: ${previousWidth}x${previousHeight} (scale=$previousScale) -> ${targetWidth}x${targetHeight} (scale=$scaleToTarget)"
+            "Changing target resolution: " +
+                "${previousWidth}x${previousHeight} (scale=$previousScale) -> " +
+                "${targetWidth}x${targetHeight} (scale=$scaleToTarget)"
         )
     }
 
@@ -407,7 +492,9 @@ class SharedDJIFrameSource(
         lastSentTimestampNs.set(0L)
         runCatching { cameraStreamManager.removeFrameListener(frameListener) }
         runCatching { cameraStreamManager.enableStream(activeCameraIndex, true) }
-            .onFailure { Log.w(TAG, "Could not enable stream during listener reset on $activeCameraIndex: ${it.message}") }
+            .onFailure {
+                Log.w(TAG, "Could not enable stream during listener reset on $activeCameraIndex: ${it.message}")
+            }
         cameraStreamManager.addFrameListener(
             activeCameraIndex,
             ICameraStreamManager.FrameFormat.NV21,
@@ -420,14 +507,54 @@ class SharedDJIFrameSource(
         if (isCapturing.compareAndSet(true, false)) {
             cameraStreamManager.removeFrameListener(frameListener)
         }
-        try {
+        runCatching {
             cameraStreamManager.removeAvailableCameraUpdatedListener(availableCameraListener)
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not remove available-camera listener: ${e.message}")
-        }
+        }.onFailure { error -> Log.w(TAG, "Could not remove available-camera listener: ${error.message}") }
         observers.clear()
         metadataListeners.clear()
+        edgeDetectionFrameListener = null
+        edgeDetectionActive.set(false)
         metricsListener = null
         Log.d(TAG, "SharedDJIFrameSource disposed")
+    }
+}
+
+private data class DjiFrameRecipients(
+    val singleObserver: CapturerObserver?,
+    val observers: List<CapturerObserver>,
+    val singleMetadataListener: DJIV5VideoCapturer.FrameMetadataListener?,
+    val metadataListeners: List<DJIV5VideoCapturer.FrameMetadataListener>
+) {
+    val hasObservers: Boolean = singleObserver != null || observers.isNotEmpty()
+    val hasMetadataListeners: Boolean = singleMetadataListener != null || metadataListeners.isNotEmpty()
+
+    fun deliver(videoFrame: VideoFrame) {
+        if (singleObserver != null) {
+            singleObserver.onFrameCaptured(videoFrame)
+        } else {
+            repeat((observers.size - 1).coerceAtLeast(0)) { videoFrame.retain() }
+            observers.forEach { it.onFrameCaptured(videoFrame) }
+        }
+    }
+
+    companion object {
+        fun capture(
+            observers: ConcurrentHashMap<String, CapturerObserver>,
+            metadataListeners: ConcurrentHashMap<String, DJIV5VideoCapturer.FrameMetadataListener>
+        ): DjiFrameRecipients {
+            val singleObserver = observers.singleValueOrNull()
+            val observerSnapshot = if (singleObserver == null) observers.values.toList() else emptyList()
+            val singleMetadataListener = metadataListeners.singleValueOrNull()
+            val metadataSnapshot = if (singleMetadataListener == null) {
+                metadataListeners.values.toList()
+            } else {
+                emptyList()
+            }
+            return DjiFrameRecipients(singleObserver, observerSnapshot, singleMetadataListener, metadataSnapshot)
+        }
+
+        private fun <T> ConcurrentHashMap<String, T>.singleValueOrNull(): T? {
+            return if (size == 1) values.firstOrNull() else null
+        }
     }
 }
