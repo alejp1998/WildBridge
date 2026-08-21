@@ -7,6 +7,7 @@ This file was written as part of the WildDrone project and implements a ROS 2 no
 via the WildBridge app. The node handles both command reception and telemetry publishing.
 """
 
+import ast
 import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 

@@ -11,6 +11,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from video_events import (
@@ -50,9 +51,9 @@ EVENT_LOG = (
 )
 
 lock = threading.RLock()
-sse_clients = []
-telemetry_threads = {}
-telemetry_stop_events = {}
+sse_clients: list[Any] = []
+telemetry_threads: dict[str, threading.Thread] = {}
+telemetry_stop_events: dict[str, threading.Event] = {}
 
 
 def utc_now():
