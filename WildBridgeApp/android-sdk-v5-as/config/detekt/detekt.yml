@@ -1,0 +1,10 @@
+complexity:
+  active: true
+
+style:
+  active: true
+  MagicNumber:
+    active: false
+
+build:
+  maxIssues: 0
