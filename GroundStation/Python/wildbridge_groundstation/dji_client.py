@@ -632,7 +632,7 @@ class DJIInterface:
             return json.loads(response)
         except ValueError:
             print(f"LRF: could not parse response: {response!r}")
-            return {"distance": None, "target": None, "state": None}  
+            return {"distance": None, "target": None, "state": None}
 
     def getLRFTarget(self):
         """Get the last LRF-locked target position (latitude, longitude, altitude)."""

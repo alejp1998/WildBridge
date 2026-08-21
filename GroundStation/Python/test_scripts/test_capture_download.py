@@ -20,7 +20,7 @@ import sys
 import time
 from datetime import datetime
 
-from wildbridge_groundstation.dji_client import DJIInterface, LENS_KEYS
+from wildbridge_groundstation.dji_client import LENS_KEYS, DJIInterface
 
 # ----------------------------------------------------------------------------
 # Hardcode the controller (RC) IP address here (the RC's WLAN address, port 8080).
@@ -71,7 +71,7 @@ def main():
         else:
             print(f"  {lens}: FAILED after {dt:.1f}s")
             failures.append(lens)
-        
+
 
     if failures:
         print(f"Done with failures: {', '.join(failures)}")
