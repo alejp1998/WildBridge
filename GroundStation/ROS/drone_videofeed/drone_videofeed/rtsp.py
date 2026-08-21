@@ -1,22 +1,24 @@
+import threading
+import time
+from collections import deque
+
+import cv2
 import rclpy
+from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
-import cv2
-from collections import deque
-import time
-import threading
+
 
 class RtspNode(Node):
     def __init__(self):
-        super().__init__('RtspNode')
-        self.declare_parameter('ip_rc', '192.168.8.14')  # Default IP
-        self.ip_rc = self.get_parameter('ip_rc').get_parameter_value().string_value
+        super().__init__("RtspNode")
+        self.declare_parameter("ip_rc", "192.168.8.14")  # Default IP
+        self.ip_rc = self.get_parameter("ip_rc").get_parameter_value().string_value
 
         # Generate a unique HTTP port based on the IP address
         port_base = 8000
         try:
-            ip_parts = list(map(int, self.ip_rc.split('.')))
+            ip_parts = list(map(int, self.ip_rc.split(".")))
             if len(ip_parts) != 4:
                 raise ValueError("Invalid IP address format.")
         except ValueError as ve:
@@ -27,7 +29,9 @@ class RtspNode(Node):
 
         # Log initialization details
         self.get_logger().info(f"Node initialized with IP: {self.ip_rc}")
-        self.get_logger().info(f"HTTP server accessible at: http://localhost:{self.http_port}/video_feed")
+        self.get_logger().info(
+            f"HTTP server accessible at: http://localhost:{self.http_port}/video_feed"
+        )
 
         # Connection attempt counter
         self.number_connection_attempts = 0
@@ -62,14 +66,18 @@ class RtspNode(Node):
                 self.number_connection_attempts = 0
                 return
             else:
-                self.get_logger().error(f"Failed to open RTSP stream. Retrying in {self.retry_delay} seconds...")
+                self.get_logger().error(
+                    f"Failed to open RTSP stream. Retrying in {self.retry_delay} seconds..."
+                )
                 self.number_connection_attempts += 1
                 self.cap.release()
                 time.sleep(self.retry_delay)
 
                 if self.number_connection_attempts > 5:
                     self.get_logger().error("Failed to connect after multiple attempts. Stopping.")
-                    raise ConnectionError("Unable to connect to RTSP stream after multiple attempts.")
+                    raise ConnectionError(
+                        "Unable to connect to RTSP stream after multiple attempts."
+                    )
 
     def publish_frames(self):
         """
@@ -95,7 +103,9 @@ class RtspNode(Node):
 
             ret, frame = self.cap.read()
             if not ret:
-                self.get_logger().warn("Failed to read frame from RTSP stream. Attempting to reconnect...")
+                self.get_logger().warn(
+                    "Failed to read frame from RTSP stream. Attempting to reconnect..."
+                )
                 self.cap.release()
                 time.sleep(self.retry_delay)
                 continue
@@ -112,7 +122,7 @@ class RtspNode(Node):
 
             # Display the frame in the OpenCV window
             cv2.imshow("RTSP Video", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord("q"):
                 self.get_logger().info("OpenCV window close requested by user.")
                 break
 
@@ -121,6 +131,7 @@ class RtspNode(Node):
         # Cleanup after the loop
         self.cap.release()
         cv2.destroyAllWindows()
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -136,5 +147,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
