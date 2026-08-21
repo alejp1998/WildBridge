@@ -7,7 +7,7 @@
 **Ground Station Interface for Lightweight Multi-Drone Control and Telemetry on DJI Platforms**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![DJI MSDK V5](https://img.shields.io/badge/DJI%20MSDK-V5.17.0-blue.svg)](https://developer.dji.com/doc/mobile-sdk-tutorial/en/)
+[![DJI MSDK V5](https://img.shields.io/badge/DJI%20MSDK-V5.18.0-blue.svg)](https://developer.dji.com/doc/mobile-sdk-tutorial/en/)
 [![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-brightgreen.svg)](https://docs.ros.org/en/humble/)
 [![Part of WildDrone](https://img.shields.io/badge/Part%20of-WildDrone-orange.svg)](https://wilddrone.eu)
 
@@ -123,23 +123,49 @@ git clone https://github.com/WildDrone/WildBridge.git
 ```
 
 1. Open `WildBridge/WildBridgeApp/android-sdk-v5-as` in Android Studio.
-2. Add your API key to `local.properties`:
+2. Create `local.properties` from the template and set the Android SDK path for your machine:
+    ```bash
+    cd WildBridge/WildBridgeApp/android-sdk-v5-as
+    cp local.properties.example local.properties
+    ```
+    Example for a default Linux Android Studio install:
+    ```properties
+    sdk.dir=/home/your-user/Android/Sdk
+    ```
+3. Add your DJI API key to `local.properties`:
    ```properties
    AIRCRAFT_API_KEY="Your_App_Key"
    ```
-3. Build and deploy to your RC or Android phone (enable Developer Mode + USB Debugging first).
+4. Build and deploy to your RC or Android phone (enable Developer Mode + USB Debugging first).
 
 Command-line build:
 
 ```bash
 cd WildBridge/WildBridgeApp/android-sdk-v5-as
-./gradlew :sample:assembleDebug
+./gradlew :sample:assembleCurrentDebug
+./gradlew :sample:assembleDemoBiomassDebug
 ```
 
-The debug APK is written to:
+The debug APKs are written to:
 
 ```text
-WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/debug/sample-debug.apk
+WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/current/debug/sample-currentDebug.apk
+WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/demoBiomass/debug/sample-demoBiomassDebug.apk
+```
+
+To build/install a selected variant when an Android device is connected over ADB:
+
+```bash
+cd WildBridgeApp/android-sdk-v5-as
+./auto_install_on_connect.sh current --build
+./auto_install_on_connect.sh demo_biomass --build
+```
+
+To only check which APK will be used:
+
+```bash
+./auto_install_on_connect.sh current --check
+./auto_install_on_connect.sh demo_biomass --check
 ```
 
 ### Start the Server
@@ -244,14 +270,14 @@ Runtime diagnostics are written under `GroundStation/video_test/logs/`. Those lo
 
 ## Python Interface (`DJIInterface`)
 
-`GroundStation/Python/djiInterface.py` provides a high-level class wrapping all HTTP commands and the TCP telemetry socket in a thread-safe background receiver.
+`GroundStation/Python/wildbridge_groundstation/dji_client.py` provides a high-level class wrapping all HTTP commands and the TCP telemetry socket in a thread-safe background receiver.
 
 ```python
 import time
-from djiInterface import DJIInterface
+from wildbridge_groundstation.dji_client import DJIInterface, discover_drone
 
 # Auto-discovery via UDP broadcast (port 30000) if no IP provided
-dji = DJIInterface("192.168.1.100")
+dji = DJIInterface("", discover_callback=discover_drone)
 
 # Start background telemetry thread (TCP socket, port 8081)
 dji.startTelemetryStream()
@@ -647,7 +673,7 @@ WildBridge/
 │   └── android-sdk-v5-uxsdk/            # DJI UXSDK UI components
 └── GroundStation/
     ├── Python/
-    │   ├── djiInterface.py              # DJIInterface class (HTTP + TCP telemetry)
+    │   ├── wildbridge_groundstation/    # Canonical DJI client (HTTP + TCP telemetry)
     │   ├── djiInterfaceSafety.py        # Safety Computer client (token on every command)
     │   └── test_scripts/                # Authority and capture/download test scripts
     ├── Dockerfile                       # ros:humble + CycloneDDS container
@@ -696,8 +722,9 @@ DJI SDK TXT flight records are copied to `WildBridge/DJI_FlightRecords/` on app 
 **Android build:**
 ```bash
 cd WildBridgeApp/android-sdk-v5-as
-./gradlew :sample:compileDebugKotlin
-./gradlew :sample:assembleDebug
+./gradlew :sample:compileCurrentDebugKotlin
+./gradlew :sample:assembleCurrentDebug
+./gradlew :sample:assembleDemoBiomassDebug
 ```
 
 ---
