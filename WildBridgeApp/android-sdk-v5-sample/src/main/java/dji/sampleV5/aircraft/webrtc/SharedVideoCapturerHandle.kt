@@ -9,6 +9,7 @@ import org.webrtc.VideoCapturer
  * Lightweight [VideoCapturer] proxy that delegates to a [SharedDJIFrameSource]
  * so the expensive DJI frame listener and NV21 scaling run only once.
  */
+@Suppress("TooManyFunctions")
 class SharedVideoCapturerHandle(
     private val clientId: String,
     private val source: SharedDJIFrameSource

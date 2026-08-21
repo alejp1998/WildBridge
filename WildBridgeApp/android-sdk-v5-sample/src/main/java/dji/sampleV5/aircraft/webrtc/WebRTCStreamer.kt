@@ -5,13 +5,16 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import dji.sdk.keyvalue.value.common.ComponentIndexType
+import org.webrtc.VideoSink
 import org.webrtc.VideoCapturer
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.SocketException
 
 /**
  * WebRTCStreamer manages DJI video capture and WHIP publishing for the drone feed.
  */
+@Suppress("TooManyFunctions")
 class WebRTCStreamer(
     context: Context,
     private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN,
@@ -22,30 +25,39 @@ class WebRTCStreamer(
 
     companion object {
         private const val TAG = "WebRTCStreamer"
-        private const val SATURATION_PROCESSING_RATIO = 0.75
-        private const val SATURATION_WINDOWS_TO_THROTTLE = 2
-        private const val STABLE_WINDOWS_TO_RELAX = 8
         private const val RECOVERY_COOLDOWN_MS = 15_000L
-        private val ADAPTIVE_FPS_STEPS = intArrayOf(30, 25, 20, 15, 12, 10, 8, 6, 5)
     }
 
     private val appContext = context.applicationContext
 
+    enum class VideoSourceMode(val prefValue: String, val menuLabel: String) {
+        DJI("drone", "Drone camera"),
+        PHONE("phone", "Phone back camera"),
+        MOCK("mock", "Mock MP4");
+
+        companion object {
+            fun fromPref(value: String?): VideoSourceMode {
+                return entries.firstOrNull { it.prefValue == value } ?: DJI
+            }
+        }
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sharedFrameSource: SharedDJIFrameSource? = null
     private var whipPublisher: WhipPublisher? = null
+    private val frameRatePolicy = AdaptiveFrameRatePolicy(options.fps)
     @Volatile private var selectedOptions: WebRTCMediaOptions = options
-    @Volatile private var currentOptions: WebRTCMediaOptions = optionsForSource(options, mockVideoEnabled)
+    @Volatile private var currentSourceMode: VideoSourceMode = if (mockVideoEnabled) {
+        VideoSourceMode.MOCK
+    } else {
+        VideoSourceMode.DJI
+    }
+    @Volatile private var currentOptions: WebRTCMediaOptions = optionsForSource(options, currentSourceMode)
     @Volatile private var currentWhipUrl: String? = null
-    @Volatile private var useMockVideo: Boolean = mockVideoEnabled
+    @Volatile private var localPreviewSink: VideoSink? = null
     private var badMetricsWindows = 0
-    private var saturationWindows = 0
-    private var stableWindows = 0
     private var recoveryCount = 0
     private var lastRecoveryAtMs = 0L
-    private var desiredFps = options.fps.coerceIn(1, 60)
-    private var effectiveFps = desiredFps
-    @Volatile private var saturationState = "ok"
     
     var listener: WebRTCStreamerListener? = null
 
@@ -94,22 +106,24 @@ class WebRTCStreamer(
     }
 
     fun setMockVideoEnabled(enabled: Boolean) {
-        if (useMockVideo == enabled) return
-        val previousSource = if (useMockVideo) "mock" else "dji"
-        useMockVideo = enabled
-        currentOptions = optionsForSource(selectedOptions, enabled)
+        setVideoSourceMode(if (enabled) VideoSourceMode.MOCK else VideoSourceMode.DJI)
+    }
+
+    fun setVideoSourceMode(mode: VideoSourceMode) {
+        if (currentSourceMode == mode) return
+        val previousSource = currentSourceMode
+        currentSourceMode = mode
+        currentOptions = optionsForSource(selectedOptions, mode)
         badMetricsWindows = 0
-        saturationWindows = 0
-        stableWindows = 0
-        saturationState = "ok"
+        frameRatePolicy.reset()
         recoveryCount = 0
 
         logWhipLifecycle(
             event = "whip_source_switched",
-            detail = "source $previousSource -> ${if (enabled) "mock" else "dji"}"
+            detail = "source ${previousSource.prefValue} -> ${mode.prefValue}"
         )
 
-        if (enabled) {
+        if (mode != VideoSourceMode.DJI) {
             sharedFrameSource?.dispose()
             sharedFrameSource = null
         }
@@ -122,10 +136,17 @@ class WebRTCStreamer(
                 if (currentWhipUrl == whipUrl) startWhip(whipUrl)
             }, 500L)
         }
-        Log.i(TAG, "Video source changed to ${if (enabled) "mock MP4" else "DJI camera"}")
+        Log.i(TAG, "Video source changed to ${mode.menuLabel}")
     }
 
-    fun isMockVideoEnabled(): Boolean = useMockVideo
+    fun isMockVideoEnabled(): Boolean = currentSourceMode == VideoSourceMode.MOCK
+
+    fun videoSourceMode(): VideoSourceMode = currentSourceMode
+
+    fun setLocalPreviewSink(sink: VideoSink?) {
+        localPreviewSink = sink
+        whipPublisher?.setLocalPreviewSink(sink)
+    }
 
     /**
     * Start publishing video via WHIP to a MediaMTX relay server. The phone
@@ -138,19 +159,51 @@ class WebRTCStreamer(
         logWhipLifecycle(
             event = "whip_start_requested",
             whipUrl = whipUrl,
-            detail = "fps=$effectiveFps target=${resolutionLabelForOptions(currentOptions)}"
+            detail = "fps=${frameRatePolicy.effectiveFps} target=${resolutionLabelForOptions(currentOptions)}"
         )
 
-        whipPublisher?.let { existingPublisher ->
-            if (currentWhipUrl == whipUrl && existingPublisher.isRunning() && existingPublisher.isPublishing()) {
-                Log.d(TAG, "WHIP publisher already healthy for $whipUrl")
-                logWhipLifecycle(
-                    event = "whip_start_skipped",
-                    whipUrl = whipUrl,
-                    detail = "publisher already running"
-                )
-                return
-            }
+        if (keepHealthyPublisherOrStopStale(whipUrl)) return
+
+        TelemetryProvider.startListening()
+        currentWhipUrl = whipUrl
+
+        val djiFrameSource = if (currentSourceMode == VideoSourceMode.DJI) getOrCreateSharedSource() else null
+        val capturer = createVideoCapturer("whip")
+        val startFrameCount = when (capturer) {
+            is SharedVideoCapturerHandle -> capturer.totalOutputFrames()
+            is SharedPhoneVideoCapturerHandle -> capturer.totalOutputFrames()
+            else -> djiFrameSource?.totalOutputFrames() ?: 0L
+        }
+
+        whipPublisher = WhipPublisher(
+            context = appContext,
+            videoCapturer = capturer,
+            options = currentOptions,
+            whipUrl = whipUrl,
+            localPreviewSink = localPreviewSink
+        ).apply {
+            this.listener = createWhipListener(whipUrl)
+            start()
+        }
+
+        scheduleSourceLossCheck(whipUrl, djiFrameSource, startFrameCount)
+    }
+
+    private fun keepHealthyPublisherOrStopStale(whipUrl: String): Boolean {
+        val existingPublisher = whipPublisher
+        val keepPublisher = existingPublisher != null &&
+            currentWhipUrl == whipUrl &&
+            existingPublisher.isRunning() &&
+            existingPublisher.isPublishing()
+
+        if (keepPublisher) {
+            Log.d(TAG, "WHIP publisher already healthy for $whipUrl")
+            logWhipLifecycle(
+                event = "whip_start_skipped",
+                whipUrl = whipUrl,
+                detail = "publisher already running"
+            )
+        } else if (existingPublisher != null) {
             Log.w(TAG, "Restarting stale WHIP publisher for $whipUrl")
             logWhipLifecycle(
                 event = "whip_restart_requested",
@@ -161,68 +214,77 @@ class WebRTCStreamer(
             whipPublisher = null
         }
 
-        TelemetryProvider.startListening()
-        currentWhipUrl = whipUrl
+        return keepPublisher
+    }
 
-        val djiFrameSource = if (useMockVideo) null else getOrCreateSharedSource()
-        val startFrameCount = djiFrameSource?.totalOutputFrames() ?: 0L
-        val capturer = createVideoCapturer("whip")
-
-        whipPublisher = WhipPublisher(
-            context = appContext,
-            videoCapturer = capturer,
-            options = currentOptions,
-            whipUrl = whipUrl
-        ).apply {
-            this.listener = object : WhipPublisher.WhipListener {
-                override fun onPublishing() {
-                    val ip = getLocalIpAddress() ?: "Unknown"
-                    Log.i(TAG, "WHIP publishing from $ip to $whipUrl")
-                    logWhipLifecycle(
-                        event = "whip_publishing",
-                        whipUrl = whipUrl,
-                        detail = "localIp=$ip"
-                    )
-                    mainHandler.post {
-                        this@WebRTCStreamer.listener?.onServerStarted(ip, 0)
-                    }
-                }
-                override fun onDisconnected() {
-                    Log.w(TAG, "WHIP connection lost")
-                    logWhipLifecycle(
-                        event = "whip_disconnected",
-                        whipUrl = whipUrl,
-                        detail = "publisher disconnected"
-                    )
-                }
-                override fun onError(error: String) {
-                    Log.e(TAG, "WHIP error: $error")
-                    logWhipLifecycle(
-                        event = "whip_error",
-                        whipUrl = whipUrl,
-                        detail = error
-                    )
-                    mainHandler.post {
-                        this@WebRTCStreamer.listener?.onServerError("WHIP: $error")
-                    }
-                }
-            }
-            start()
-        }
-
-        mainHandler.postDelayed({
-            val noFramesSinceStart = !useMockVideo && djiFrameSource != null && djiFrameSource.observerCount() > 0 && djiFrameSource.totalOutputFrames() == startFrameCount
-            if (currentWhipUrl == whipUrl && noFramesSinceStart) {
-                val message = "Camera feed lost. The drone may have been idle too long or overheated; power-cycle the drone and let it cool down before retrying."
-                Log.w(TAG, message)
+    private fun createWhipListener(whipUrl: String): WhipPublisher.WhipListener {
+        return object : WhipPublisher.WhipListener {
+            override fun onPublishing() {
+                val ip = getLocalIpAddress() ?: "Unknown"
+                Log.i(TAG, "WHIP publishing from $ip to $whipUrl")
                 logWhipLifecycle(
-                    event = "whip_source_lost",
+                    event = "whip_publishing",
                     whipUrl = whipUrl,
-                    detail = "no new DJI frames after start"
+                    detail = "localIp=$ip"
                 )
-                mainHandler.post { listener?.onServerError(message) }
+                mainHandler.post {
+                    this@WebRTCStreamer.listener?.onServerStarted(ip, 0)
+                }
             }
+
+            override fun onDisconnected() {
+                Log.w(TAG, "WHIP connection lost")
+                logWhipLifecycle(
+                    event = "whip_disconnected",
+                    whipUrl = whipUrl,
+                    detail = "publisher disconnected"
+                )
+            }
+
+            override fun onError(error: String) {
+                Log.e(TAG, "WHIP error: $error")
+                logWhipLifecycle(
+                    event = "whip_error",
+                    whipUrl = whipUrl,
+                    detail = error
+                )
+                mainHandler.post {
+                    this@WebRTCStreamer.listener?.onServerError("WHIP: $error")
+                }
+            }
+        }
+    }
+
+    private fun scheduleSourceLossCheck(
+        whipUrl: String,
+        djiFrameSource: SharedDJIFrameSource?,
+        startFrameCount: Long
+    ) {
+        mainHandler.postDelayed({
+            notifyIfDjiSourceLost(whipUrl, djiFrameSource, startFrameCount)
         }, 15_000L)
+    }
+
+    private fun notifyIfDjiSourceLost(
+        whipUrl: String,
+        djiFrameSource: SharedDJIFrameSource?,
+        startFrameCount: Long
+    ) {
+        val noFramesSinceStart = currentSourceMode == VideoSourceMode.DJI &&
+            djiFrameSource != null &&
+            djiFrameSource.observerCount() > 0 &&
+            djiFrameSource.totalOutputFrames() == startFrameCount
+        if (currentWhipUrl == whipUrl && noFramesSinceStart) {
+            val message = "Camera feed lost. The drone may have been idle too long or overheated; " +
+                "power-cycle the drone and let it cool down before retrying."
+            Log.w(TAG, message)
+            logWhipLifecycle(
+                event = "whip_source_lost",
+                whipUrl = whipUrl,
+                detail = "no new DJI frames after start"
+            )
+            mainHandler.post { listener?.onServerError(message) }
+        }
     }
 
     fun isRunning(): Boolean = whipPublisher?.isRunning() == true
@@ -242,24 +304,25 @@ class WebRTCStreamer(
      */
     fun changeMediaOptions(options: WebRTCMediaOptions) {
         selectedOptions = options
-        currentOptions = optionsForSource(options)
-        desiredFps = currentOptions.fps.coerceIn(1, 60)
-        effectiveFps = desiredFps
-        saturationWindows = 0
-        stableWindows = 0
-        saturationState = "ok"
+        currentOptions = optionsForSource(options, currentSourceMode)
+        frameRatePolicy.reset(currentOptions.fps)
         changeResolution(currentOptions.videoResolutionWidth, currentOptions.videoResolutionHeight)
-        applyFrameRate(effectiveFps, "media options updated")
+        applyFrameRate(frameRatePolicy.effectiveFps, "media options updated")
     }
 
     fun changeFrameRate(fps: Int) {
         val boundedFps = fps.coerceIn(1, 60)
-        desiredFps = boundedFps
-        effectiveFps = boundedFps
-        saturationWindows = 0
-        stableWindows = 0
-        saturationState = "ok"
+        frameRatePolicy.reset(boundedFps)
         applyFrameRate(boundedFps, "manual change")
+    }
+
+    fun setEdgeDetectionFrameListener(listener: SharedDJIFrameSource.EdgeDetectionFrameListener?) {
+        if (currentSourceMode != VideoSourceMode.DJI) return
+        if (listener == null) {
+            sharedFrameSource?.setEdgeDetectionFrameListener(null)
+        } else {
+            getOrCreateSharedSource().setEdgeDetectionFrameListener(listener)
+        }
     }
 
     private fun applyFrameRate(fps: Int, reason: String) {
@@ -276,12 +339,12 @@ class WebRTCStreamer(
     }
 
     private fun createVideoCapturer(clientId: String): VideoCapturer {
-        return if (useMockVideo) {
-            MockMp4VideoCapturer(droneName).apply {
+        return when (currentSourceMode) {
+            VideoSourceMode.MOCK -> MockMp4VideoCapturer(droneName).apply {
                 metricsListener = ::handleFrameSourceMetrics
             }
-        } else {
-            SharedVideoCapturerHandle(clientId, getOrCreateSharedSource())
+            VideoSourceMode.PHONE -> SharedPhoneVideoCapturerHandle(clientId)
+            VideoSourceMode.DJI -> SharedVideoCapturerHandle(clientId, getOrCreateSharedSource())
         }
     }
 
@@ -290,78 +353,21 @@ class WebRTCStreamer(
         val enriched = metrics.copy(
             recoveryCount = recoveryCount,
             status = if (whipPublisher != null) metrics.status else "idle",
-            configuredFps = desiredFps,
-            saturationState = saturationState,
+            configuredFps = frameRatePolicy.desiredFps,
+            saturationState = frameRatePolicy.saturationState,
             scaleMode = if (currentOptions.usesSourceResolution) "native" else "fixed"
         )
-        if (!useMockVideo) maybeRecoverStreaming(enriched)
+        if (currentSourceMode == VideoSourceMode.DJI) maybeRecoverStreaming(enriched)
         mainHandler.post { listener?.onMetrics(enriched) }
     }
 
     private fun maybeAdaptFrameRate(metrics: WebRTCStreamMetrics) {
-        if (metrics.observerCount == 0 || metrics.targetFps <= 0) {
-            saturationWindows = 0
-            stableWindows = 0
-            saturationState = "ok"
-            return
+        val decision = frameRatePolicy.evaluate(metrics)
+        val nextFps = decision.frameRateToApply ?: return
+        decision.lifecycleEvent?.let { event ->
+            logWhipLifecycle(event = event, detail = decision.lifecycleDetail)
         }
-
-        val frameBudgetMs = 1000.0 / metrics.targetFps.toDouble()
-        val processingSaturated = metrics.averageFrameProcessingMs >= frameBudgetMs * SATURATION_PROCESSING_RATIO
-        val sourceFlowing = metrics.inputFps >= maxOf(2.0, metrics.targetFps * 0.6)
-        val outputLagging = sourceFlowing && metrics.outputFps < metrics.targetFps * 0.5
-        val processingErrorsActive = metrics.processingErrors > 0
-        val saturated = processingSaturated || (outputLagging && processingErrorsActive)
-
-        if (saturated) {
-            saturationWindows += 1
-            stableWindows = 0
-            saturationState = if (processingSaturated) "hot" else "error"
-            if (saturationWindows >= SATURATION_WINDOWS_TO_THROTTLE) {
-                val nextFps = nextLowerAdaptiveFps(effectiveFps)
-                if (nextFps < effectiveFps) {
-                    effectiveFps = nextFps
-                    saturationWindows = 0
-                    logWhipLifecycle(
-                        event = "adaptive_fps_lowered",
-                        detail = "fps ${metrics.targetFps} -> $effectiveFps proc=${metrics.averageFrameProcessingMs.format1()}ms budget=${frameBudgetMs.format1()}ms out=${metrics.outputFps.format1()} in=${metrics.inputFps.format1()} err=${metrics.processingErrors}"
-                    )
-                    applyFrameRate(effectiveFps, "processing saturation")
-                }
-            }
-            return
-        }
-
-        if (outputLagging && effectiveFps == desiredFps) {
-            saturationWindows = 0
-            stableWindows = 0
-            saturationState = "source-limited"
-            return
-        }
-
-        if (effectiveFps < desiredFps) {
-            stableWindows += 1
-            saturationState = "recovering"
-            if (stableWindows >= STABLE_WINDOWS_TO_RELAX) {
-                val nextFps = nextHigherAdaptiveFps(effectiveFps, desiredFps)
-                if (nextFps > effectiveFps) {
-                    effectiveFps = nextFps
-                    stableWindows = 0
-                    logWhipLifecycle(
-                        event = "adaptive_fps_raised",
-                        detail = "fps ${metrics.targetFps} -> $effectiveFps proc=${metrics.averageFrameProcessingMs.format1()}ms out=${metrics.outputFps.format1()} in=${metrics.inputFps.format1()}"
-                    )
-                    applyFrameRate(effectiveFps, "saturation recovered")
-                }
-            }
-        } else {
-            stableWindows = 0
-            saturationState = "ok"
-        }
-
-        if (effectiveFps == desiredFps && !saturated) {
-            saturationState = "ok"
-        }
+        applyFrameRate(nextFps, decision.reason ?: "adaptive frame-rate change")
     }
 
     private fun maybeRecoverStreaming(metrics: WebRTCStreamMetrics) {
@@ -383,7 +389,11 @@ class WebRTCStreamer(
             Log.w(TAG, "Recovering WebRTC pipeline: $reason")
             logWhipLifecycle(
                 event = "whip_source_degraded",
-                detail = "$reason proc=${metrics.averageFrameProcessingMs}ms req=${metrics.requestedWidth}x${metrics.requestedHeight} src=${metrics.sourceWidth}x${metrics.sourceHeight}"
+                detail = buildString {
+                    append("$reason proc=${metrics.averageFrameProcessingMs}ms")
+                    append(" req=${metrics.requestedWidth}x${metrics.requestedHeight}")
+                    append(" src=${metrics.sourceWidth}x${metrics.sourceHeight}")
+                }
             )
             sharedFrameSource?.recoverCapture(reason)
             restartWhipPublisher(reason)
@@ -412,20 +422,25 @@ class WebRTCStreamer(
      * Get the local IP address of the device
      */
     fun getLocalIpAddress(): String? {
-        try {
+        return try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
-                val networkInterface = interfaces.nextElement()
-                val addresses = networkInterface.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val address = addresses.nextElement()
-                    if (!address.isLoopbackAddress && address is Inet4Address) {
-                        return address.hostAddress
-                    }
-                }
+                findIpv4Address(interfaces.nextElement())?.let { return it }
             }
-        } catch (e: Exception) {
+            null
+        } catch (e: SocketException) {
             Log.e(TAG, "Error getting local IP: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun findIpv4Address(networkInterface: NetworkInterface): String? {
+        val addresses = networkInterface.inetAddresses
+        while (addresses.hasMoreElements()) {
+            val address = addresses.nextElement()
+            if (!address.isLoopbackAddress && address is Inet4Address) {
+                return address.hostAddress
+            }
         }
         return null
     }
@@ -438,7 +453,7 @@ class WebRTCStreamer(
         val sharedSource = sharedFrameSource
         val frameCount = sharedSource?.totalOutputFrames() ?: 0L
         val observers = sharedSource?.observerCount() ?: 0
-        val source = if (useMockVideo) "mock" else "dji"
+        val source = currentSourceMode.prefValue
         val suffix = buildString {
             append("event=")
             append(event)
@@ -458,32 +473,18 @@ class WebRTCStreamer(
         Log.i(TAG, "WHIP lifecycle $suffix")
     }
 
-    private fun nextLowerAdaptiveFps(current: Int): Int {
-        val currentIndex = ADAPTIVE_FPS_STEPS.indexOfFirst { it == current }
-        if (currentIndex >= 0 && currentIndex < ADAPTIVE_FPS_STEPS.lastIndex) {
-            return ADAPTIVE_FPS_STEPS[currentIndex + 1]
-        }
-        return ADAPTIVE_FPS_STEPS.firstOrNull { it < current } ?: current
-    }
-
-    private fun nextHigherAdaptiveFps(current: Int, desired: Int): Int {
-        val currentIndex = ADAPTIVE_FPS_STEPS.indexOfFirst { it == current }
-        if (currentIndex > 0) {
-            return ADAPTIVE_FPS_STEPS[currentIndex - 1].coerceAtMost(desired)
-        }
-        return desired
-    }
-
     private fun optionsForSource(
         baseOptions: WebRTCMediaOptions,
-        mockEnabled: Boolean = useMockVideo
+        sourceMode: VideoSourceMode = currentSourceMode
     ): WebRTCMediaOptions {
-        if (!mockEnabled) return baseOptions
+        if (sourceMode == VideoSourceMode.DJI) return baseOptions
 
-        // Mock MP4 playback cannot follow the "native" capture path because the
-        // bundled asset needs an explicit output size. Keep the user's selected
-        // DJI preset intact, but force the mock source onto a stable 1080p target.
-        return WebRTCMediaOptions.fullHD().copy(
+        val fallbackOptions = if (baseOptions.usesSourceResolution) {
+            if (sourceMode == VideoSourceMode.PHONE) WebRTCMediaOptions.hd() else WebRTCMediaOptions.fullHD()
+        } else {
+            baseOptions
+        }
+        return fallbackOptions.copy(
             fps = baseOptions.fps.coerceIn(1, 60),
             videoCodec = baseOptions.videoCodec
         )
@@ -497,5 +498,4 @@ class WebRTCStreamer(
         }
     }
 
-    private fun Double.format1(): String = String.format(java.util.Locale.US, "%.1f", this)
 }
