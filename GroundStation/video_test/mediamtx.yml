@@ -20,7 +20,8 @@ rtsp: yes
 rtspAddress: :8554
 
 hls: no
-rtmp: no
+rtmp: yes
+rtmpAddress: :1935
 srt: no
 
 paths:

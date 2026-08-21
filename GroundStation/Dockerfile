@@ -3,6 +3,7 @@ FROM ros:humble
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/Python:${PYTHONPATH}
 
 # Create the dds logs directory with proper permissions
 RUN mkdir -p /.dds/log && chmod 777 /.dds/log
