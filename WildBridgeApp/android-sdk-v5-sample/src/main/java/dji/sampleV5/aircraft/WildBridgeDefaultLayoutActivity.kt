@@ -220,7 +220,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         private const val REQUEST_EDGE_MODEL_FILE = 3
         private const val REQUEST_EDGE_LABELS_FILE = 4
         private const val PHONE_EDGE_FRAME_INTERVAL_NS = 200_000_000L
-        private val EDGE_CONFIDENCE_OPTIONS = floatArrayOf(0.10f, 0.15f, 0.20f, 0.25f, 0.30f, 0.40f, 0.50f, 0.60f, 0.70f)
+        private val EDGE_CONFIDENCE_OPTIONS = floatArrayOf(
+            0.10f,
+            0.15f,
+            0.20f,
+            0.25f,
+            0.30f,
+            0.40f,
+            0.50f,
+            0.60f,
+            0.70f
+        )
         private const val DEFAULT_DRONE_NAME = "drone_1"
         private val WEBRTC_FPS_OPTIONS = intArrayOf(5, 10, 15, 20, 25, 30)
     }
@@ -380,14 +390,20 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private val phoneInferenceBusy = AtomicBoolean(false)
     @Volatile private var lastPhoneEdgeFrameNs = 0L
     private var pendingEdgePickerRequestCode: Int? = null
-    private val edgeFilePickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    private val edgeFilePickerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val requestCode = pendingEdgePickerRequestCode
         pendingEdgePickerRequestCode = null
         if (requestCode == null || result.resultCode != RESULT_OK) return@registerForActivityResult
         val uri = result.data?.data ?: return@registerForActivityResult
         when (requestCode) {
             REQUEST_EDGE_MODEL_FILE -> storeEdgeModelSelection(uri)
-            REQUEST_EDGE_LABELS_FILE -> storeEdgeFileSelection(uri, PREF_EDGE_LABELS_URI, PREF_EDGE_LABELS_NAME, "Edge labels")
+            REQUEST_EDGE_LABELS_FILE -> storeEdgeFileSelection(
+                uri,
+                PREF_EDGE_LABELS_URI,
+                PREF_EDGE_LABELS_NAME,
+                "Edge labels"
+            )
         }
     }
 
@@ -464,9 +480,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private val productTypeKey: DJIKey<ProductType> = ProductKey.KeyProductType.create()
     private val flightControllerConnectionKey: DJIKey<Boolean> = FlightControllerKey.KeyConnection.create()
-    private val cameraModeKey: DJIKey<CameraMode> = KeyTools.createKey(CameraKey.KeyCameraMode, ComponentIndexType.LEFT_OR_MAIN)
-    private val cameraStorageLocationKey: DJIKey<CameraStorageLocation> = KeyTools.createKey(CameraKey.KeyCameraStorageLocation, ComponentIndexType.LEFT_OR_MAIN)
-    private val cameraStorageInfosKey: DJIKey<CameraStorageInfos> = KeyTools.createKey(CameraKey.KeyCameraStorageInfos, ComponentIndexType.LEFT_OR_MAIN)
+    private val cameraModeKey: DJIKey<CameraMode> = KeyTools.createKey(
+        CameraKey.KeyCameraMode,
+        ComponentIndexType.LEFT_OR_MAIN
+    )
+    private val cameraStorageLocationKey: DJIKey<CameraStorageLocation> = KeyTools.createKey(
+        CameraKey.KeyCameraStorageLocation,
+        ComponentIndexType.LEFT_OR_MAIN
+    )
+    private val cameraStorageInfosKey: DJIKey<CameraStorageInfos> = KeyTools.createKey(
+        CameraKey.KeyCameraStorageInfos,
+        ComponentIndexType.LEFT_OR_MAIN
+    )
     private var thermalArmed = false
 
     private data class DroneStorageStatus(
@@ -698,9 +723,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun setStreamingMode(mode: StreamingMode) {
         sharedPreferences.edit().putString(PREF_STREAMING_MODE, mode.prefValue).apply()
-        if (mode != StreamingMode.WEBRTC && isDetectionsEnabled() && getDetectionSource() == DetectionSource.YOLO_ON_PHONE) {
+        if (mode != StreamingMode.WEBRTC && isDetectionsEnabled()
+            && getDetectionSource() == DetectionSource.YOLO_ON_PHONE) {
             setDetectionsEnabled(false)
-            Toast.makeText(this, "YOLO edge detection deactivated (only supported in WebRTC mode)", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "YOLO edge detection deactivated (only supported in WebRTC mode)",
+                Toast.LENGTH_LONG
+            ).show()
         }
         rebuildTelemetryCache()
         updateStreamingFooter()
@@ -767,7 +797,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         if (!sharedPreferences.contains(PREF_VIDEO_SOURCE)) {
             val legacyMock = sharedPreferences.getBoolean(PREF_MOCK_VIDEO_ENABLED, false)
             sharedPreferences.edit()
-                .putString(PREF_VIDEO_SOURCE, if (legacyMock) VideoSourceMode.MOCK.prefValue else VideoSourceMode.DJI.prefValue)
+                .putString(
+                    PREF_VIDEO_SOURCE,
+                    if (legacyMock) VideoSourceMode.MOCK.prefValue else VideoSourceMode.DJI.prefValue
+                )
                 .apply()
         }
         updateMockVideoVisibility()
@@ -810,10 +843,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         if (requestCode == REQUEST_PHONE_CAMERA_SOURCE) {
             val pendingMode = pendingVideoSourceAfterPermission
             pendingVideoSourceAfterPermission = null
-            if (pendingMode == VideoSourceMode.PHONE && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            if (pendingMode == VideoSourceMode.PHONE
+                && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                 setVideoSourceMode(VideoSourceMode.PHONE)
             } else {
-                Toast.makeText(this, "Phone camera source unavailable without camera permission", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Phone camera source unavailable without camera permission",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -941,7 +979,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun trySelectSiblingEdgeLabels(modelUri: Uri, modelName: String) {
         val labelsUri = findSiblingLabelsUri(modelUri, modelName) ?: return
-        val labelsName = labelsUri.lastPathSegment?.substringAfterLast('/') ?: labelsUri.toString().substringAfterLast('/')
+        val labelsName =
+            labelsUri.lastPathSegment?.substringAfterLast('/') ?: labelsUri.toString().substringAfterLast('/')
         if (readEdgeLabels(labelsUri).isEmpty()) return
         runCatching {
             contentResolver.takePersistableUriPermission(labelsUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -976,7 +1015,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 runCatching {
                     contentResolver.query(
                         childrenUri,
-                        arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                        arrayOf(
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                        ),
                         null,
                         null,
                         null
@@ -986,7 +1028,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                         while (cursor.moveToNext()) {
                             val name = cursor.getString(nameIndex) ?: continue
                             if (candidateNameSet.contains(name.lowercase(java.util.Locale.US))) {
-                                return@use DocumentsContract.buildDocumentUri(modelUri.authority, cursor.getString(idIndex))
+                                return@use DocumentsContract.buildDocumentUri(
+                                    modelUri.authority,
+                                    cursor.getString(idIndex)
+                                )
                             }
                         }
                         null
@@ -1020,7 +1065,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun getEdgeLabels(): List<String> {
-        val labelsUri = sharedPreferences.getString(PREF_EDGE_LABELS_URI, null)?.let(Uri::parse) ?: return listOf("person")
+        val labelsUri = sharedPreferences.getString(
+            PREF_EDGE_LABELS_URI,
+            null
+        )?.let(Uri::parse) ?: return listOf("person")
         return readEdgeLabels(labelsUri).ifEmpty { listOf("person") }
     }
 
@@ -1186,7 +1234,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             val idx = thermalCameraIndex()
             val lens = CameraLensType.CAMERA_LENS_THERMAL
             val globalMax = CameraKey.KeyThermalGlobalMaxTemperature.createCamera(idx, lens).get()
-            val regionMax = CameraKey.KeyThermalRegionMetersureTemperature.createCamera(idx, lens).get()?.maxAreaTemperature
+            val regionMax = CameraKey.KeyThermalRegionMetersureTemperature.createCamera(
+                idx,
+                lens
+            ).get()?.maxAreaTemperature
             val maxTemp = globalMax ?: regionMax
             Log.i(TAG_THERMAL, "[capture read] idx=$idx globalMax=$globalMax regionMax=$regionMax -> $maxTemp")
             maxTemp
@@ -1264,7 +1315,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun setupPhoneVideoPreview() {
-        findViewById<TextureView>(R.id.phone_camera_preview)?.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+        findViewById<TextureView>(R.id.phone_camera_preview)?.surfaceTextureListener =
+            object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                 updatePhonePreviewVisibility()
             }
@@ -1285,7 +1337,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         val preview = findViewById<TextureView>(R.id.phone_camera_preview)
         val shouldShow = getVideoSourceMode() == VideoSourceMode.PHONE
         preview?.visibility = if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
-        findViewById<TextView>(R.id.phone_camera_preview_label)?.visibility = if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
+        findViewById<TextView>(R.id.phone_camera_preview_label)?.visibility =
+            if (shouldShow) android.view.View.VISIBLE else android.view.View.GONE
         if (shouldShow && preview?.isAvailable == true) {
             detectionOverlay?.setVideoScaleMode(DetectionOverlayView.VideoScaleMode.CENTER_CROP)
             startPhoneCameraPreview(preview.surfaceTexture ?: return)
@@ -1337,11 +1390,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 val characteristics = cameraManager.getCameraCharacteristics(cameraId)
                 val previewSize = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                     ?.getOutputSizes(SurfaceTexture::class.java)
-                    ?.sortedWith(compareBy({ kotlin.math.abs(it.width - 1920) + kotlin.math.abs(it.height - 1080) }, { it.width * it.height }))
+                    ?.sortedWith(compareBy(
+                        { kotlin.math.abs(it.width - 1920) + kotlin.math.abs(it.height - 1080) },
+                        { it.width * it.height }
+                    ))
                     ?.firstOrNull()
                 val phoneFrameSize = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                     ?.getOutputSizes(ImageFormat.YUV_420_888)
-                    ?.sortedWith(compareBy({ kotlin.math.abs(it.width - 1280) + kotlin.math.abs(it.height - 720) }, { it.width * it.height }))
+                    ?.sortedWith(compareBy(
+                        { kotlin.math.abs(it.width - 1280) + kotlin.math.abs(it.height - 720) },
+                        { it.width * it.height }
+                    ))
                     ?.firstOrNull()
 
                 val width = previewSize?.width ?: 1920
@@ -1471,7 +1530,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun setupMockVideoPreview() {
-        findViewById<TextureView>(R.id.mock_video_preview)?.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+        findViewById<TextureView>(R.id.mock_video_preview)?.surfaceTextureListener =
+            object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                 updateMockPreviewVisibility()
             }
@@ -1857,7 +1917,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun restartActiveStreaming() {
-        val lastIp = lastClientIp ?: lastWhipUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: NetworkUtils.getDeviceIpAddress() ?: "127.0.0.1"
+        val lastIp = lastClientIp ?: lastWhipUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: NetworkUtils
+            .getDeviceIpAddress() ?: "127.0.0.1"
         startActiveStreaming(lastIp)
     }
 
@@ -1877,7 +1938,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private fun isDetectionsEnabled(): Boolean {
         return sharedPreferences.getBoolean(
             PREF_DETECTIONS_ENABLED,
-            sharedPreferences.getString(PREF_DETECTION_SOURCE, null) != null && getDetectionSource() != DetectionSource.NONE
+            sharedPreferences.getString(
+                PREF_DETECTION_SOURCE,
+                null
+            ) != null && getDetectionSource() != DetectionSource.NONE
         )
     }
 
@@ -1921,11 +1985,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
         sharedPreferences.edit()
             .putString(PREF_DETECTION_SOURCE, selectedSource.prefValue)
-            .putBoolean(PREF_EDGE_DETECTION_ENABLED, isDetectionsEnabled() && selectedSource == DetectionSource.YOLO_ON_PHONE)
+            .putBoolean(
+                PREF_EDGE_DETECTION_ENABLED,
+                isDetectionsEnabled() && selectedSource == DetectionSource.YOLO_ON_PHONE
+            )
             .apply()
 
-        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = isDetectionsEnabled() && selectedSource == DetectionSource.DJI_ONBOARD
-        findViewById<Switch>(R.id.sw_edge_detection)?.isChecked = isDetectionsEnabled() && selectedSource == DetectionSource.YOLO_ON_PHONE
+        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = isDetectionsEnabled()
+            && selectedSource == DetectionSource.DJI_ONBOARD
+        findViewById<Switch>(R.id.sw_edge_detection)?.isChecked = isDetectionsEnabled()
+            && selectedSource == DetectionSource.YOLO_ON_PHONE
 
         when (activeDetectionSource()) {
             DetectionSource.NONE -> updateEdgeMetricsView(EdgeDetectionMetrics(status = "off"))
@@ -1952,8 +2021,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             .putBoolean(PREF_EDGE_DETECTION_ENABLED, enabled && getDetectionSource() == DetectionSource.YOLO_ON_PHONE)
             .apply()
 
-        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = enabled && getDetectionSource() == DetectionSource.DJI_ONBOARD
-        findViewById<Switch>(R.id.sw_edge_detection)?.isChecked = enabled && getDetectionSource() == DetectionSource.YOLO_ON_PHONE
+        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = enabled
+            && getDetectionSource() == DetectionSource.DJI_ONBOARD
+        findViewById<Switch>(R.id.sw_edge_detection)?.isChecked = enabled
+            && getDetectionSource() == DetectionSource.YOLO_ON_PHONE
 
         when (activeDetectionSource()) {
             DetectionSource.NONE -> {
@@ -2394,7 +2465,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                 val count = WildBridgeFlightLogger.syncDjiFlightLogs(djiPath)
                 if (count > 0) {
                     mainHandler.post {
-                        Toast.makeText(this, "Synced $count DJI flight log(s) to WildBridge folder", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this,
+                            "Synced $count DJI flight log(s) to WildBridge folder",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             }.onFailure { error ->
@@ -2957,7 +3032,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         val labels = EDGE_CONFIDENCE_OPTIONS.map { "${(it * 100).toInt()}%" }.toTypedArray()
         val checkedIndex = EDGE_CONFIDENCE_OPTIONS.indexOfFirst { kotlin.math.abs(it - currentThreshold) < 0.001f }
             .takeIf { it >= 0 }
-            ?: EDGE_CONFIDENCE_OPTIONS.indexOfFirst { kotlin.math.abs(it - DEFAULT_EDGE_CONFIDENCE_THRESHOLD) < 0.001f }.coerceAtLeast(0)
+            ?: EDGE_CONFIDENCE_OPTIONS.indexOfFirst { kotlin.math.abs(it - DEFAULT_EDGE_CONFIDENCE_THRESHOLD) < 0.001f }
+                .coerceAtLeast(0)
 
         AlertDialog.Builder(this)
             .setTitle("Edge confidence threshold")
@@ -2971,7 +3047,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
                     updateEdgeMetricsView(lastEdgeMetrics.copy(confidenceThreshold = selectedThreshold))
                 }
                 invalidateOptionsMenu()
-                Toast.makeText(this, "Edge confidence: ${(selectedThreshold * 100).toInt()}%", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Edge confidence: ${(selectedThreshold * 100).toInt()}%",
+                    Toast.LENGTH_SHORT
+                ).show()
                 Log.i(TAG, "Edge confidence threshold set to $selectedThreshold")
                 dialog.dismiss()
             }
@@ -3009,7 +3089,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
             return
         }
 
-        KeyManager.getInstance().setValue(cameraModeKey, CameraMode.VIDEO_NORMAL, object : CommonCallbacks.CompletionCallback {
+        KeyManager.getInstance()
+            .setValue(cameraModeKey, CameraMode.VIDEO_NORMAL, object : CommonCallbacks.CompletionCallback {
             override fun onSuccess() {
                 Log.i(TAG, "Default camera mode set to video")
             }
@@ -3076,7 +3157,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     private fun formatDroneStorage(location: CameraStorageLocation, label: String) {
         val key = KeyTools.createKey(CameraKey.KeyFormatStorage, ComponentIndexType.LEFT_OR_MAIN)
-        KeyManager.getInstance().performAction(key, location, object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
+        KeyManager.getInstance()
+            .performAction(key, location, object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
             override fun onSuccess(result: EmptyMsg?) {
                 mainHandler.post {
                     Toast.makeText(this@WildBridgeDefaultLayoutActivity, "$label formatted", Toast.LENGTH_LONG).show()
@@ -3120,8 +3202,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     private fun startLocationUpdates() {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED) {
             // Request permissions if not granted
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1)
             return
@@ -3528,7 +3616,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         telemetryCoordinator.phoneLongitude = phoneLocation?.longitude ?: 0.0
         telemetryCoordinator.phoneHeading = phoneHeading
         telemetryCoordinator.phonePressure = phonePressure
-        telemetryCoordinator.phoneBattery = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        telemetryCoordinator.phoneBattery =
+            batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
         telemetryCoordinator.wifiRssi = currentWifiRssi()
 
         // WebRTC Metrics
