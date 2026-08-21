@@ -10,7 +10,17 @@ import kotlin.concurrent.thread
 
 class TelemetryServer(
     private val port: Int,
-    private val telemetryProvider: () -> String
+    private val telemetryProvider: () -> String,
+    /**
+     * Interval between telemetry pushes to connected clients, in milliseconds.
+     *
+     * Defaults to [DEFAULT_SEND_INTERVAL_MS] (~2Hz), the rate flown on the XPRIZE
+     * airframes. The cache is rebuilt by SDK listeners rather than by this loop, so a
+     * slower interval costs freshness rather than data. Raise it for ground stations
+     * that consume high-rate telemetry over this socket; note that per-frame metadata
+     * on the WebRTC path comes from TelemetryProvider and is unaffected by this value.
+     */
+    private val sendIntervalMs: Long = DEFAULT_SEND_INTERVAL_MS
 ) {
     private var serverSocket: ServerSocket? = null
     private val executor = Executors.newCachedThreadPool()
@@ -23,6 +33,11 @@ class TelemetryServer(
     var onFirstClientConnected: ((clientIp: String) -> Unit)? = null
 
     fun hasClients(): Boolean = clients.isNotEmpty()
+
+    companion object {
+        /** ~2Hz. */
+        const val DEFAULT_SEND_INTERVAL_MS = 500L
+    }
 
     fun start() {
         if (isRunning) return
@@ -65,7 +80,7 @@ class TelemetryServer(
             runCatching {
                 val telemetryJson = telemetryProvider()
                 removeDisconnectedClients(sendTelemetryToClients(telemetryJson))
-                Thread.sleep(500) // Send data at ~2Hz (cache rebuilt by SDK listeners)
+                Thread.sleep(sendIntervalMs)
             }.onFailure { error ->
                 handleTelemetryLoopError(error)
             }
