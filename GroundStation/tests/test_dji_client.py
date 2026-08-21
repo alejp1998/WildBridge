@@ -106,3 +106,70 @@ def test_stop_telemetry_closes_socket_and_joins_thread():
     assert client._running is False
     assert client._telemetry_socket.closed is True
     assert client._telemetry_thread.join_timeout == 2
+
+
+def test_every_command_path_goes_through_the_post_hook():
+    """Regression guard for the Safety Computer token bypass.
+
+    requestCapture, listMedia and downloadByName used to call requests.post directly, so
+    DJIInterfaceSafety's header injection never reached them and ControlAuthority rejected
+    them as Pilot traffic. They must all route through _post.
+    """
+    import inspect
+
+    from wildbridge_groundstation import dji_client
+
+    for name in ("requestSend", "requestCapture", "listMedia", "downloadByName"):
+        source = inspect.getsource(getattr(dji_client.DJIInterface, name))
+        assert "requests.post" not in source, f"{name} bypasses the _post hook"
+        assert "self._post(" in source, f"{name} does not call _post"
+
+
+def test_post_hook_is_the_only_direct_poster():
+    import inspect
+
+    from wildbridge_groundstation import dji_client
+
+    posters = [
+        name
+        for name, member in inspect.getmembers(dji_client.DJIInterface, inspect.isfunction)
+        if "requests.post" in inspect.getsource(member)
+    ]
+    assert posters == ["_post"], f"unexpected direct posters: {posters}"
+
+
+def test_safety_client_tokens_capture_and_media_paths(monkeypatch):
+    """The Safety Computer must authenticate capture and media commands, not just requestSend.
+
+    These three used to post without the X-Safety-Token header, so ControlAuthority classified
+    them as Pilot traffic and rejected them once Safety held authority.
+    """
+    from djiInterfaceSafety import SAFETY_TOKEN_HEADER, DJIInterfaceSafety
+    from wildbridge_groundstation import dji_client
+
+    seen = []
+
+    class Response:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        text = "{}"
+        content = b"{}"
+
+        def json(self):
+            return {}
+
+    def fake_post(url, data=None, timeout=None, headers=None, **kwargs):
+        seen.append((url, dict(headers or {})))
+        return Response()
+
+    monkeypatch.setattr(dji_client.requests, "post", fake_post)
+
+    client = DJIInterfaceSafety(IP_RC="10.0.0.1", safety_token="98")
+    client.requestSend("/send/takeoff", "")
+    client.requestCapture()
+    client.listMedia()
+    client.downloadByName("DJI_0001.JPG", save_path="/dev/null")
+
+    assert len(seen) == 4
+    for url, headers in seen:
+        assert headers.get(SAFETY_TOKEN_HEADER.rstrip(":")) == "98", f"no token on {url}"

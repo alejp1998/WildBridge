@@ -18,10 +18,7 @@ License: MIT
 For more information, visit: https://github.com/WildDrone/WildBridge
 """
 
-import requests
-from datetime import datetime
-
-from wildbridge_groundstation.dji_client import DJIInterface, EP_CAPTURE_THERMAL_IMAGE
+from wildbridge_groundstation.dji_client import DJIInterface
 
 # Must match SAFETY_TOKEN hardcoded in the Android app (WildBridgeDefaultLayoutActivity).
 SAFETY_TOKEN = "98"
@@ -57,53 +54,17 @@ class DJIInterfaceSafety(DJIInterface):
 
     # --- Overrides that inject the token (parent versions send no headers) ---
 
-    def requestSend(self, endPoint, data, verbose=False):
-        """Send a POST request to the drone, authenticated as the Safety Computer."""
-        if self.IP_RC == "":
-            print(f"No IP_RC provided, returning empty string for request at {endPoint}")
-            return ""
-        try:
-            response = requests.post(
-                self.baseCommandUrl + endPoint, str(data),
-                headers=self._authHeaders(), timeout=5)
-            if verbose:
-                print("EP : " + endPoint + "\t" + str(response.content, encoding="utf-8"))
-            return response.content.decode('utf-8')
-        except requests.exceptions.RequestException as e:
-            print(f"Request error at {endPoint}: {e}")
-            return ""
+    def _post(self, endPoint, data="", timeout=5, **kwargs):
+        """Authenticate every outbound command as the Safety Computer.
 
-    def requestCaptureThermalImage(self, save_path=None):
-        """Capture a thermal image, authenticated as the Safety Computer.
-
-        Mirrors DJIInterface.requestCaptureThermalImage but adds the X-Safety-Token header.
+        Overriding the base client's single POST chokepoint covers the whole command
+        surface at once — including requestCapture, listMedia and downloadByName, which
+        issue their own requests rather than going through requestSend. Before this,
+        those three sent no token and were classified as Pilot traffic, so they were
+        rejected by ControlAuthority as soon as the Safety Computer held authority.
         """
-        if self.IP_RC == "":
-            print("No IP_RC provided, cannot capture thermal image")
-            return False
-
-        if save_path is None:
-            save_path = f"thermal_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-
-        try:
-            response = requests.post(
-                self.baseCommandUrl + EP_CAPTURE_THERMAL_IMAGE, data="",
-                headers=self._authHeaders(), timeout=90)
-
-            content_type = response.headers.get("Content-Type", "")
-            if response.status_code == 200 and content_type.startswith("image/"):
-                with open(save_path, "wb") as f:
-                    f.write(response.content)
-                print(f"Thermal image saved to: {save_path}")
-                return True
-
-            print(f"Thermal capture failed: HTTP {response.status_code}, "
-                  f"Content-Type={content_type!r}, body={response.text[:200]!r}")
-            return False
-
-        except requests.exceptions.RequestException as e:
-            print(f"Error capturing thermal image: {e}")
-            return False
+        headers = {**self._authHeaders(), **kwargs.pop("headers", {})}
+        return super()._post(endPoint, data, timeout=timeout, headers=headers, **kwargs)
 
     # --- Pilot / Safety authority ---
 

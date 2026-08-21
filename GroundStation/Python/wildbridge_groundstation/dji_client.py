@@ -331,15 +331,25 @@ class DJIInterface:
     def isManualOverrideActive(self):
         return self.getTelemetry().get("isManualOverrideActive", False)
 
+    def _post(self, endPoint, data="", timeout=5, **kwargs):
+        """Single HTTP POST chokepoint for every command this client sends.
+
+        All outbound commands go through here so a subclass can authenticate the whole
+        surface by overriding one method. DJIInterfaceSafety does exactly that to attach
+        the X-Safety-Token header; methods that call requests.post directly would bypass
+        it and be rejected as Pilot traffic once the Safety Computer holds authority.
+        """
+        return requests.post(
+            build_command_url(self.baseCommandUrl, endPoint), data, timeout=timeout, **kwargs
+        )
+
     def requestSend(self, endPoint, data, verbose=False):
         """Send a POST request to the drone."""
         if self.IP_RC == "":
             print(f"No IP_RC provided, returning empty string for request at {endPoint}")
             return ""
         try:
-            response = requests.post(
-                build_command_url(self.baseCommandUrl, endPoint), str(data), timeout=5
-            )
+            response = self._post(endPoint, str(data))
             if verbose:
                 print("EP : " + endPoint + "\t" + str(response.content, encoding="utf-8"))
             return response.content.decode("utf-8")
@@ -528,8 +538,7 @@ class DJIInterface:
         try:
             # Generous timeout: the very first capture after connect can be cold (the bridge builds
             # the full SD-card list once), so allow well past the server's internal resolution cap.
-            response = requests.post(
-                self.baseCommandUrl + EP_CAPTURE_THERMAL_IMAGE, data="", timeout=60)
+            response = self._post(EP_CAPTURE_THERMAL_IMAGE, timeout=60)
         except requests.exceptions.RequestException as e:
             print(f"Error capturing image: {e}")
             return False
@@ -564,8 +573,7 @@ class DJIInterface:
             print("No IP_RC provided, cannot list media")
             return False
         try:
-            response = requests.post(
-                self.baseCommandUrl + EP_LIST_MEDIA, data="", timeout=30)
+            response = self._post(EP_LIST_MEDIA, timeout=30)
         except requests.exceptions.RequestException as e:
             print(f"Error listing media: {e}")
             return False
@@ -600,9 +608,7 @@ class DJIInterface:
             os.makedirs(out_dir, exist_ok=True)
             save_path = os.path.join(out_dir, file_name)
         try:
-            response = requests.post(
-                self.baseCommandUrl + EP_DOWNLOAD_MEDIA_BY_NAME,
-                data=file_name, timeout=120)
+            response = self._post(EP_DOWNLOAD_MEDIA_BY_NAME, data=file_name, timeout=120)
         except requests.exceptions.RequestException as e:
             print(f"{file_name}: download error: {e}")
             return None
