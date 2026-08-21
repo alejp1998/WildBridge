@@ -40,6 +40,7 @@ android {
         return project.findProperty(key)?.toString()?.trim() ?: ""
     }
     def aircraftApiKey = resolveSecret("AIRCRAFT_API_KEY")
+    def demoBiomassAircraftApiKey = resolveSecret("AIRCRAFT_API_KEY_DEMO_BIOMASS") ?: aircraftApiKey
     def gmapApiKey = resolveSecret("GMAP_API_KEY")
     def maplibreToken = resolveSecret("MAPLIBRE_TOKEN")
 
@@ -59,9 +60,24 @@ android {
         manifestPlaceholders["API_KEY"] = aircraftApiKey
         manifestPlaceholders["GMAP_API_KEY"] = gmapApiKey
         manifestPlaceholders["MAPLIBRE_TOKEN"] = maplibreToken
+        manifestPlaceholders["APP_ICON"] = "@mipmap/ic_main"
         ndk {
             //noinspection ChromeOsAbiSupport
             abiFilters 'arm64-v8a'
+        }
+    }
+
+    flavorDimensions "appVariant"
+    productFlavors {
+        current {
+            dimension "appVariant"
+        }
+        demoBiomass {
+            dimension "appVariant"
+            applicationIdSuffix ".demo_biomass"
+            versionNameSuffix "-demo_biomass"
+            manifestPlaceholders["API_KEY"] = demoBiomassAircraftApiKey
+            manifestPlaceholders["APP_ICON"] = "@mipmap/ic_main_demo_biomass"
         }
     }
 
@@ -108,7 +124,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "1.8"
-        freeCompilerArgs += ["-Xjvm-default=all"]
+        freeCompilerArgs += ["-jvm-default=no-compatibility"]
     }
 
     // Disable lint
@@ -188,4 +204,10 @@ dependencies {
 
     // WebRTC for drone video streaming (Stream's maintained fork)
     implementation 'io.getstream:stream-webrtc-android:1.1.1'
+
+    // On-device edge inference for exported YOLO/TFLite models
+    implementation 'org.tensorflow:tensorflow-lite:2.16.1'
+
+    testImplementation deps.junit4
+    testImplementation deps.json
 }
