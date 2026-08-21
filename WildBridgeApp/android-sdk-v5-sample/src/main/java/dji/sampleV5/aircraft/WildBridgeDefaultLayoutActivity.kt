@@ -171,20 +171,30 @@ import android.net.nsd.NsdServiceInfo
  * - WHIP publishing for WebRTC video streaming through MediaMTX
  * - mDNS/Bonjour service advertising for automatic discovery
  */
-class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
+/** Video delivery mode the bridge is currently publishing with. */
+enum class StreamingMode(val menuLabel: String, val prefValue: String) {
+    WEBRTC("WebRTC (WHIP)", "webrtc"),
+    RTMP("RTMP Push", "rtmp"),
+    RTSP("RTSP Server Pull", "rtsp"),
+    AGORA("Agora.io WebRTC", "agora"),
+    GB28181("GB28181 Surveillance", "gb28181");
+
+    companion object {
+        fun fromPref(value: String?): StreamingMode {
+            return entries.firstOrNull { it.prefValue == value } ?: WEBRTC
+        }
+    }
+}
+
+class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeCommandHost {
 
     companion object {
         private const val TAG = "WildBridgeDefaultLayout"
         private const val TAG_THERMAL = "WildBridgeThermal"
-        private const val HTTP_PORT = 8080
-        private const val TELEMETRY_PORT = 8081
-        private const val AUTONOMOUS_COMMAND_REJECTED =
-            "REJECTED: Manual override active. Deactivate manual override first."
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
         private const val PREF_MEDIAMTX_SERVER = "mediamtx_server"
         private const val SAFETY_TOKEN = "98"
-        private const val SAFETY_TOKEN_HEADER = "X-Safety-Token:"
         private const val PREF_WEBRTC_FPS = "webrtc_fps"
         private const val PREF_WEBRTC_RESOLUTION = "webrtc_resolution"
         private const val PREF_MOCK_VIDEO_ENABLED = "mock_video_enabled"
@@ -269,33 +279,20 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
-    private enum class StreamingMode(val menuLabel: String, val prefValue: String) {
-        WEBRTC("WebRTC (WHIP)", "webrtc"),
-        RTMP("RTMP Push", "rtmp"),
-        RTSP("RTSP Server Pull", "rtsp"),
-        AGORA("Agora.io WebRTC", "agora"),
-        GB28181("GB28181 Surveillance", "gb28181");
-
-        companion object {
-            fun fromPref(value: String?): StreamingMode {
-                return entries.firstOrNull { it.prefValue == value } ?: WEBRTC
-            }
-        }
-    }
 
     private val liveStreamVM by lazy {
         ViewModelProvider(this)[LiveStreamVM::class.java]
     }
 
-    private val mainHandler = Handler(Looper.getMainLooper())
+    override val mainHandler = Handler(Looper.getMainLooper())
     private val telemetryCoordinator = TelemetryCoordinator()
     private lateinit var discoveryManager: WildBridgeDiscoveryManager
     
     // ViewModels for drone control
     private lateinit var basicAircraftControlVM: BasicAircraftControlVM
     private lateinit var virtualStickVM: VirtualStickVM
-    private lateinit var mediaVM: MediaVM
-    private lateinit var payloadWidgetVM: PayloadWidgetVM
+    override lateinit var mediaVM: MediaVM
+    override lateinit var payloadWidgetVM: PayloadWidgetVM
     
     // Servers
     private var httpServer: SimpleHttpServer? = null
@@ -308,7 +305,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     
     // Drone Configuration
     private lateinit var sharedPreferences: SharedPreferences
-    private var droneName: String = DEFAULT_DRONE_NAME
+    override var droneName: String = DEFAULT_DRONE_NAME
 
     // Phone Location
     private var locationManager: LocationManager? = null
@@ -374,11 +371,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     private var isHomePointSetLatch = false
 
     // ==================== AutoSensing (AI Detection) ====================
-    private var isAutoSensingActive = false
+    override var isAutoSensingActive = false
     private var isAutoSensingListenerRegistered = false
     private var edgeDetectionController: EdgeDetectionController? = null
     @Volatile private var lastEdgeMetrics = EdgeDetectionMetrics()
-    @Volatile private var currentDetectedTargets: List<DetectedTarget> = emptyList()
+    @Volatile override var currentDetectedTargets: List<DetectedTarget> = emptyList()
     private var detectionOverlay: DetectionOverlayView? = null
     private var pendingVideoSourceAfterPermission: VideoSourceMode? = null
     private var phoneCameraDevice: CameraDevice? = null
@@ -453,10 +450,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
     // var, not val: on the M400 these are rebound to LEFT_OR_MAIN once the main-camera video is up
     // (see rebindGimbalKeysForM400). Other aircraft keep the default no-index binding.
-    private var gimbalKey: DJIKey.ActionKey<GimbalAngleRotation, EmptyMsg> = GimbalKey.KeyRotateByAngle.create()
-    private val zoomKey: DJIKey<Double> = CameraKey.KeyCameraZoomRatios.create()
-    private val startRecording: DJIKey.ActionKey<EmptyMsg, EmptyMsg> = CameraKey.KeyStartRecord.create()
-    private val stopRecording: DJIKey.ActionKey<EmptyMsg, EmptyMsg> = CameraKey.KeyStopRecord.create()
+    override var gimbalKey: DJIKey.ActionKey<GimbalAngleRotation, EmptyMsg> = GimbalKey.KeyRotateByAngle.create()
+    override val zoomKey: DJIKey<Double> = CameraKey.KeyCameraZoomRatios.create()
+    override val startRecording: DJIKey.ActionKey<EmptyMsg, EmptyMsg> = CameraKey.KeyStartRecord.create()
+    override val stopRecording: DJIKey.ActionKey<EmptyMsg, EmptyMsg> = CameraKey.KeyStopRecord.create()
     private val isRecordingKey: DJIKey<Boolean> = CameraKey.KeyIsRecording.create()
 
     private val location3DKey: DJIKey<LocationCoordinate3D> = FlightControllerKey.KeyAircraftLocation3D.create()
@@ -476,7 +473,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
 
 
 
-    @Volatile private var lrfTargetLocation: LocationCoordinate3D? = null
+    @Volatile override var lrfTargetLocation: LocationCoordinate3D? = null
 
     private val productTypeKey: DJIKey<ProductType> = ProductKey.KeyProductType.create()
     private val flightControllerConnectionKey: DJIKey<Boolean> = FlightControllerKey.KeyConnection.create()
@@ -627,7 +624,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
-    private fun updateManualOverrideUI() {
+    override fun updateManualOverrideUI() {
         val isManual = DroneController.isManualOverrideActive
         // Blue = autonomous, Red = manual
         val color = if (isManual) 0xFFF44336.toInt() else 0xFF2196F3.toInt()
@@ -656,7 +653,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
      * A request is [ControlAuthority.Source.SAFETY] only when a safety token is configured AND
      * the request presents exactly that token; otherwise it is the Pilot Computer.
      */
-    private fun classifyCommandSource(presentedToken: String?): ControlAuthority.Source {
+    override fun classifyCommandSource(presentedToken: String?): ControlAuthority.Source {
         return if (presentedToken == SAFETY_TOKEN)
             ControlAuthority.Source.SAFETY
         else
@@ -721,7 +718,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         return StreamingMode.fromPref(sharedPreferences.getString(PREF_STREAMING_MODE, StreamingMode.WEBRTC.prefValue))
     }
 
-    private fun setStreamingMode(mode: StreamingMode) {
+    override fun setStreamingMode(mode: StreamingMode) {
         sharedPreferences.edit().putString(PREF_STREAMING_MODE, mode.prefValue).apply()
         if (mode != StreamingMode.WEBRTC && isDetectionsEnabled()
             && getDetectionSource() == DetectionSource.YOLO_ON_PHONE) {
@@ -1227,7 +1224,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         thermalArmed = false
     }
 
-    private fun readThermalMaxTempNow(): Double? {
+    override fun setAutoSensingSwitchChecked(checked: Boolean) {
+        findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = checked
+    }
+
+    override fun readThermalMaxTempNow(): Double? {
         // Make sure the pipeline is armed even if capture is the very first thermal action.
         armThermalMeasurement()
         return runCatching {
@@ -1916,7 +1917,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         }
     }
 
-    private fun restartActiveStreaming() {
+    override fun restartActiveStreaming() {
         val lastIp = lastClientIp ?: lastWhipUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: NetworkUtils
             .getDeviceIpAddress() ?: "127.0.0.1"
         startActiveStreaming(lastIp)
@@ -2129,7 +2130,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         mainHandler.post { detectionOverlay?.setTargets(targets) }
     }
 
-    private fun startAutoSensing() {
+    override fun startAutoSensing() {
         if (isAutoSensingActive) return
         runCatching {
             val manager = IntelligentFlightManager.getInstance()
@@ -2160,7 +2161,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun stopAutoSensing() {
+    override fun stopAutoSensing() {
         clearAutoSensingState()
         if (!isAutoSensingActive) {
             removeAutoSensingListener()
@@ -3262,7 +3263,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         // Start HTTP Command Server
         if (!NetworkUtils.isPortInUse(HTTP_PORT)) {
             runCatching {
-                httpServer = SimpleHttpServer(HTTP_PORT)
+                httpServer = SimpleHttpServer(HTTP_PORT, this)
                 httpServer?.start()
                 Log.i(TAG, "HTTP server started on $deviceIp:$HTTP_PORT")
             }.onFailure { error ->
@@ -3695,549 +3696,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity() {
         telemetryCoordinator.lowBatteryThreshold = lowBatteryThresholdProcessor.value
     }
 
-    private inner class WildBridgeHttpCommandHandler {
-        private val postRoutes: Map<String, (String) -> String> = mapOf(
-            "/send/takeoff" to {
-                DroneController.startTakeOff()
-                "Takeoff command sent."
-            },
-            "/send/land" to {
-                DroneController.startLanding()
-                "Landing command sent."
-            },
-            "/send/RTH" to {
-                DroneController.startReturnToHome()
-                "Return to home command sent."
-            },
-            "/send/stick" to { postData ->
-                if (DroneController.shouldRejectAutonomousCommand("stick")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    val command = WildBridgeHttpCommandParser.parseStick(postData)
-                    DroneController.setStick(command.leftX, command.leftY, command.rightX, command.rightY)
-                    "Received: leftX: ${command.leftX}, leftY: ${command.leftY}, " +
-                        "rightX: ${command.rightX}, rightY: ${command.rightY}"
-                }
-            },
-            "/send/gimbal/pitch" to { postData ->
-                val command = WildBridgeHttpCommandParser.parseGimbal(postData)
-                val rotation = GimbalAngleRotation(
-                    GimbalAngleRotationMode.ABSOLUTE_ANGLE,
-                    command.pitch,
-                    command.roll,
-                    command.yaw,
-                    false,
-                    true,
-                    true,
-                    0.1,
-                    false,
-                    0
-                )
-                gimbalKey.action(rotation)
-                "Received: roll: ${command.roll}, pitch: ${command.pitch}, yaw: ${command.yaw}"
-            },
-            "/send/gimbal/yaw" to { postData ->
-                val command = WildBridgeHttpCommandParser.parseGimbal(postData)
-                val rotation = GimbalAngleRotation(
-                    GimbalAngleRotationMode.ABSOLUTE_ANGLE,
-                    command.pitch,
-                    command.roll,
-                    command.yaw,
-                    true,
-                    true,
-                    false,
-                    0.1,
-                    false,
-                    0
-                )
-                gimbalKey.action(rotation)
-                "Received: roll: ${command.roll}, pitch: ${command.pitch}, yaw: ${command.yaw}"
-            },
-            "/send/gotoWaypointHoldHeading" to { postData ->
-                if (DroneController.shouldRejectAutonomousCommand("gotoWaypointHoldHeading")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    when (val command = WildBridgeHttpCommandParser.parseWaypointPid(postData)) {
-                        is WildBridgeHttpCommandParser.ParseResult.Invalid -> command.message
-                        is WildBridgeHttpCommandParser.ParseResult.Valid -> {
-                            val wp = command.value
-                            val seq = DroneController.flyToWaypointHoldHeading(
-                                wp.latitude, wp.longitude, wp.altitude, wp.yaw, wp.maxSpeed
-                            )
-                            "WAYPOINT_ACCEPTED seq=$seq Latitude=${wp.latitude}, " +
-                                "Longitude=${wp.longitude}, Altitude=${wp.altitude}, " +
-                                "Yaw=${wp.yaw}, MaxSpeed=${wp.maxSpeed}"
-                        }
-                    }
-                }
-            },
-            // Nose-follows-path. During travel the heading is forced to bearing(current -> waypoint);
-            // the yaw field is the FINAL arrival heading the drone rotates to in place once it
-            // arrives. Use /send/gotoWaypointHoldHeading to keep the nose on yaw while translating.
-            "/send/gotoWaypointNoseForward" to { postData ->
-                if (DroneController.shouldRejectAutonomousCommand("gotoWaypointNoseForward")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    when (val command = WildBridgeHttpCommandParser.parseWaypointPid(postData)) {
-                        is WildBridgeHttpCommandParser.ParseResult.Invalid -> command.message
-                        is WildBridgeHttpCommandParser.ParseResult.Valid -> {
-                            val wp = command.value
-                            val seq = DroneController.flyToWaypointNoseForward(
-                                wp.latitude, wp.longitude, wp.altitude, wp.yaw, wp.maxSpeed
-                            )
-                            "WAYPOINT_ACCEPTED seq=$seq Latitude=${wp.latitude}, " +
-                                "Longitude=${wp.longitude}, Altitude=${wp.altitude}, " +
-                                "FinalYaw=${wp.yaw}, MaxSpeed=${wp.maxSpeed}"
-                        }
-                    }
-                }
-            },
-            "/send/gimbal/rel_pitch" to { postData ->
-                val gimbal = WildBridgeHttpCommandParser.parseGimbal(postData)
-                gimbalKey.action(
-                    GimbalAngleRotation(
-                        GimbalAngleRotationMode.RELATIVE_ANGLE,
-                        gimbal.pitch, 0.0, 0.0, false, true, false, 0.1, false, 0
-                    )
-                )
-                "Received: relative pitch: ${gimbal.pitch}"
-            },
-            "/send/gimbal/rel_yaw" to { postData ->
-                val gimbal = WildBridgeHttpCommandParser.parseGimbal(postData)
-                gimbalKey.action(
-                    GimbalAngleRotation(
-                        GimbalAngleRotationMode.RELATIVE_ANGLE,
-                        0.0, 0.0, gimbal.yaw, true, true, false, 0.1, false, 0
-                    )
-                )
-                "Received: relative yaw: ${gimbal.yaw}"
-            },
-            // Fire the laser and return distance + geo-reference + state as JSON. Distance and the
-            // target point are populated only when the laser locks (state == NORMAL, which needs a
-            // GPS fix); other states return null alongside the raw state.
-            "/send/lrf/measure" to { _ ->
-                val info = Payload.takeFreshLrfReading()
-                val state = info?.laserMeasureState
-                val locked = state == LaserMeasureState.NORMAL
-                val distance = if (locked) info?.distance else null
-                val target = if (locked) {
-                    info?.location3D?.takeIf {
-                        it.latitude != 0.0 || it.longitude != 0.0 || it.altitude != 0.0
-                    }
-                } else {
-                    null
-                }
-                if (locked && target != null) {
-                    // Surfaced on the telemetry stream as lrfTarget.
-                    lrfTargetLocation = target
-                }
-                val targetJson = if (target == null) {
-                    "null"
-                } else {
-                    "[${target.latitude}, ${target.longitude}, ${target.altitude}]"
-                }
-                val stateJson = if (state == null) "null" else "\"$state\""
-                "{\"distance\": ${distance ?: "null"}, \"target\": $targetJson, \"state\": $stateJson}"
-            },
-            // The detected control profile carries the payload index and the drop widget indices
-            // (RIGHT + Unlock 3 / All_Down 5 on the M300 SkyPort payload, PORT_4 on the M400, null
-            // where no droppable payload exists). dropPayload pulses unlock then release.
-            "/send/drop" to { _ ->
-                val profile = DroneControlProfiles.activeProfile()
-                val indexType = profile.payloadIndexType
-                when {
-                    indexType == null ->
-                        "REJECTED: ${profile.displayName} has no payload drop port configured."
-                    Payload.dropPayload(
-                        payloadWidgetVM, indexType,
-                        profile.dropArmSwitchIndex, profile.dropReleaseButtonIndex
-                    ) -> "Payload dropped on $indexType"
-                    else -> "Payload drop failed"
-                }
-            },
-            "/send/gotoYaw" to { postData ->
-                if (DroneController.shouldRejectAutonomousCommand("gotoYaw")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    val yaw = postData.split(",")[0].toDouble()
-                    DroneController.gotoYaw(yaw)
-                    "Received: yaw: $yaw"
-                }
-            },
-            "/send/gotoAltitude" to { postData ->
-                if (DroneController.shouldRejectAutonomousCommand("gotoAltitude")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    val targetAltitude = postData.split(",")[0].toDouble()
-                    DroneController.gotoAltitude(targetAltitude)
-                    "Received: Altitude: $targetAltitude"
-                }
-            },
-            "/send/camera/zoom" to { postData ->
-                val targetZoom = postData.toDouble()
-                zoomKey.set(targetZoom)
-                "Received: zoom: $targetZoom"
-            },
-            "/send/abortMission" to {
-                DroneController.setStick(0.0f, 0.0f, 0.0f, 0.0f)
-                DroneController.disableVirtualStick()
-                "Received: abortMission"
-            },
-            "/send/abortAll" to {
-                DroneController.abortAllMissions()
-                "Received: abortAll"
-            },
-            "/send/enableVirtualStick" to {
-                if (DroneController.shouldRejectAutonomousCommand("enableVirtualStick")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    DroneController.enableVirtualStick()
-                    "Received: enableVirtualStick"
-                }
-            },
-            "/send/camera/startRecording" to {
-                startRecording.action()
-                "Received: camera start recording"
-            },
-            "/send/camera/stopRecording" to {
-                stopRecording.action()
-                "Received: camera stop recording"
-            },
-            "/send/navigateTrajectoryDJINative" to { postData ->
-                if (DroneController.shouldRejectAutonomousCommand("navigateTrajectoryDJINative")) {
-                    AUTONOMOUS_COMMAND_REJECTED
-                } else {
-                    when (val command = WildBridgeHttpCommandParser.parseNativeTrajectory(postData)) {
-                        is WildBridgeHttpCommandParser.ParseResult.Invalid -> command.message
-                        is WildBridgeHttpCommandParser.ParseResult.Valid -> {
-                            val trajectory = command.value
-                            DroneController.navigateTrajectoryNative(
-                                trajectory.waypoints,
-                                trajectory.speed
-                            )
-                            "DJI native mission requested with ${trajectory.waypoints.size} waypoints " +
-                                "at ${trajectory.speed}m/s"
-                        }
-                    }
-                }
-            },
-            "/send/abort/DJIMission" to {
-                DroneController.endMission()
-                "Mission stop requested"
-            },
-            "/send/setRTHAltitude" to { postData ->
-                val altitude = postData.toIntOrNull()
-                if (altitude != null) {
-                    DroneController.setRTHAltitude(altitude)
-                    "RTH altitude set to $altitude m"
-                } else {
-                    "Invalid altitude value"
-                }
-            },
-            "/send/deactivateManualOverride" to {
-                DroneController.deactivateManualOverride()
-                mainHandler.post { updateManualOverrideUI() }
-                "Manual override deactivated. Autonomous commands are now allowed."
-            },
-            "/get/isManualOverrideActive" to {
-                if (DroneController.isManualOverrideActive) "true" else "false"
-            },
-            "/send/autoSensing/start" to {
-                mainHandler.post {
-                    startAutoSensing()
-                    findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = true
-                }
-                "AutoSensing start requested"
-            },
-            "/send/autoSensing/stop" to {
-                mainHandler.post {
-                    stopAutoSensing()
-                    findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = false
-                }
-                "AutoSensing stop requested"
-            },
-            "/get/autoSensing/status" to {
-                """{"active":$isAutoSensingActive,"targetCount":${currentDetectedTargets.size}}"""
-            },
-            "/get/autoSensing/targets" to {
-                DetectedTarget.listToJsonArray(currentDetectedTargets).toString()
-            },
-            "/send/streaming/mode" to { postData ->
-                val modeStr = postData.trim().lowercase()
-                val selectedMode = StreamingMode.entries.find { it.prefValue == modeStr }
-                if (selectedMode != null) {
-                    mainHandler.post {
-                        setStreamingMode(selectedMode)
-                        restartActiveStreaming()
-                    }
-                    "Streaming mode successfully changed to $modeStr"
-                } else {
-                    "Invalid streaming mode: $postData"
-                }
-            }
-        )
-
-        /**
-         * Pilot / Safety authority gate. Returns a rejection message when the request must not
-         * reach a route, or null to let it through.
-         *
-         * /releaseSafetyControl is the explicit hand-back and is reserved for the Safety
-         * Computer. Every drone-control command (the /send/ family) goes through the authority latch: the
-         * first Safety command seizes persistent control, and Pilot commands are rejected while
-         * the Safety Computer holds it.
-         */
-        private fun authorityRejection(uri: String, source: ControlAuthority.Source): String? {
-            if (uri == "/releaseSafetyControl") {
-                return if (ControlAuthority.releaseSafetyControl(source)) {
-                    "Safety control released. Pilot Computer is back in control."
-                } else {
-                    "REJECTED: only the Safety Computer can release safety control."
-                }
-            }
-            if (uri.startsWith("/send/") && !ControlAuthority.authorizeControlCommand(source)) {
-                return "REJECTED: Safety Computer is in control. Pilot commands are blocked."
-            }
-            return null
-        }
-
-        fun handlePostRequest(
-            uri: String,
-            postData: String,
-            source: ControlAuthority.Source
-        ): String {
-            return runCatching {
-                Log.i("DroneServer", "POST $uri with data: $postData")
-                authorityRejection(uri, source) ?: postRoutes[uri]?.invoke(postData)
-                    ?: "Not Found: $uri"
-            }.getOrElse { error ->
-                Log.e("DroneServer", "Error processing POST request: ${error.message}", error)
-                "Error processing request: ${error.message}"
-            }
-        }
-    }
 
     // ==================== HTTP Server ====================
 
-    private inner class SimpleHttpServer(private val port: Int) {
-        private var serverSocket: ServerSocket? = null
-        private val executor = Executors.newFixedThreadPool(10)
-        private val commandHandler = WildBridgeHttpCommandHandler()
-        @Volatile
-        private var isRunning = false
-
-        fun start() {
-            if (isRunning) return
-            thread {
-                try {
-                    serverSocket = ServerSocket(port)
-                    isRunning = true
-                    Log.i("SimpleHttpServer", "Server started on port $port")
-                    while (isRunning && !serverSocket!!.isClosed) {
-                        try {
-                            val clientSocket = serverSocket!!.accept()
-                            executor.submit { handleRequest(clientSocket) }
-                        } catch (e: IOException) {
-                            if (isRunning) {
-                                Log.e("SimpleHttpServer", "Error accepting connection: ${e.message}", e)
-                            }
-                        }
-                    }
-                } catch (e: IOException) {
-                    Log.e("SimpleHttpServer", "Server error: ${e.message}", e)
-                }
-            }
-        }
-
-        fun stop() {
-            isRunning = false
-            runCatching {
-                serverSocket?.close()
-                executor.shutdown()
-            }.onFailure { error ->
-                Log.e("SimpleHttpServer", "Error stopping server: ${error.message}", error)
-            }
-        }
-
-        /** Parsed request line, headers and body of one HTTP request. */
-        private inner class HttpRequest(
-            val method: String,
-            val uri: String,
-            val postData: String,
-            val source: ControlAuthority.Source
-        )
-
-        private fun readRequest(reader: BufferedReader): HttpRequest? {
-            val requestLine = reader.readLine() ?: return null
-            val parts = requestLine.split(" ")
-            if (parts.size < 3) return null
-
-            var contentLength = 0
-            var safetyToken: String? = null
-            var line: String?
-            while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
-                if (line!!.startsWith("Content-Length:", ignoreCase = true)) {
-                    contentLength = line!!.substring(15).trim().toIntOrNull() ?: 0
-                } else if (line!!.startsWith(SAFETY_TOKEN_HEADER, ignoreCase = true)) {
-                    safetyToken = line!!.substring(SAFETY_TOKEN_HEADER.length).trim()
-                }
-            }
-
-            val method = parts[0]
-            var postData = ""
-            if (method == "POST" && contentLength > 0) {
-                val buffer = CharArray(contentLength)
-                reader.read(buffer, 0, contentLength)
-                postData = String(buffer)
-            }
-
-            // A request is from the Safety Computer iff it carries the configured token.
-            // Everything else (including a token mismatch) is treated as the Pilot Computer.
-            return HttpRequest(method, parts[1], postData, classifyCommandSource(safetyToken))
-        }
-
-        private val jsonEndpoints = setOf(
-            "/send/captureTemperature",
-            "/send/captureThermalImage",
-            "/send/listMedia"
-        )
-
-        private fun writeJsonResponse(writer: PrintWriter, body: String) {
-            writer.println("HTTP/1.1 200 OK")
-            writer.println("Content-Type: application/json")
-            writer.println("Content-Length: ${body.toByteArray().size}")
-            writer.println("Access-Control-Allow-Origin: *")
-            writer.println()
-            writer.print(body)
-            writer.flush()
-        }
-
-        /**
-         * Endpoints that answer with their own JSON rather than the plain-text command response.
-         *
-         * Camera capture is two-step: capture trips one shutter and returns a descriptor naming the
-         * per-lens filenames the payload stored; the files stay on the card and are fetched by name
-         * via /send/downloadMediaByName. The temperature read takes no shutter and downloads
-         * nothing — it reads the hottest point on the thermal feed synchronously.
-         *
-         * Returns null when the request is not one of these. Like every /send/ command these are
-         * behind the authority latch, so the Pilot cannot drive the payload while Safety holds control.
-         */
-        private fun handleJsonEndpoint(request: HttpRequest): String? {
-            if (request.method != "POST") return null
-            if (request.uri !in jsonEndpoints) return null
-
-            WildBridgeFlightLogger.logCommand(request.uri, request.postData)
-            // Authorise BEFORE acting: these endpoints trip a shutter or drive the payload, so a
-            // rejected request must not reach the camera.
-            if (!ControlAuthority.authorizeControlCommand(request.source)) {
-                return "{\"error\":\"REJECTED: Safety Computer is in control.\"}"
-            }
-            return when (request.uri) {
-                "/send/captureTemperature" -> {
-                    val maxTemp = readThermalMaxTempNow()
-                    "{\"thermalMaxTemp\":${maxTemp ?: "null"}}"
-                }
-                "/send/captureThermalImage" ->
-                    Payload.captureThermal(mediaVM) ?: "{\"error\":\"Failed to capture thermal image\"}"
-                else -> Payload.listAllMedia(mediaVM)
-            }
-        }
-
-        private fun handleRequest(clientSocket: Socket) {
-            runCatching {
-                val reader = BufferedReader(InputStreamReader(clientSocket.getInputStream()))
-                val writer = PrintWriter(OutputStreamWriter(clientSocket.getOutputStream()), true)
-
-                val request = readRequest(reader) ?: return
-
-                handleJsonEndpoint(request)?.let { body ->
-                    writeJsonResponse(writer, body)
-                    clientSocket.close()
-                    return
-                }
-
-                // Download ANY file on the SD card by name: body is the filename. Resolves against
-                // the live media list (the card's own index). Returns binary image/jpeg written
-                // straight to the socket, bypassing the text-response path below.
-                if (request.method == "POST" && request.uri == "/send/downloadMediaByName") {
-                    WildBridgeFlightLogger.logCommand(request.uri, request.postData)
-                    val outputStream = clientSocket.getOutputStream()
-                    val fileName = request.postData.trim()
-                    when {
-                        !ControlAuthority.authorizeControlCommand(request.source) ->
-                            Payload.sendErrorResponse(
-                                outputStream, "REJECTED: Safety Computer is in control."
-                            )
-                        fileName.isEmpty() ->
-                            Payload.sendErrorResponse(outputStream, "Expected body '<fileName>'")
-                        else -> Payload.sendMediaFileByName(mediaVM, fileName, outputStream)
-                    }
-                    clientSocket.close()
-                    return
-                }
-
-                val response = handleHttpRequest(
-                    request.method, request.uri, request.postData, request.source
-                )
-
-                writer.println("HTTP/1.1 200 OK")
-                writer.println("Content-Type: text/plain")
-                writer.println("Content-Length: ${response.length}")
-                writer.println("Access-Control-Allow-Origin: *")
-                writer.println("Access-Control-Allow-Methods: GET, POST, OPTIONS")
-                writer.println("Access-Control-Allow-Headers: Content-Type")
-                writer.println()
-                writer.print(response)
-                writer.flush()
-                clientSocket.close()
-            }.onFailure { error ->
-                Log.e("SimpleHttpServer", "Error handling request: ${error.message}", error)
-                try {
-                    clientSocket.close()
-                } catch (closeError: IOException) {
-                    Log.w(
-                        "SimpleHttpServer",
-                        "Error closing client socket: ${closeError.message}",
-                        closeError
-                    )
-                }
-            }
-        }
-
-        private fun handleHttpRequest(
-            method: String,
-            uri: String,
-            postData: String,
-            source: ControlAuthority.Source
-        ): String {
-            return when (method) {
-                "POST" -> handlePostRequest(uri, postData, source)
-                "GET" -> handleGetRequest(uri)
-                "OPTIONS" -> "OK"
-                else -> "Method Not Allowed"
-            }
-        }
-        
-        private fun handleGetRequest(uri: String): String {
-            return when (uri) {
-                "/config" -> {
-                    val deviceIp = NetworkUtils.getDeviceIpAddress() ?: "unknown"
-                    """{"droneName":"$droneName","ipAddress":"$deviceIp","httpPort":$HTTP_PORT,""" +
-                        """"telemetryPort":$TELEMETRY_PORT,"videoMode":"whip"}"""
-                }
-                else -> "Use POST for commands. Telemetry available on port $TELEMETRY_PORT. " +
-                    "Config available at GET /config"
-            }
-        }
-
-        private fun handlePostRequest(
-            uri: String,
-            postData: String,
-            source: ControlAuthority.Source
-        ): String {
-            return commandHandler.handlePostRequest(uri, postData, source)
-        }
-    }
 }
 
 
