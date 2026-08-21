@@ -68,6 +68,14 @@ object DroneController {
     const val WP_ACCEPT_ALTITUDE_M = 0.5    // vertical error in meters
     const val WP_ACCEPT_YAW_DEG = 4.0       // yaw error in degrees
 
+    // Arrival box for flyToWaypointHoldHeading: tighter horizontally than the nose-forward
+    // controller, which brakes into WP_ACCEPT_DISTANCE_M and then rotates to the final heading.
+    private val HOLD_HEADING_ACCEPTANCE = WaypointControl.Acceptance(
+        distanceMeters = WP_ACCEPT_DISTANCE_M_HOLD_HEADING,
+        yawDegrees = WP_ACCEPT_YAW_DEG,
+        altitudeMeters = WP_ACCEPT_ALTITUDE_M
+    )
+
     private fun distancePidKp(): Double = DroneControlProfiles.activeProfile().distanceKp
     private fun distancePidKi(): Double = DroneControlProfiles.activeProfile().distanceKi
     private fun distancePidKd(): Double = DroneControlProfiles.activeProfile().distanceKd
@@ -330,40 +338,27 @@ object DroneController {
      * - The drone is no longer in virtual stick mode (user took manual control)
      */
     private fun shouldControlLoopContinue(loopId: Long): Boolean {
-        // Check if loop was cancelled or a new one started
-        if (!controlLoopEnabled || loopId != currentControlLoopId) {
-            return false
-        }
-
-        // If manual override was triggered, stop immediately
-        if (isManualOverrideActive) {
+        // NOTE on the virtual-stick check below: do NOT call activateManualOverride() when it
+        // goes false. Virtual stick can be disabled by the system itself (startTakeOff(), signal
+        // loss recovery, FC safety checks), which would spuriously latch manual override and block
+        // subsequent autonomous commands. Real pilot RC-stick intervention is detected in
+        // VirtualStickVM.tryUpdateVirtualStickByRc() while isAutonomousFlightActive is true.
+        val decision = ControlLoopContinuation.decide(
+            ControlLoopContinuation.State(
+                controlLoopEnabled = controlLoopEnabled,
+                loopId = loopId,
+                currentControlLoopId = currentControlLoopId,
+                manualOverrideActive = isManualOverrideActive,
+                timeSinceStartMs = System.currentTimeMillis() - controlLoopStartTime,
+                virtualStickEnableGracePeriodMs = VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS,
+                virtualStickEnabled =
+                    virtualStickVM?.currentVirtualStickStateInfo?.value?.state?.isVirtualStickEnable ?: false
+            )
+        )
+        if (decision.shouldDisableControlLoop) {
             controlLoopEnabled = false
-            return false
         }
-        
-        // Give virtual stick time to enable before checking its state
-        // enableVirtualStick() is async, so we need a grace period
-        val timeSinceStart = System.currentTimeMillis() - controlLoopStartTime
-        if (timeSinceStart < VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS) {
-            // Still in grace period, don't check virtual stick state yet
-            return true
-        }
-        
-        // Check if drone is still in virtual stick mode
-        // If virtual stick gets disabled while a loop is running, kill the loop.
-        val isVirtualStickEnabled = virtualStickVM?.currentVirtualStickStateInfo?.value?.state?.isVirtualStickEnable ?: false
-        if (!isVirtualStickEnabled) {
-            // Virtual stick was disabled externally.
-            // NOTE: Do NOT call activateManualOverride() here — virtual stick can be disabled
-            // by the system itself (e.g. disableVirtualStick() called by startTakeOff(), signal
-            // loss recovery, FC safety checks) which would spuriously latch manual override and
-            // block subsequent autonomous commands.  Real pilot RC-stick intervention is detected
-            // in VirtualStickVM.tryUpdateVirtualStickByRc() while isAutonomousFlightActive is true.
-            controlLoopEnabled = false
-            return false
-        }
-        
-        return true
+        return decision.shouldContinue
     }
 
     // Keep track of last KMZ pushed/started
@@ -849,46 +844,56 @@ object DroneController {
                 val currentYaw = getHeading()
 
                 val distance = calculateDistance(target.latitude, target.longitude, currentPosition.latitude, currentPosition.longitude)
-                val pidSpeed = distancePID.update(distance, dtSec).coerceAtMost(target.maxSpeed)
+                val pidSpeed = distancePID.update(distance, dtSec)
                 val maxSpeedStep = maxHorizontalAccelMps2() * dtSec
-                val targetSpeed = pidSpeed.coerceAtMost(lastCommandedSpeed + maxSpeedStep)
+                val targetSpeed = WaypointControl.limitedSpeed(
+                    pidSpeed = pidSpeed,
+                    targetMaxSpeed = target.maxSpeed,
+                    lastCommandedSpeed = lastCommandedSpeed,
+                    maxSpeedStep = maxSpeedStep
+                )
                 lastCommandedSpeed = targetSpeed
                 val movementDirection = calculateBearing(currentPosition.latitude, currentPosition.longitude, target.latitude, target.longitude).toDouble()
 
                 val yawError = normalizeAngle(target.yaw - currentYaw)
                 val angularVelocity = yawPID.update(yawError, dtSec)
 
-                val movementDirectionRelative = normalizeAngle(movementDirection - currentYaw) // Relative to the drone's heading
-                val forwardSpeed = targetSpeed * cos(Math.toRadians(movementDirectionRelative))
-                val lateralSpeed = targetSpeed * sin(Math.toRadians(movementDirectionRelative))
+                // Project the to-waypoint vector into the drone's body frame; the nose stays on
+                // target.yaw, so travel is a mix of forward and lateral velocity.
+                val body = WaypointControl.bodyVelocity(targetSpeed, movementDirection, currentYaw)
 
                 val altError = target.altitude - currentPosition.altitude
 
-                if (distance < WP_ACCEPT_DISTANCE_M_HOLD_HEADING && abs(yawError) < WP_ACCEPT_YAW_DEG && abs(altError) < WP_ACCEPT_ALTITUDE_M) {
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (!_isWaypointReached) {
-                        _isWaypointReached = true
-                        reachedAtMs = now
-                    }
+                val plan = WaypointControl.cooldownPlan(
+                    targetReached = WaypointControl.reachedTarget(
+                        distance = distance,
+                        yawError = yawError,
+                        altitudeError = altError,
+                        acceptance = HOLD_HEADING_ACCEPTANCE
+                    ),
+                    wasWaypointReached = _isWaypointReached,
+                    reachedAtMs = reachedAtMs,
+                    nowMs = nowMs,
+                    holdCooldownMs = holdCooldownMs
+                )
+                _isWaypointReached = plan.waypointReached
+                // 0 when outside acceptance, so GPS drift or a new target restarts the cooldown.
+                reachedAtMs = plan.reachedAtMs
+                if (plan.stopAtWaypoint) {
                     // Cooldown expired — no new waypoint arrived, stop cleanly
-                    if (now - reachedAtMs >= holdCooldownMs) {
-                        setStick(0F, 0F, 0F, 0F)
-                        activeWaypointTarget = null
-                        controlLoopEnabled = false
-                        disableVirtualStick()
-                        return
-                    }
-                } else {
-                    // Moved outside acceptance (e.g. GPS drift or new target) — reset cooldown
-                    reachedAtMs = 0L
+                    setStick(0F, 0F, 0F, 0F)
+                    activeWaypointTarget = null
+                    controlLoopEnabled = false
+                    disableVirtualStick()
+                    return
                 }
 
                 // DJI SDK V5 quirk: in BODY frame, the SDK's "pitch" field actually controls
                 // lateral (left/right) movement and "roll" controls forward/backward. This is
                 // the inverse of what the field names suggest. Confirmed empirically.
                 val flightControlParam = VirtualStickFlightControlParam().apply {
-                    this.pitch = lateralSpeed
-                    this.roll = forwardSpeed
+                    this.pitch = body.lateralSpeed
+                    this.roll = body.forwardSpeed
                     this.yaw = angularVelocity
                     this.verticalThrottle = target.altitude
                     this.verticalControlMode = VerticalControlMode.POSITION
@@ -1109,22 +1114,25 @@ object DroneController {
                 if (positionReached) {
                     val finalYawError = normalizeAngle(target.finalYaw - currentYaw)
                     val finalAngularVelocity = yawPID.update(finalYawError, dtSec)
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (abs(finalYawError) < WP_ACCEPT_YAW_DEG) {
-                        if (!_isWaypointReached) {
-                            _isWaypointReached = true
-                            reachedAtMs = now
-                        }
+                    // Arrival here is final-heading only: position and altitude were already
+                    // latched by positionReached, so the shared three-axis predicate does not apply.
+                    val plan = WaypointControl.cooldownPlan(
+                        targetReached = abs(finalYawError) < WP_ACCEPT_YAW_DEG,
+                        wasWaypointReached = _isWaypointReached,
+                        reachedAtMs = reachedAtMs,
+                        nowMs = nowMs,
+                        holdCooldownMs = holdCooldownMs
+                    )
+                    _isWaypointReached = plan.waypointReached
+                    // 0 while still rotating to the final heading — keeps the cooldown unarmed.
+                    reachedAtMs = plan.reachedAtMs
+                    if (plan.stopAtWaypoint) {
                         // Cooldown expired — no new waypoint hot-swapped in, stop cleanly.
-                        if (now - reachedAtMs >= holdCooldownMs) {
-                            setStick(0F, 0F, 0F, 0F)
-                            activeWaypointTarget = null
-                            controlLoopEnabled = false
-                            disableVirtualStick()
-                            return
-                        }
-                    } else {
-                        reachedAtMs = 0L  // still rotating to final heading — keep the cooldown unarmed
+                        setStick(0F, 0F, 0F, 0F)
+                        activeWaypointTarget = null
+                        controlLoopEnabled = false
+                        disableVirtualStick()
+                        return
                     }
                     lastParam = VirtualStickFlightControlParam().apply {
                         this.pitch = 0.0
@@ -1148,10 +1156,15 @@ object DroneController {
                 val brakeDist = max(0.0, distance - WP_ACCEPT_DISTANCE_M)
                 val decelCap = sqrt(2.0 * maxHorizontalAccelMps2() * brakeDist)
                 val pidSpeed = distancePID.update(distance, dtSec)
-                    .coerceAtMost(target.maxSpeed)
-                    .coerceAtMost(decelCap)
                 val maxSpeedStep = maxHorizontalAccelMps2() * dtSec
-                val targetSpeed = pidSpeed.coerceAtMost(lastCommandedSpeed + maxSpeedStep)
+                val targetSpeed = WaypointControl.limitedSpeed(
+                    pidSpeed = pidSpeed,
+                    // The kinematic decel cap is folded into the ceiling so the drone can always
+                    // brake within the remaining distance; the slew limit then applies on top.
+                    targetMaxSpeed = min(target.maxSpeed, decelCap),
+                    lastCommandedSpeed = lastCommandedSpeed,
+                    maxSpeedStep = maxSpeedStep
+                )
                 lastCommandedSpeed = targetSpeed
 
                 // --- Cross-track lateral correction (decoupled from forward speed) ---
