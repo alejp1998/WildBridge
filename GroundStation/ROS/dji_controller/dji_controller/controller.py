@@ -3,24 +3,23 @@ Author: Edouard Rolland
 Project: WildDrone
 Contact: edr@mmmi.sdu.dk
 
-This file was written as part of the WildDrone project and implements a ROS 2 node for controlling a DJI drone 
+This file was written as part of the WildDrone project and implements a ROS 2 node for controlling a DJI drone
 via the WildBridge app. The node handles both command reception and telemetry publishing.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
+import numpy as np
 import rclpy
+from geometry_msgs.msg import Vector3
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from std_msgs.msg import Empty, String, Float64MultiArray, Float64, Int32, Bool
-from sensor_msgs.msg import NavSatFix
-from geometry_msgs.msg import Vector3
-from datetime import datetime
 from requests.exceptions import RequestException
+from sensor_msgs.msg import NavSatFix
+from std_msgs.msg import Bool, Empty, Float64, Float64MultiArray, Int32, String
 
 from dji_controller.submodules.dji_interface import *
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
-import numpy as np
 
 
 class DjiNode(Node):
@@ -35,7 +34,7 @@ class DjiNode(Node):
 
         # Initialize the DJI drone interface
         self.dji_interface = DJIInterface(self.ip_rc)
-        
+
         # Update IP if discovered and set the ROS2 parameter so other nodes can query it
         if not self.ip_rc and self.dji_interface.IP_RC:
             self.ip_rc = self.dji_interface.IP_RC
@@ -89,7 +88,7 @@ class DjiNode(Node):
             Float64, 'command/zoom_ratio', self.zoom_ratio_callback, 10)
         self.create_subscription(
             Float64, 'command/set_rth_altitude', self.set_rth_altitude_callback, 10)
-        
+
         # Virtual stick control subscriber (leftX, leftY, rightX, rightY)
         self.create_subscription(
             Float64MultiArray, 'command/stick', self.stick_callback, 10)
@@ -174,7 +173,7 @@ class DjiNode(Node):
             Float64, 'time_to_landing_spot', 10)
         self.max_radius_can_fly_and_go_home_pub = self.create_publisher(
             Float64, 'max_radius_can_fly_and_go_home', 10)
-        
+
         # Battery needed publishers
         self.battery_needed_to_go_home_pub = self.create_publisher(
             Float64, 'battery_needed_to_go_home', 10)
@@ -252,7 +251,7 @@ class DjiNode(Node):
                 if config:
                     self.get_logger().info(f"Connection verified. Drone config: {config}")
                     return True
-                
+
                 # Fallback to old method if config fails but maybe server is up
                 response = self.dji_interface.requestSend("/", "", verbose=False)
                 if response:
@@ -355,7 +354,7 @@ class DjiNode(Node):
         """
         self.get_logger().info("Received DJI native trajectory command.")
         data = ast.literal_eval(msg.data)
-        
+
         # Support both formats: (speed, waypoints) tuple or just waypoints list
         if isinstance(data, tuple) and len(data) == 2:
             speed, waypoints = data
@@ -363,7 +362,7 @@ class DjiNode(Node):
             # Legacy format: just waypoints, use default speed
             waypoints = data
             speed = 10.0
-        
+
         self.get_logger().info(f"Received DJI native waypoints: {waypoints}, speed: {speed} m/s")
         self.dji_interface.requestSendNavigateTrajectoryDJINative(waypoints, speed)
 
@@ -495,26 +494,26 @@ class DjiNode(Node):
         try:
             # Get telemetry from TCP socket stream
             telemetry = self.dji_interface.getTelemetry()
-            
+
             if not telemetry:
                 return  # No telemetry data available yet
-            
+
             # Speed (scalar and vector)
             speed_data = telemetry.get('speed', {})
             speed_x = float(speed_data.get('x', 0.0))
             speed_y = float(speed_data.get('y', 0.0))
             speed_z = float(speed_data.get('z', 0.0))
             speed = np.sqrt(speed_x**2 + speed_y**2 + speed_z**2)
-            
+
             self.speed_pub.publish(Float64(data=speed))
             self.speed_vector_pub.publish(Vector3(x=speed_x, y=speed_y, z=speed_z))
-            
+
             # Heading
             self.heading_pub.publish(Float64(data=float(telemetry.get('heading', 0.0))))
-            
+
             # Attitude
             self.attitude_pub.publish(String(data=str(telemetry.get('attitude', {}))))
-            
+
             # Location
             location = telemetry.get('location', {})
             self.location_pub.publish(NavSatFix(
@@ -522,7 +521,7 @@ class DjiNode(Node):
                 longitude=float(location.get('longitude', 0.0)),
                 altitude=float(location.get('altitude', 0.0))
             ))
-            
+
             # Gimbal
             gimbal_attitude = telemetry.get('gimbalAttitude', {})
             self.gimbal_attitude_pub.publish(String(data=str(gimbal_attitude)))
@@ -532,19 +531,19 @@ class DjiNode(Node):
                 Float64(data=float(gimbal_attitude.get('yaw', 0.0))))
             self.gimbal_pitch_pub.publish(
                 Float64(data=float(gimbal_attitude.get('pitch', 0.0))))
-            
+
             # Camera zoom
             self.zoom_fl_pub.publish(Float64(data=float(telemetry.get('zoomFl', -1))))
             self.hybrid_fl_pub.publish(Float64(data=float(telemetry.get('hybridFl', -1))))
             self.optical_fl_pub.publish(Float64(data=float(telemetry.get('opticalFl', -1))))
             self.zoom_ratio_pub.publish(Float64(data=float(telemetry.get('zoomRatio', 1.0))))
-            
+
             # Battery and satellites
             self.battery_level_pub.publish(
                 Float64(data=float(telemetry.get('batteryLevel', -1))))
             self.satellite_count_pub.publish(
                 Int32(data=int(telemetry.get('satelliteCount', -1))))
-            
+
             # Mission status (using new telemetry-based methods)
             self.waypoint_reached_pub.publish(
                 Bool(data=telemetry.get('waypointReached', False)))
@@ -554,7 +553,7 @@ class DjiNode(Node):
                 Bool(data=telemetry.get('altitudeReached', False)))
             self.yaw_reached_pub.publish(
                 Bool(data=telemetry.get('yawReached', False)))
-            
+
             # Home location
             home_location = telemetry.get('homeLocation', {})
             self.home_location_pub.publish(NavSatFix(
@@ -565,7 +564,7 @@ class DjiNode(Node):
             self.home_set_pub.publish(Bool(data=telemetry.get('homeSet', False)))
             self.distance_to_home_pub.publish(
                 Float64(data=float(telemetry.get('distanceToHome', 0.0))))
-            
+
             # Flight time information
             self.remaining_flight_time_pub.publish(
                 Float64(data=float(telemetry.get('remainingFlightTime', 0))))
@@ -577,13 +576,13 @@ class DjiNode(Node):
                 Float64(data=float(telemetry.get('totalTime', 0))))
             self.max_radius_can_fly_and_go_home_pub.publish(
                 Float64(data=float(telemetry.get('maxRadiusCanFlyAndGoHome', 0))))
-            
+
             # Battery needed information
             self.battery_needed_to_go_home_pub.publish(
                 Float64(data=float(telemetry.get('batteryNeededToGoHome', 0))))
             self.battery_needed_to_land_pub.publish(
                 Float64(data=float(telemetry.get('batteryNeededToLand', 0))))
-            
+
             # Camera recording status
             self.camera_is_recording_pub.publish(
                 Bool(data=telemetry.get('isRecording', False)))

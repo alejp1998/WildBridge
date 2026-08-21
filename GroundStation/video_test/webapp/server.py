@@ -216,7 +216,7 @@ def get_subnet_broadcast_addresses():
 
 def discover_now():
     log_event("discovery_started", drones=DRONE_NAMES or "any")
-    
+
     # Broadcast to all resolved interface broadcast addresses (forces physical Wi-Fi routing alongside defaults)
     for broadcast_ip in get_subnet_broadcast_addresses():
         try:
@@ -288,7 +288,7 @@ def configure_mediamtx_path(drone_name, mode, source_url=None):
         else:
             # Other modes are not relayed through MediaMTX.
             return
-        
+
         # Try to patch first
         req = urllib.request.Request(
             f"{MEDIAMTX_API_URL}/v3/config/paths/patch/{drone_name}",
@@ -352,7 +352,7 @@ def _handle_telemetry_line(name, line, last_sample_log):
                     source_url = f"rtsp://{user}:{pwd}@{ip}:{port}/streaming/live/1"
                 else:
                     source_url = f"rtsp://{ip}:{port}/streaming/live/1"
-            
+
             # Let's keep track of last applied mode/url to avoid redundant API calls
             last_applied = drones[name].get("last_applied_stream_source")
             desired_state = f"rtsp:{source_url}"
@@ -553,7 +553,7 @@ class Handler(SimpleHTTPRequestHandler):
             )
             with urllib.request.urlopen(req, timeout=3) as resp:
                 reply = resp.read().decode("utf-8")
-            
+
             with lock:
                 if not drones[name].get("lastTelemetry"):
                     drones[name]["lastTelemetry"] = {}
@@ -564,7 +564,7 @@ class Handler(SimpleHTTPRequestHandler):
 
             self.send_json(200, {"ok": True, "message": reply})
         except Exception as exc:
-            self.send_json(502, {"error": f"Failed to send command to phone: {str(exc)}"})
+            self.send_json(502, {"error": f"Failed to send command to phone: {exc!s}"})
 
 
     def handle_client_stats_post(self):

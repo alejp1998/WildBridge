@@ -290,7 +290,7 @@ object DroneController {
     private var controlLoopStartTime: Long = 0
     
     // Grace period (ms) to allow virtual stick to enable before checking its state
-    private val VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS = 1000L
+    private const val VIRTUAL_STICK_ENABLE_GRACE_PERIOD_MS = 1000L
 
     /**
      * Cancel any active control loop (waypoint, gotoYaw, gotoAltitude, etc.)

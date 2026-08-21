@@ -16,8 +16,8 @@ Usage:
 
 import sys
 
-from wildbridge_groundstation.dji_client import DJIInterface
 from djiInterfaceSafety import DJIInterfaceSafety
+from wildbridge_groundstation.dji_client import DJIInterface
 
 
 def expect(label, response, should_be_rejected):
