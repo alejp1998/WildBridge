@@ -31,6 +31,18 @@ object TelemetryProvider {
     /** Current detected targets from AutoSensing – updated by the activity */
     @Volatile
     var currentDetectedTargets: List<DetectedTarget> = emptyList()
+
+    @Volatile
+    var currentDetectionSource: String = "none"
+
+    @Volatile
+    var currentDetectionActive: Boolean = false
+
+    @Volatile
+    var currentDetectionModel: String? = null
+
+    @Volatile
+    var currentDetectionThreshold: Float? = null
     
     // DJI Keys for telemetry - created once and reused
     private val location3DKey = FlightControllerKey.KeyAircraftLocation3D.create()
@@ -174,9 +186,9 @@ object TelemetryProvider {
             mockStartTimeMs = System.currentTimeMillis()
         }
         mockTelemetryEnabled = enabled
-        if (baseLatitude != null && baseLongitude != null && (baseLatitude != 0.0 || baseLongitude != 0.0)) {
-            mockBaseLatitude = baseLatitude
-            mockBaseLongitude = baseLongitude
+        MockTelemetryOrigin.fromNullable(baseLatitude, baseLongitude)?.let { origin ->
+            mockBaseLatitude = origin.latitude
+            mockBaseLongitude = origin.longitude
         }
         if (baseAltitude != null && baseAltitude.isFinite()) {
             mockBaseAltitude = baseAltitude
@@ -240,39 +252,63 @@ object TelemetryProvider {
         frameHeight: Int,
         droneName: String = "drone_1"
     ): FrameMetadata {
-        if (mockTelemetryEnabled) {
-            val mock = currentMockTelemetry(droneName)
-            return FrameMetadata(
-                frameNumber = frameNumber,
-                timestampNs = timestampNs,
-                captureTimeMs = System.currentTimeMillis(),
-                droneName = droneName,
-                frameWidth = frameWidth,
-                frameHeight = frameHeight,
-                latitude = mock.location.latitude,
-                longitude = mock.location.longitude,
-                altitudeASL = mock.location.altitude,
-                altitudeAGL = mock.altitudeAGL,
-                aircraftPitch = mock.attitude.pitch,
-                aircraftRoll = mock.attitude.roll,
-                aircraftYaw = mock.heading,
-                gimbalPitch = mock.gimbalAttitude.pitch,
-                gimbalRoll = mock.gimbalAttitude.roll,
-                gimbalYaw = mock.gimbalAttitude.yaw,
-                velocityX = mock.velocity.x,
-                velocityY = mock.velocity.y,
-                velocityZ = mock.velocity.z,
-                satelliteCount = mock.satelliteCount,
-                batteryPercent = mock.batteryPercent,
-                isFlying = mock.isFlying,
-                flightMode = mock.flightMode,
-                readyToTakeoff = false,
-                takeoffBlockReason = "MOCK_IN_FLIGHT",
-                isManualOverrideActive = false,
-                detectedTargets = currentDetectedTargets
-            )
+        return if (mockTelemetryEnabled) {
+            captureMockMetadata(frameNumber, timestampNs, frameWidth, frameHeight, droneName)
+        } else {
+            captureCachedMetadata(frameNumber, timestampNs, frameWidth, frameHeight, droneName)
         }
+    }
 
+    private fun captureMockMetadata(
+        frameNumber: Long,
+        timestampNs: Long,
+        frameWidth: Int,
+        frameHeight: Int,
+        droneName: String
+    ): FrameMetadata {
+        val mock = currentMockTelemetry(droneName)
+        return FrameMetadata(
+            frameNumber = frameNumber,
+            timestampNs = timestampNs,
+            captureTimeMs = System.currentTimeMillis(),
+            droneName = droneName,
+            frameWidth = frameWidth,
+            frameHeight = frameHeight,
+            latitude = mock.location.latitude,
+            longitude = mock.location.longitude,
+            altitudeASL = mock.location.altitude,
+            altitudeAGL = mock.altitudeAGL,
+            aircraftPitch = mock.attitude.pitch,
+            aircraftRoll = mock.attitude.roll,
+            aircraftYaw = mock.heading,
+            gimbalPitch = mock.gimbalAttitude.pitch,
+            gimbalRoll = mock.gimbalAttitude.roll,
+            gimbalYaw = mock.gimbalAttitude.yaw,
+            velocityX = mock.velocity.x,
+            velocityY = mock.velocity.y,
+            velocityZ = mock.velocity.z,
+            satelliteCount = mock.satelliteCount,
+            batteryPercent = mock.batteryPercent,
+            isFlying = mock.isFlying,
+            flightMode = mock.flightMode,
+            readyToTakeoff = false,
+            takeoffBlockReason = "MOCK_IN_FLIGHT",
+            isManualOverrideActive = false,
+            detectedTargets = currentDetectedTargets,
+            detectionSource = currentDetectionSource,
+            detectionActive = currentDetectionActive,
+            detectionModel = currentDetectionModel,
+            detectionConfidenceThreshold = currentDetectionThreshold
+        )
+    }
+
+    private fun captureCachedMetadata(
+        frameNumber: Long,
+        timestampNs: Long,
+        frameWidth: Int,
+        frameHeight: Int,
+        droneName: String
+    ): FrameMetadata {
         val location = cachedLocation
         val attitude = cachedAttitude
         val velocity = cachedVelocity
@@ -315,7 +351,11 @@ object TelemetryProvider {
             readyToTakeoff = computeReadyToTakeoff(),
             takeoffBlockReason = computeTakeoffBlockReason(),
             isManualOverrideActive = DroneController.isManualOverrideActive,
-            detectedTargets = currentDetectedTargets
+            detectedTargets = currentDetectedTargets,
+            detectionSource = currentDetectionSource,
+            detectionActive = currentDetectionActive,
+            detectionModel = currentDetectionModel,
+            detectionConfidenceThreshold = currentDetectionThreshold
         )
     }
 }
