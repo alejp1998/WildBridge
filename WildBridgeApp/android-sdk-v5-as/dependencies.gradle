@@ -1,9 +1,10 @@
 ext {
     deps = [:]
+    djiSdkVersion = "5.18.0"
     // DJI MSDK V5 packages
-    deps.aircraft = "com.dji:dji-sdk-v5-aircraft:5.18.0"
-    deps.aircraftProvided = "com.dji:dji-sdk-v5-aircraft-provided:5.18.0"
-    deps.networkImp = "com.dji:dji-sdk-v5-networkImp:5.18.0"
+    deps.aircraft = "com.dji:dji-sdk-v5-aircraft:$djiSdkVersion"
+    deps.aircraftProvided = "com.dji:dji-sdk-v5-aircraft-provided:$djiSdkVersion"
+    deps.networkImp = "com.dji:dji-sdk-v5-networkImp:$djiSdkVersion"
 
     // Third-party dependency libraries
     deps.gson = 'com.google.code.gson:gson:2.9.1'
@@ -83,6 +84,7 @@ ext {
 
     // Testing
     deps.junit4 = "junit:junit:4.12"
+    deps.json = "org.json:json:20240303"
     deps.jnitCore = 'androidx.test:core:1.5.0'
     deps.testRunner = 'androidx.test:runner:1.5.0'
     deps.junitExt = 'androidx.test.ext:junit:1.1.5'
