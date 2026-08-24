@@ -229,7 +229,8 @@ private object DjiFlightLogSync {
     }
 }
 
-private object FlightLogStorage {
+/** Resolves the durable, outside-the-sandbox directories WildBridge writes into. */
+internal object FlightLogStorage {
     private const val TAG = "WildBridgeFlightLogger"
     private const val DJI_SYNC_SUB_PATH = "WildBridge/DJI_FlightRecords"
 
@@ -237,6 +238,13 @@ private object FlightLogStorage {
         return resolveDurableDir(DJI_SYNC_SUB_PATH, "resolveDjiSyncDir")
             ?: resolveAppExternalDir("DJI_FlightRecords", "resolveDjiSyncDir")
     }
+
+    /**
+     * Durable location for recoverable configuration, beside the flight logs and outside the app
+     * sandbox so it survives an uninstall. Null when full storage access has not been granted —
+     * the permission is optional, and callers fall back to keeping settings in the app only.
+     */
+    fun resolveConfigDir(): File? = resolveDurableDir("WildBridge/Config", "resolveConfigDir")
 
     fun resolveLogDir(): File? {
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
