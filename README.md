@@ -52,7 +52,7 @@ Each drone connects to its RC via DJI OcuSync (2.4/5 GHz). The RC connects to th
 
 ## Supported Hardware
 
-**SDK Version**: DJI Mobile SDK V5 5.17.0
+**SDK Version**: DJI Mobile SDK V5 5.18.0
 
 ### DJI Drones
 - DJI Mini 3 / Mini 3 Pro
