@@ -10,6 +10,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.provider.DocumentsContract
 import java.io.File
+import dji.sampleV5.aircraft.settings.WildBridgeSettingsBackup
 import android.util.Log
 import android.widget.Toast
 import android.widget.TextView
@@ -193,6 +194,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         private const val TAG_THERMAL = "WildBridgeThermal"
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
+        private const val PREF_STORAGE_PROMPT_DECLINED = "storage_prompt_declined"
+        private const val SETTINGS_BACKUP_DEBOUNCE_MS = 1500L
         private const val PREF_MEDIAMTX_SERVER = "mediamtx_server"
         private const val SAFETY_TOKEN = "98"
         private const val PREF_WEBRTC_FPS = "webrtc_fps"
@@ -285,6 +288,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     }
 
     override val mainHandler = Handler(Looper.getMainLooper())
+
+    private var settingsBackupListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private val settingsBackupTask = Runnable {
+        WildBridgeSettingsBackup.save(sharedPreferences, droneName)
+    }
     private val telemetryCoordinator = TelemetryCoordinator()
     private lateinit var discoveryManager: WildBridgeDiscoveryManager
     
@@ -593,8 +601,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         // Default field workflow: video mode, and SD card recording when available.
         scheduleDefaultCameraRecordingConfiguration()
 
-        // Ensure MANAGE_EXTERNAL_STORAGE is granted so flight logs survive uninstalls.
+        // Explain, then ask: full storage access keeps logs and settings recoverable. Optional.
         ensureManageExternalStoragePermission()
+
+        // Offer back any settings a previous install left in Documents/WildBridge.
+        offerSettingsRestoreIfFresh()
+
+        // Keep that copy current from here on.
+        startSettingsBackup()
 
         // Sync any DJI TXT flight records accumulated since the last launch.
         syncDjiFlightLogsInBackground()
@@ -2444,15 +2458,81 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * in the manifest but must be toggled by the user in Settings.
      */
     private fun ensureManageExternalStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-            Log.w(TAG, "MANAGE_EXTERNAL_STORAGE not granted — requesting…")
-            runCatching {
-                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                startActivity(intent)
-            }.onFailure { error ->
-                Log.e(TAG, "Cannot open MANAGE_ALL_FILES_ACCESS_PERMISSION settings: ${error.message}", error)
-            }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) return
+        if (sharedPreferences.getBoolean(PREF_STORAGE_PROMPT_DECLINED, false)) {
+            Log.i(TAG, "Storage access previously declined — not asking again")
+            return
         }
+
+        Log.w(TAG, "MANAGE_EXTERNAL_STORAGE not granted — explaining before requesting")
+        AlertDialog.Builder(this)
+            .setTitle("Allow file access?")
+            .setMessage(
+                "WildBridge can store two things outside the app so they survive an uninstall:\n\n" +
+                    "  \u2022  Flight logs and DJI flight records\n" +
+                    "  \u2022  Your settings \u2014 drone name, streaming and detection setup\n\n" +
+                    "They go in Documents/WildBridge, where you can copy them off the device or " +
+                    "restore them after reinstalling.\n\n" +
+                    "This is optional. Decline and WildBridge works normally, but logs and settings " +
+                    "stay inside the app and are lost if it is uninstalled."
+            )
+            .setPositiveButton("Choose folder access") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }.onFailure { error ->
+                    Log.e(TAG, "Cannot open storage settings: ${error.message}", error)
+                    Toast.makeText(this, "Could not open the storage settings screen", Toast.LENGTH_LONG).show()
+                }
+            }
+            .setNegativeButton("Not now") { _, _ ->
+                sharedPreferences.edit().putBoolean(PREF_STORAGE_PROMPT_DECLINED, true).apply()
+                Log.i(TAG, "Storage access declined by user")
+            }
+            .setCancelable(true)
+            .show()
+    }
+
+    /**
+     * Mirror settings to Documents/WildBridge whenever they change, so they can be recovered after
+     * an uninstall. No-op without the optional storage permission.
+     */
+    private fun startSettingsBackup() {
+        settingsBackupListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, _ ->
+            mainHandler.removeCallbacks(settingsBackupTask)
+            // Settings arrive in bursts while a dialog is being filled in; coalesce them.
+            mainHandler.postDelayed(settingsBackupTask, SETTINGS_BACKUP_DEBOUNCE_MS)
+        }
+        sharedPreferences.registerOnSharedPreferenceChangeListener(settingsBackupListener)
+        mainHandler.postDelayed(settingsBackupTask, SETTINGS_BACKUP_DEBOUNCE_MS)
+    }
+
+    /**
+     * Offer to restore settings left behind by a previous install.
+     *
+     * Only asked when this install has no drone name of its own, so it fires after a reinstall
+     * rather than every launch. Restoring is the operator's call: a backup can be from a different
+     * drone or deployment.
+     */
+    private fun offerSettingsRestoreIfFresh() {
+        val hasOwnSettings = !sharedPreferences.getString(PREF_DRONE_NAME, "").isNullOrBlank()
+        if (hasOwnSettings) return
+        val backup = WildBridgeSettingsBackup.read() ?: return
+
+        AlertDialog.Builder(this)
+            .setTitle("Restore previous settings?")
+            .setMessage(
+                "Settings from a previous WildBridge install are still on this device" +
+                    (if (backup.droneName.isNotBlank()) " for \"${backup.droneName}\"" else "") +
+                    ", saved ${backup.savedAt}.\n\n" +
+                    "${backup.entryCount} setting(s) can be restored, including the drone name and " +
+                    "the streaming and detection setup."
+            )
+            .setPositiveButton("Restore") { _, _ ->
+                val applied = WildBridgeSettingsBackup.restore(sharedPreferences, backup)
+                Toast.makeText(this, "Restored $applied setting(s) — restart to apply", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Start fresh", null)
+            .show()
     }
 
     /**
