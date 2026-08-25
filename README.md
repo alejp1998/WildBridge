@@ -522,6 +522,54 @@ safety.requestReleaseSafetyControl()           # hand authority back to the Pilo
 
 ---
 
+### MAVLink 2 Telemetry (UDP — Port 14550)
+
+WildBridge can stream its telemetry as **MAVLink 2**, so a stock ground station — QGroundControl, MAVSDK, `pymavlink` — sees the aircraft with no plugin and no configuration file.
+
+This surface is **read-only**: it streams telemetry and nothing more. No command can reach the aircraft over MAVLink, so enabling it cannot change how the drone flies. Commands still go over HTTP on port 8080.
+
+**Disabled by default.** Following PX4's pattern of switching MAVLink instances on by parameter rather than by build, the endpoint is configured through preferences in `WildBridgePrefs`:
+
+| Preference | Type | Default | Meaning |
+|------------|------|---------|---------|
+| `wb_mav_0_enabled` | bool | `false` | Start the endpoint at all |
+| `wb_mav_0_host` | string | *(empty)* | Ground-station address. Empty means broadcast on the subnet |
+| `wb_mav_0_port` | int | `14550` | Port to send to and listen on |
+| `wb_mav_0_mode` | string | `normal` | Stream profile: `normal` or `minimal` |
+| `wb_mav_0_sysid` | int | `1` | MAVLink system id — one per aircraft, as a GCS distinguishes vehicles |
+
+With no host configured the endpoint broadcasts, and it also learns the address of any ground station that sends to it first — so in the common case QGroundControl simply finds the aircraft on its default UDP listener.
+
+**Streamed messages and rates:**
+
+| Message | Rate | Carries |
+|---------|------|---------|
+| `HEARTBEAT` | 1 Hz | Mode, armed state, system status |
+| `SYS_STATUS` | 1 Hz | Sensor health, battery percentage |
+| `BATTERY_STATUS` | 1 Hz | Battery percentage and `time_remaining` |
+| `HOME_POSITION` | 0.5 Hz | Home point |
+| `GLOBAL_POSITION_INT` | 5 Hz | Position, altitude AMSL and AGL, velocity, heading |
+| `GPS_RAW_INT` | 5 Hz | Fix type and satellite count |
+| `VFR_HUD` | 5 Hz | Ground speed, altitude, climb rate, heading |
+| `ATTITUDE` | 10 Hz | Roll, pitch, yaw in radians |
+| `AUTOPILOT_VERSION` | 0.2 Hz | Capability flags |
+| `STATUSTEXT` | on events | Human-readable messages |
+
+**What it deliberately does not claim.** WildBridge reports `MAV_AUTOPILOT_INVALID`, not PX4 or ArduPilot — it is a component that speaks MAVLink, not a flight stack, and reporting otherwise would make a ground station render another stack's mode names for a DJI aircraft. Values DJI does not provide are sent using MAVLink's documented "unknown" conventions rather than plausible-looking zeros: GPS HDOP/VDOP are `UINT16_MAX`, battery cell voltages `UINT16_MAX`, battery temperature `INT16_MAX`, current `-1`. The armed flag comes from motors-running, since DJI has no arm/disarm concept — deriving it from flight mode would report armed on the ground.
+
+**Verify without QGroundControl:**
+
+```bash
+pip install pymavlink
+python GroundStation/Python/mavlink_listen.py --summary 5
+```
+
+It prints the first instance of each message with decoded values, then a rate summary, and reports malformed frames loudly as `BAD_DATA`. It never transmits.
+
+**Connect QGroundControl:** it listens on UDP 14550 by default and adds a link automatically on receiving traffic. If the RC and the ground station are on the same LAN, enabling `wb_mav_0_enabled` is all that is required.
+
+---
+
 ### Video Streaming
 
 WildBridge's supported public video path is WebRTC publishing through WHIP to MediaMTX, with browser playback through WHEP. The app publishes DJI camera frames to a WHIP URL selected by the ground station, normally:
