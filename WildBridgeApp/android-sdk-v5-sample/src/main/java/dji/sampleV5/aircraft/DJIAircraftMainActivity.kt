@@ -29,6 +29,53 @@ class DJIAircraftMainActivity : DJIMainActivity() {
     private var noDronePromptShown = false
     private var defaultLayoutAutoLaunched = false
 
+    /**
+     * Polls for drone registration while the main activity is resumed. When a drone
+     * registers, dismisses the no-drone dialog (if visible) and jumps into the
+     * default layout so the user is not stuck on the recovery prompt.
+     *
+     * The default-layout button is only enabled 5 s after SDK registration (see
+     * DJIMainActivity.observeSDKManager), so the open attempt is retried until the
+     * layout actually opens.
+     */
+    private val connectionCheck = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed) return
+            val keepPolling = if (isDroneConnected()) {
+                !onDroneConnected()
+            } else {
+                true
+            }
+            if (keepPolling) {
+                recoveryHandler.postDelayed(this, CONNECTION_POLL_MS)
+            }
+        }
+    }
+
+    private fun startConnectionWatcher() {
+        recoveryHandler.removeCallbacks(connectionCheck)
+        recoveryHandler.post(connectionCheck)
+    }
+
+    /** Returns true when the default layout is open (or was already auto-launched). */
+    private fun onDroneConnected(): Boolean {
+        noDronePrompt?.dismiss()
+        noDronePrompt = null
+        noDronePromptShown = false
+        if (defaultLayoutAutoLaunched) return true
+        // Start the layout activity directly instead of clicking the showcase button:
+        // the button's click listener is only attached after the SDK's delayed
+        // prepareUxActivity(), so performClick() can silently no-op in that window.
+        defaultLayoutAutoLaunched = true
+        return try {
+            startActivity(Intent(this, WildBridgeDefaultLayoutActivity::class.java))
+            true
+        } catch (_: Exception) {
+            defaultLayoutAutoLaunched = false
+            false
+        }
+    }
+
     override fun prepareUxActivity() {
         UxSharedPreferencesUtil.initialize(this)
         GlobalPreferencesManager.initialize(DefaultGlobalPreferences(this))
@@ -71,6 +118,7 @@ class DJIAircraftMainActivity : DJIMainActivity() {
     override fun onResume() {
         super.onResume()
         scheduleNoDroneRecoveryPrompt()
+        startConnectionWatcher()
     }
 
     override fun onPause() {
@@ -120,5 +168,6 @@ class DJIAircraftMainActivity : DJIMainActivity() {
 
     companion object {
         private const val NO_DRONE_PROMPT_DELAY_MS = 12_000L
+        private const val CONNECTION_POLL_MS = 1_000L
     }
 }

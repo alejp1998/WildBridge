@@ -23,6 +23,45 @@ from video_events import (
 
 PORT = int(os.environ.get("PORT", "8090"))
 TELEMETRY_PORT = int(os.environ.get("TELEMETRY_PORT", "8081"))
+DRONE_HTTP_PORT = int(os.environ.get("DRONE_HTTP_PORT", "8080"))
+
+# Phone settings route table: webapp key -> (phone HTTP path, value coercer)
+SETTING_ROUTES = {
+    "rthAltitude": ("/send/setRTHAltitude", int),
+    "maxFlightHeight": ("/send/setMaxFlightHeight", int),
+    "maxFlightDistance": ("/send/setMaxFlightDistance", int),
+    "distanceLimitEnabled": ("/send/setDistanceLimitEnabled", bool),
+    "droneName": ("/send/setDroneName", str),
+    "videoSource": ("/send/setVideoSource", str),
+    "webrtcResolution": ("/send/setWebRtcResolution", str),
+    "webrtcFps": ("/send/setWebRtcFps", int),
+    "detectionsEnabled": ("/send/setDetectionsEnabled", bool),
+    "detectionSource": ("/send/setDetectionSource", str),
+    "edgeConfidenceThreshold": ("/send/setEdgeConfidence", float),
+    "mediamtxServer": ("/send/setMediamtxServer", str),
+    "rcControlMode": ("/send/setRcControlMode", str),
+}
+
+# Read-write action endpoints (no value body) mirrored from the phone HTTP surface.
+RC_ACTIONS = {
+    "/rcPairing/start": "/send/rcPairing/start",
+    "/rcPairing/stop": "/send/rcPairing/stop",
+}
+
+
+def _coerce_setting_value(key, coerce, value):
+    """Coerce a webapp setting value to the phone payload; raises ValueError on bad input."""
+    if coerce is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("true", "1", "on"):
+                return True
+            if lowered in ("false", "0", "off"):
+                return False
+        raise ValueError(f"Invalid boolean value for {key}")
+    return coerce(value)
 DISCOVERY_INTERVAL_MS = int(os.environ.get("DISCOVERY_INTERVAL_MS", "5000"))
 MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", "http://127.0.0.1:9997").rstrip("/")
 MEDIAMTX_WEBRTC_URL = os.environ.get("MEDIAMTX_WEBRTC_URL", "http://127.0.0.1:8889").rstrip("/")
@@ -54,6 +93,13 @@ lock = threading.RLock()
 sse_clients: list[Any] = []
 telemetry_threads: dict[str, threading.Thread] = {}
 telemetry_stop_events: dict[str, threading.Event] = {}
+# Latest report from the ros-monitor container (POST /api/ros-status).
+ROS_STATUS: dict[str, Any] = {}
+
+
+def ros_status_snapshot():
+    with lock:
+        return dict(ROS_STATUS)
 
 
 def utc_now():
@@ -498,6 +544,12 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
+    def end_headers(self):
+        # The dashboard is rebuilt frequently; never let the browser serve stale
+        # JS/CSS/HTML after a redeploy.
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
@@ -567,6 +619,101 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self.send_json(502, {"error": f"Failed to send command to phone: {exc!s}"})
 
+    def _drone_ip(self, name):
+        with lock:
+            drone = drones.get(name)
+            return drone.get("ip") if drone else None
+
+    def handle_settings_get(self, path):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) != 4:  # /api/drones/<name>/settings
+            self.send_error(404)
+            return
+        name = unquote(parts[2])
+        ip = self._drone_ip(name)
+        if not ip:
+            self.send_json(400, {"error": "Drone IP not available (not discovered yet)"})
+            return
+        try:
+            req = urllib.request.Request(f"http://{ip}:{DRONE_HTTP_PORT}/config/settings")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                raw = resp.read().decode("utf-8")
+            try:
+                settings = json.loads(raw)
+            except json.JSONDecodeError:
+                settings = {"raw": raw}
+            self.send_json(200, {"ok": True, "settings": settings})
+        except Exception as exc:
+            self.send_json(502, {"error": f"Failed to read settings from phone: {exc!s}"})
+
+    def handle_settings_post(self, path):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) != 5:  # /api/drones/<name>/settings/<key>
+            self.send_error(404)
+            return
+        name = unquote(parts[2])
+        key = parts[4]
+        route = SETTING_ROUTES.get(key)
+        if not route:
+            self.send_json(400, {"error": f"Unknown setting key: {key}"})
+            return
+        phone_path, coerce = route
+        body = self.read_json_body()
+        value = body.get("value")
+        if value is None:
+            self.send_json(400, {"error": "Missing value parameter"})
+            return
+        try:
+            normalized = _coerce_setting_value(key, coerce, value)
+        except ValueError as exc:
+            self.send_json(400, {"error": str(exc)})
+            return
+        payload = str(normalized).lower() if isinstance(normalized, bool) else str(normalized)
+        ip = self._drone_ip(name)
+        if not ip:
+            self.send_json(400, {"error": "Drone IP not available (not discovered yet)"})
+            return
+        try:
+            req = urllib.request.Request(
+                f"http://{ip}:{DRONE_HTTP_PORT}{phone_path}",
+                data=payload.encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "text/plain"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                reply = resp.read().decode("utf-8")
+            self.send_json(200, {"ok": True, "key": key, "value": payload, "message": reply})
+        except Exception as exc:
+            self.send_json(502, {"error": f"Failed to send command to phone: {exc!s}"})
+
+    def handle_rc_action_post(self, path):
+        """POST /api/drones/<name>/rcPairing/start|stop -> phone action endpoint."""
+        action = None
+        name = None
+        for suffix, phone_path in RC_ACTIONS.items():
+            if path.endswith(suffix):
+                action = phone_path
+                name = path[: -len(suffix)].rstrip("/").rsplit("/", 1)[-1]
+                break
+        if action is None or not name:
+            self.send_error(404)
+            return
+        ip = self._drone_ip(name)
+        if not ip:
+            self.send_json(400, {"error": "Drone IP not available (not discovered yet)"})
+            return
+        try:
+            req = urllib.request.Request(
+                f"http://{ip}:{DRONE_HTTP_PORT}{action}",
+                data=b"",
+                method="POST",
+                headers={"Content-Type": "text/plain"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                reply = resp.read().decode("utf-8")
+            self.send_json(200, {"ok": True, "action": action, "message": reply})
+        except Exception as exc:
+            self.send_json(502, {"error": f"Failed to send command to phone: {exc!s}"})
 
     def handle_client_stats_post(self):
         try:
@@ -576,6 +723,18 @@ class Handler(SimpleHTTPRequestHandler):
                 if drone_name in drones:
                     drones[drone_name]["browserStats"] = body
             log_event("browser_stats", **body)
+            self.send_response(204)
+            self.end_headers()
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
+    def handle_ros_status_post(self):
+        """Store the latest ros-monitor report (posted by the container)."""
+        try:
+            body = self.read_json_body()
+            with lock:
+                ROS_STATUS.clear()
+                ROS_STATUS.update(body)
             self.send_response(204)
             self.end_headers()
         except Exception as exc:
@@ -605,6 +764,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/logs":
             self.send_json(200, {"eventLog": str(EVENT_LOG)})
             return
+        if path == "/api/ros-status":
+            self.send_json(200, ros_status_snapshot())
+            return
+        if path.startswith("/api/drones/") and path.endswith("/settings"):
+            self.handle_settings_get(path)
+            return
         super().do_GET()
 
     def do_POST(self):
@@ -613,11 +778,20 @@ class Handler(SimpleHTTPRequestHandler):
             discover_now()
             self.send_json(202, {"ok": True})
             return
+        if path == "/api/ros-status":
+            self.handle_ros_status_post()
+            return
         if path.startswith("/api/drones/") and path.endswith("/ignore"):
             self.handle_ignore_post(path)
             return
         if path.startswith("/api/drones/") and path.endswith("/streaming/mode"):
             self.handle_streaming_mode_post(path)
+            return
+        if path.startswith("/api/drones/") and any(path.endswith(s) for s in RC_ACTIONS):
+            self.handle_rc_action_post(path)
+            return
+        if "/settings/" in path and path.startswith("/api/drones/"):
+            self.handle_settings_post(path)
             return
         if path == "/api/client-stats":
             self.handle_client_stats_post()

@@ -48,6 +48,43 @@ EP_ABORT_DJI_NATIVE_MISSION = "/send/abort/DJIMission"
 EP_SET_RTH_ALTITUDE = "/send/setRTHAltitude"
 EP_DEACTIVATE_MANUAL_OVERRIDE = "/send/deactivateManualOverride"
 
+# --- WildBridge settings endpoints (mirror of the phone HTTP surface) ---
+EP_SET_MAX_FLIGHT_HEIGHT = "/send/setMaxFlightHeight"
+EP_SET_MAX_FLIGHT_DISTANCE = "/send/setMaxFlightDistance"
+EP_SET_DISTANCE_LIMIT_ENABLED = "/send/setDistanceLimitEnabled"
+EP_SET_DRONE_NAME = "/send/setDroneName"
+EP_SET_VIDEO_SOURCE = "/send/setVideoSource"
+EP_SET_WEBRTC_RESOLUTION = "/send/setWebRtcResolution"
+EP_SET_WEBRTC_FPS = "/send/setWebRtcFps"
+EP_SET_DETECTIONS_ENABLED = "/send/setDetectionsEnabled"
+EP_SET_DETECTION_SOURCE = "/send/setDetectionSource"
+EP_SET_EDGE_CONFIDENCE = "/send/setEdgeConfidence"
+EP_SET_MEDIAMTX_SERVER = "/send/setMediamtxServer"
+EP_STREAMING_MODE = "/send/streaming/mode"
+EP_SET_RC_CONTROL_MODE = "/send/setRcControlMode"
+EP_RC_PAIRING_START = "/send/rcPairing/start"
+EP_RC_PAIRING_STOP = "/send/rcPairing/stop"
+EP_GET_SETTINGS = "/config/settings"
+
+# Maps the webapp/dashboard setting key to the phone HTTP endpoint that writes it.
+# Every value is sent as the raw request body, which is what the phone parses.
+SETTING_ENDPOINTS: dict[str, str] = {
+    "rthAltitude": EP_SET_RTH_ALTITUDE,
+    "maxFlightHeight": EP_SET_MAX_FLIGHT_HEIGHT,
+    "maxFlightDistance": EP_SET_MAX_FLIGHT_DISTANCE,
+    "distanceLimitEnabled": EP_SET_DISTANCE_LIMIT_ENABLED,
+    "droneName": EP_SET_DRONE_NAME,
+    "videoSource": EP_SET_VIDEO_SOURCE,
+    "webrtcResolution": EP_SET_WEBRTC_RESOLUTION,
+    "webrtcFps": EP_SET_WEBRTC_FPS,
+    "detectionsEnabled": EP_SET_DETECTIONS_ENABLED,
+    "detectionSource": EP_SET_DETECTION_SOURCE,
+    "edgeConfidenceThreshold": EP_SET_EDGE_CONFIDENCE,
+    "mediamtxServer": EP_SET_MEDIAMTX_SERVER,
+    "streamingMode": EP_STREAMING_MODE,
+    "rcControlMode": EP_SET_RC_CONTROL_MODE,
+}
+
 # --- payload, thermal, media and waypoint endpoints from the XPRIZE release ---
 EP_CAPTURE_THERMAL_IMAGE = "/send/captureThermalImage"
 EP_CAPTURE_TEMPERATURE = "/send/captureTemperature"  # temperature-only read, no shutter
@@ -76,6 +113,17 @@ def get_config(ip_address: str) -> dict[str, Any] | None:
             return json.loads(response.text)
     except Exception as exc:
         print(f"Failed to get config from {ip_address}: {exc}")
+    return None
+
+
+def get_settings(ip_address: str) -> dict[str, Any] | None:
+    """Query the full WildBridge settings JSON via HTTP GET /config/settings."""
+    try:
+        response = requests.get(f"http://{ip_address}:8080/config/settings", timeout=2.0)
+        if response.status_code == 200:
+            return json.loads(response.text)
+    except Exception as exc:
+        print(f"Failed to get settings from {ip_address}: {exc}")
     return None
 
 
@@ -424,6 +472,33 @@ class DJIInterface:
 
     def requestSetRTHAltitude(self, altitude):
         return self.requestSend(EP_SET_RTH_ALTITUDE, str(altitude))
+
+    def requestSetSetting(self, key: str, value) -> str:
+        """Set a single WildBridge setting by webapp key.
+
+        The phone parses the raw request body for every /send/set* endpoint, so the
+        value is sent as a string body (same as requestSetRTHAltitude). Returns the
+        phone's response text, or "" for an unknown key or a failed request.
+        """
+        endpoint = SETTING_ENDPOINTS.get(key)
+        if endpoint is None:
+            print(f"Unknown setting key: {key}")
+            return ""
+        return self.requestSend(endpoint, str(value))
+
+    def getSettings(self) -> dict[str, Any] | None:
+        """Read the full settings JSON via GET /config/settings."""
+        if self.IP_RC == "":
+            return None
+        return get_settings(self.IP_RC)
+
+    def requestRcPairingStart(self) -> str:
+        """Start RC pairing (RC <-> aircraft link)."""
+        return self.requestSend(EP_RC_PAIRING_START, "")
+
+    def requestRcPairingStop(self) -> str:
+        """Stop RC pairing (RC <-> aircraft link)."""
+        return self.requestSend(EP_RC_PAIRING_STOP, "")
 
     def requestDeactivateManualOverride(self):
         return self.requestSend(EP_DEACTIVATE_MANUAL_OVERRIDE, "")

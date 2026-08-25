@@ -13,6 +13,6 @@ echo ""
 echo "Starting ROS node with auto-discovery..."
 echo "========================================================"
 
-# Launch with auto-discovery wrapper
-exec ros2 run wildbridge_mavros auto_mavros_bridge
+# Auto-discover WildBridge drones and launch one dji_node per drone
+exec ros2 launch wildview_bringup auto_discovery_native.launch.py
 

@@ -7,6 +7,7 @@ const videoChartsGrid = document.querySelector('#videoChartsGrid');
 const telemetryChartsGrid = document.querySelector('#telemetryChartsGrid');
 const publishTargets = document.querySelector('#publishTargets');
 const publishGrid = document.querySelector('#publishGrid');
+const settingsGrid = document.querySelector('#settingsGrid');
 const tileTemplate = document.querySelector('#tileTemplate');
 const droneModal = document.querySelector('#droneModal');
 const modalCloseBtn = document.querySelector('#modalCloseBtn');
@@ -23,6 +24,7 @@ const modalStreamingPath = document.querySelector('#modalStreamingPath');
 
 const players = new Map();
 const healthCards = new Map();
+const settingsCards = new Map();
 const telemetryCards = new Map();
 const chartInstances = new Map();
 const chartHistory = new Map();
@@ -134,31 +136,6 @@ const publishCatalog = [
     ['AutoSensing Status', 'POST', '/get/autoSensing/status', '', 'Returns AutoSensing enablement and target count.'],
     ['AutoSensing Targets', 'POST', '/get/autoSensing/targets', '', 'Returns the current detected target array from the phone app.'],
     ['Config', 'GET', '/config', '', 'Reads IP, drone name, and port configuration from the phone app.'],
-  ]],
-];
-
-const rosPublishCatalog = [
-  ['ROS Services', 'ROS 2 service calls exposed by wildbridge_mavros. These call the bridge node on the ground station, which then forwards to the phone HTTP/DJI path.', [
-    ['Takeoff', 'service', '/mavros/cmd/takeoff', 'std_srvs/srv/Trigger', 'ros2 service call /DRONE_NS/mavros/cmd/takeoff std_srvs/srv/Trigger {}', 'Requests DJI takeoff through the MAVROS-compatible bridge.'],
-    ['Land', 'service', '/mavros/cmd/land', 'std_srvs/srv/Trigger', 'ros2 service call /DRONE_NS/mavros/cmd/land std_srvs/srv/Trigger {}', 'Requests landing through the bridge.'],
-    ['Return To Launch', 'service', '/mavros/cmd/rtl', 'std_srvs/srv/Trigger', 'ros2 service call /DRONE_NS/mavros/cmd/rtl std_srvs/srv/Trigger {}', 'Requests DJI return-to-home through a MAVROS-style RTL route.'],
-    ['Arming Compatibility', 'service', '/mavros/cmd/arming', 'std_srvs/srv/SetBool', 'ros2 service call /DRONE_NS/mavros/cmd/arming std_srvs/srv/SetBool "{data: true}"', 'Compatibility route. DJI aircraft effectively arm on takeoff; false maps to landing.'],
-    ['Enable Offboard', 'service', '/mavros/set_mode/offboard', 'std_srvs/srv/Trigger', 'ros2 service call /DRONE_NS/mavros/set_mode/offboard std_srvs/srv/Trigger {}', 'Enables virtual stick/offboard-style control before velocity setpoints.'],
-    ['Abort Mission', 'service', '/wildbridge/abort_mission', 'std_srvs/srv/Trigger', 'ros2 service call /DRONE_NS/wildbridge/abort_mission std_srvs/srv/Trigger {}', 'WildBridge-specific stop path for the current mission.'],
-  ]],
-  ['ROS Setpoint Topics', 'ROS topics you publish to when controlling the drone from ROS. Use /DRONE_NS when the bridge is launched with a namespace such as /mini1.', [
-    ['Local Position Setpoint', 'topic', '/mavros/setpoint_position/local', 'geometry_msgs/msg/PoseStamped', 'ros2 topic pub /DRONE_NS/mavros/setpoint_position/local geometry_msgs/msg/PoseStamped "{pose: {position: {x: 5.0, y: 0.0, z: 20.0}}}"', 'Local x/y/z setpoint converted by the bridge into a GPS waypoint using the current home position.'],
-    ['Global Position Setpoint', 'topic', '/mavros/setpoint_position/global', 'sensor_msgs/msg/NavSatFix', 'ros2 topic pub /DRONE_NS/mavros/setpoint_position/global sensor_msgs/msg/NavSatFix "{latitude: 55.6761, longitude: 12.5683, altitude: 35.0}"', 'Direct GPS waypoint in decimal degrees and meters.'],
-    ['Velocity Setpoint', 'topic', '/mavros/setpoint_velocity/cmd_vel', 'geometry_msgs/msg/TwistStamped', 'ros2 topic pub /DRONE_NS/mavros/setpoint_velocity/cmd_vel geometry_msgs/msg/TwistStamped "{twist: {linear: {x: 1.0, y: 0.0, z: 0.0}, angular: {z: 0.1}}}"', 'Velocity command mapped to virtual stick. Enable offboard/virtual stick first.'],
-    ['Attitude/Gimbal Setpoint', 'topic', '/mavros/setpoint_attitude/attitude', 'geometry_msgs/msg/PoseStamped', 'ros2 topic pub /DRONE_NS/mavros/setpoint_attitude/attitude geometry_msgs/msg/PoseStamped "{pose: {orientation: {w: 1.0}}}"', 'Used by the bridge as a gimbal/attitude command path; pitch is extracted for gimbal control.'],
-  ]],
-  ['ROS Telemetry Topics', 'Topics published by the bridge from phone telemetry. These are not commands, but they are what downstream ROS nodes should subscribe to for state.', [
-    ['Connection State', 'topic', '/mavros/state/connected', 'std_msgs/msg/Bool', 'ros2 topic echo /DRONE_NS/mavros/state/connected', 'True when the bridge believes the phone/drone interface is connected.'],
-    ['Mode', 'topic', '/mavros/state/mode', 'std_msgs/msg/String', 'ros2 topic echo /DRONE_NS/mavros/state/mode', 'PX4/MAVROS-style mode translated from DJI flight mode.'],
-    ['Global Position', 'topic', '/mavros/global_position/global', 'sensor_msgs/msg/NavSatFix', 'ros2 topic echo /DRONE_NS/mavros/global_position/global', 'GPS latitude, longitude, and altitude from phone telemetry.'],
-    ['Local Pose', 'topic', '/mavros/local_position/pose', 'geometry_msgs/msg/PoseStamped', 'ros2 topic echo /DRONE_NS/mavros/local_position/pose', 'Flat-earth local pose relative to the home location.'],
-    ['Battery', 'topic', '/mavros/battery', 'sensor_msgs/msg/BatteryState', 'ros2 topic echo /DRONE_NS/mavros/battery', 'Battery percentage normalized to 0.0-1.0.'],
-    ['WildBridge Distance Home', 'topic', '/wildbridge/distance_to_home', 'std_msgs/msg/Float64', 'ros2 topic echo /DRONE_NS/wildbridge/distance_to_home', 'WildBridge-specific distance-to-home telemetry in meters.'],
   ]],
 ];
 
@@ -606,12 +583,406 @@ function render(state) {
   renderVideoTiles(state);
   renderHealthPanels(state);
   renderTelemetryPanels(state);
+  renderSettingsPanel(state);
   renderPublishTargets(state);
   renderPublishCatalog();
   if (selectedDroneName) updateModalForDrone(selectedDroneName);
   updateTelemetryChartSamples(state);
   updateCharts();
 }
+
+// ---- Remote settings panel (phone /config/settings + setters via server proxy) ----
+function renderSettingsPanel(state) {
+  for (const drone of state.drones) {
+    let card = settingsCards.get(drone.name);
+    if (!card) {
+      card = createSettingsCard(drone.name);
+      settingsCards.set(drone.name, card);
+      settingsGrid.appendChild(card.element);
+      loadSettings(drone.name); // auto-load on first appearance
+    }
+    const ip = drone.ip || drone.discoveredIp || 'no ip';
+    card.subtitle.textContent = `${ip} \u00b7 telemetry ${drone.telemetryConnected ? 'ok' : 'down'}`;
+  }
+  for (const [name, card] of settingsCards.entries()) {
+    if (!state.drones.some((drone) => drone.name === name)) {
+      card.element.remove();
+      settingsCards.delete(name);
+    }
+  }
+}
+
+function createSettingsCard(name) {
+  const element = document.createElement('div');
+  element.className = 'healthCard settingsCard';
+  element.innerHTML = `
+    <div class="healthHeader">
+      <div><h3>${escapeHtml(name)}</h3><p data-role="subtitle">not loaded</p></div>
+      <button type="button" class="settingsLoad" data-role="load">Refresh</button>
+    </div>
+    <div class="settingsBody" data-role="body" hidden>
+      <dl class="settingsReadonly"></dl>
+      <div class="settingsFields"></div>
+      <div class="settingsStatus" data-role="status"></div>
+    </div>`;
+  element.querySelector('[data-role="load"]').addEventListener('click', () => loadSettings(name));
+  return {
+    element,
+    subtitle: element.querySelector('[data-role="subtitle"]'),
+    body: element.querySelector('[data-role="body"]'),
+    readonly: element.querySelector('.settingsReadonly'),
+    fields: element.querySelector('.settingsFields'),
+    status: element.querySelector('[data-role="status"]'),
+    busy: false,
+  };
+}
+
+async function loadSettings(name) {
+  const card = settingsCards.get(name);
+  if (!card || card.busy) return;
+  card.busy = true;
+  card.status.textContent = 'Loading\u2026';
+  try {
+    const resp = await fetch(`/api/drones/${encodeURIComponent(name)}/settings`);
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    renderSettingsValues(card, name, data.settings);
+    card.status.textContent = `Loaded ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    card.status.textContent = `Error: ${err.message}`;
+  } finally {
+    card.busy = false;
+  }
+}
+
+function renderSettingsValues(card, name, s) {
+  const ro = [
+    ['Drone name', s.droneName],
+    ['Detected aircraft', s.detectedAircraft],
+    ['Control profile', s.controlProfile],
+    ['Video source', s.videoSource],
+    ['Streaming mode', s.streamingMode],
+    ['WebRTC', `${s.webrtcResolution} @ ${s.webrtcFps}fps`],
+    ['Detection', `${s.detectionSource} (${s.detectionsEnabled ? 'on' : 'off'})`],
+    ['Edge confidence', s.edgeConfidenceThreshold],
+    ['RC stick mode', s.rcControlMode],
+    ['RC pairing', s.rcPairingStatus],
+    ['HD frequency band', s.hdFrequencyBand],
+  ];
+  card.readonly.innerHTML = ro
+    .map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v ?? 'n/a'))}</dd></div>`)
+    .join('');
+
+  const fields = [
+    { key: 'droneName', label: 'Drone name', type: 'text', value: s.droneName },
+    { key: 'videoSource', label: 'Video source', type: 'select', options: ['drone', 'phone', 'mock'], value: s.videoSource },
+    { key: 'streamingMode', label: 'Streaming protocol', type: 'select', options: ['webrtc', 'rtsp', 'rtmp', 'agora', 'gb28181'], value: s.streamingMode, endpoint: '/streaming/mode', payloadKey: 'mode' },
+    { key: 'webrtcResolution', label: 'WebRTC resolution', type: 'select', options: ['auto', '1080p', '720p', '480p'], value: s.webrtcResolution },
+    { key: 'webrtcFps', label: 'WebRTC FPS', type: 'select', options: ['5', '10', '15', '20', '25', '30'], value: s.webrtcFps != null ? String(s.webrtcFps) : '' },
+    { key: 'mediamtxServer', label: 'MediaMTX server (blank = auto)', type: 'text', value: s.mediamtxServer || '' },
+    { key: 'rthAltitude', label: 'RTH altitude (m)', type: 'number', value: s.rthAltitude },
+    { key: 'maxFlightHeight', label: 'Max flight height (m)', type: 'number', value: s.maxFlightHeight },
+    { key: 'maxFlightDistance', label: 'Max distance from home (m)', type: 'number', value: s.maxFlightDistance },
+    { key: 'distanceLimitEnabled', label: 'Distance limit enabled', type: 'checkbox', value: s.distanceLimitEnabled },
+    { key: 'detectionsEnabled', label: 'Detections enabled', type: 'checkbox', value: s.detectionsEnabled },
+    { key: 'detectionSource', label: 'Detection source', type: 'select', options: ['none', 'dji_onboard', 'yolo_on_phone'], value: s.detectionSource },
+    { key: 'edgeConfidenceThreshold', label: 'Edge confidence', type: 'select', options: ['0.10', '0.15', '0.20', '0.25', '0.30', '0.40', '0.50', '0.60', '0.70'], value: s.edgeConfidenceThreshold != null ? String(s.edgeConfidenceThreshold) : '' },
+    { key: 'rcControlMode', label: 'RC stick mode', type: 'select', options: ['jp', 'usa', 'ch', 'custom'], value: s.rcControlMode },
+  ];
+  // Group metadata comes from the settings payload itself (phone /config/settings "groups"),
+  // so older phone builds without it render flat and newer ones render sectioned.
+  const groups = (s && s.groups) || {};
+  const groupLabels = { identity: 'Identity', video: 'Video & streaming', flight: 'Flight limits', detection: 'Detection', rc: 'Remote controller' };
+  card.fields.innerHTML = '';
+  let currentGroup = null;
+  for (const f of fields) {
+    const fgroup = groups[f.key] || null;
+    if (fgroup && fgroup !== currentGroup) {
+      currentGroup = fgroup;
+      const header = document.createElement('div');
+      header.className = 'settingsGroupLabel';
+      header.textContent = groupLabels[fgroup] || fgroup;
+      card.fields.appendChild(header);
+    }
+    const row = document.createElement('div');
+    row.className = 'settingsFieldRow';
+    const label = document.createElement('label');
+    label.textContent = f.label;
+    row.appendChild(label);
+    let input;
+    if (f.type === 'checkbox') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!f.value;
+    } else if (f.type === 'select') {
+      input = document.createElement('select');
+      for (const opt of f.options) {
+        const o = document.createElement('option');
+        o.value = opt;
+        o.textContent = opt;
+        if (String(f.value) === opt) o.selected = true;
+        input.appendChild(o);
+      }
+    } else {
+      input = document.createElement('input');
+      input.type = f.type;
+      input.value = f.value == null ? '' : String(f.value);
+      if (f.type === 'number') input.step = '1';
+    }
+    row.appendChild(input);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Apply';
+    btn.className = 'settingsApply';
+    btn.addEventListener('click', async () => {
+      if (card.busy) return;
+      card.busy = true;
+      const value = f.type === 'checkbox' ? input.checked : input.value;
+      const endpoint = f.endpoint || `/settings/${f.key}`;
+      const payload = f.payloadKey ? { [f.payloadKey]: value } : { value };
+      card.status.textContent = 'Sending\u2026';
+      let applied = false;
+      try {
+        const resp = await fetch(`/api/drones/${encodeURIComponent(name)}${endpoint}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        applied = resp.ok && data.ok;
+        card.status.textContent =
+          applied ? `OK: ${data.message}` : `Error: ${data.error || 'HTTP ' + resp.status}`;
+      } catch (err) {
+        card.status.textContent = `Error: ${err.message}`;
+      } finally {
+        card.busy = false;
+      }
+      if (applied) loadSettings(name); // reflect the new value immediately
+    });
+    row.appendChild(btn);
+    card.fields.appendChild(row);
+  }
+
+  // RC pairing actions (start / stop pairing between RC and aircraft)
+  const pairingRow = document.createElement('div');
+  pairingRow.className = 'settingsFieldRow';
+  const pairingLabel = document.createElement('label');
+  pairingLabel.textContent = 'RC pairing';
+  pairingRow.appendChild(pairingLabel);
+  for (const [action, labelText] of [['start', 'Start'], ['stop', 'Stop']]) {
+    const pbtn = document.createElement('button');
+    pbtn.type = 'button';
+    pbtn.textContent = labelText;
+    pbtn.className = 'settingsApply';
+    pbtn.addEventListener('click', async () => {
+      if (card.busy) return;
+      card.busy = true;
+      card.status.textContent = 'Sending\u2026';
+      try {
+        const resp = await fetch(`/api/drones/${encodeURIComponent(name)}/rcPairing/${action}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        });
+        const data = await resp.json();
+        card.status.textContent =
+          resp.ok && data.ok ? `OK: ${data.message}` : `Error: ${data.error || 'HTTP ' + resp.status}`;
+      } catch (err) {
+        card.status.textContent = `Error: ${err.message}`;
+      } finally {
+        card.busy = false;
+      }
+      loadSettings(name); // reflect pairing status immediately
+    });
+    pairingRow.appendChild(pbtn);
+  }
+  card.fields.appendChild(pairingRow);
+  card.body.hidden = false;
+}
+
+// Auto-refresh settings so the panel mirrors the phones without manual clicks.
+// Skipped while a card has an in-flight request or an input is focused (editing).
+function refreshSettingsPeriodically() {
+  for (const [name, card] of settingsCards.entries()) {
+    if (card.busy) continue;
+    if (card.element.contains(document.activeElement)) continue;
+    loadSettings(name);
+  }
+}
+setInterval(refreshSettingsPeriodically, 10_000);
+
+// ---- ROS 2 bridge status (reported by the ros-monitor container) ----
+// Built once and patched in place on every poll: rebuilding the whole tree
+// via innerHTML (as this used to) destroys and recreates the scrollable
+// table containers each time, which reset their scroll position to the top.
+const rosStatus = document.querySelector('#rosStatus');
+let rosElements = null;
+let latestRosReport = null;
+const rosSelectedDrone = { published: null, subscribed: null };
+
+function createRosTopicTable(kind, title, blurb) {
+  const element = document.createElement('div');
+  element.className = 'healthCard rosTopics';
+  element.innerHTML = `<div class="healthHeader"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(blurb)}</p></div><div class="rosDronePicker"><span class="rosDronePickerLabel">Drone</span><select class="rosDroneSelect" data-role="droneSelect" aria-label="Select drone"></select><span class="pill" data-role="phonePill"></span></div></div><div class="rosTableWrap"><table class="rosTable"><thead><tr><th>Topic</th><th>Type</th><th>Rate</th><th>Last update</th><th>Last value</th></tr></thead><tbody></tbody></table></div>`;
+  const select = element.querySelector('[data-role="droneSelect"]');
+  select.addEventListener('change', () => {
+    rosSelectedDrone[kind] = select.value || null;
+    if (latestRosReport) renderRosStatus(latestRosReport);
+  });
+  return { element, tbody: element.querySelector('tbody'), rows: new Map(), select, phonePill: element.querySelector('[data-role="phonePill"]') };
+}
+
+function ensureRosElements() {
+  if (rosElements) return rosElements;
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'healthCard rosSummary';
+  summaryEl.innerHTML = `<div class="healthHeader"><div><h3>ros-monitor</h3><p data-role="timestamp"></p></div><span class="pill" data-role="statusPill"></span></div><dl class="healthMetrics" data-role="metrics"></dl>`;
+
+  const pubTable = createRosTopicTable('published', 'Published topics', 'Telemetry and state topics published by the selected drone’s DjiNode, rates over a 3 s window.');
+  const subTable = createRosTopicTable('subscribed', 'Subscribed topics (command surface)', 'Command topics the selected drone’s DjiNode consumes. They only show traffic when a command is actually sent.');
+
+  const columns = document.createElement('div');
+  columns.className = 'rosColumns col5050';
+  columns.append(pubTable.element, subTable.element);
+
+  rosStatus.replaceChildren(summaryEl, columns);
+  rosElements = { summaryEl, pubTable, subTable };
+  return rosElements;
+}
+
+function updateRosDroneSelect(table, kind, names) {
+  const existing = Array.from(table.select.options, (option) => option.value);
+  const changed = existing.length !== names.length || existing.some((value, i) => value !== names[i]);
+  if (changed) {
+    table.select.replaceChildren(...names.map((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      return option;
+    }));
+    if (!names.includes(rosSelectedDrone[kind])) rosSelectedDrone[kind] = names[0] || null;
+  }
+  table.select.disabled = names.length === 0;
+  if (rosSelectedDrone[kind] && table.select.value !== rosSelectedDrone[kind]) table.select.value = rosSelectedDrone[kind];
+}
+
+function updateRosDronePhonePill(table, droneReport) {
+  const pill = table.phonePill;
+  if (!droneReport) {
+    updateText(pill, 'no drone');
+    updateClass(pill, 'pill');
+    return;
+  }
+  updateText(pill, droneReport.phoneReachable ? 'phone ok' : 'phone down');
+  updateClass(pill, `pill ${droneReport.phoneReachable ? 'good' : 'warn'}`);
+}
+
+function updateRosTopicTable(table, entries) {
+  const seen = new Set();
+  for (const [topic, t] of entries) {
+    seen.add(topic);
+    let row = table.rows.get(topic);
+    if (!row) {
+      row = document.createElement('tr');
+      row.innerHTML = '<td><code></code></td><td data-role="type"></td><td data-role="rate"></td><td data-role="fresh"></td><td><span class="rosLastValue" data-role="lastValue"></span></td>';
+      updateText(row.querySelector('code'), topic);
+      table.tbody.appendChild(row);
+      table.rows.set(topic, row);
+    }
+    const tone = t.seen ? 'good' : 'warn';
+    const rateCell = row.querySelector('[data-role="rate"]');
+    updateText(rateCell, t.seen ? `${t.rate_hz} Hz` : '—');
+    updateClass(rateCell, `rate ${tone}`);
+    const freshCell = row.querySelector('[data-role="fresh"]');
+    updateText(freshCell, t.seen ? (t.seconds_ago == null ? 'never' : `${t.seconds_ago}s ago`) : 'not seen');
+    updateClass(freshCell, tone);
+    updateText(row.querySelector('[data-role="type"]'), t.type);
+    const last = t.last_value == null ? '-' : String(t.last_value);
+    const lastValueEl = row.querySelector('[data-role="lastValue"]');
+    updateText(lastValueEl, last);
+    lastValueEl.title = last;
+  }
+  for (const [topic, row] of table.rows.entries()) {
+    if (!seen.has(topic)) {
+      row.remove();
+      table.rows.delete(topic);
+    }
+  }
+}
+
+function renderRosStatus(report) {
+  if (!report) return;
+  latestRosReport = report;
+  const { summaryEl, pubTable, subTable } = ensureRosElements();
+  const drones = report.drones || {};
+  const droneNames = Object.keys(drones);
+  const droneCount = report.droneCount ?? droneNames.length;
+  const reachableCount = droneNames.filter((name) => drones[name].phoneReachable).length;
+  const totalTopics = droneNames.reduce((sum, name) => sum + (drones[name].topicCount || 0), 0);
+
+  updateText(summaryEl.querySelector('[data-role="timestamp"]'), report.generatedAt || '');
+  const pillEl = summaryEl.querySelector('[data-role="statusPill"]');
+  updateText(pillEl, droneCount > 0 ? `${droneCount} drone${droneCount === 1 ? '' : 's'} bridged` : 'no drones bridged');
+  updateClass(pillEl, `pill ${droneCount > 0 ? 'good' : 'warn'}`);
+  updateDetailList(summaryEl.querySelector('[data-role="metrics"]'), [
+    ['droneCount', 'Drones bridged', droneCount],
+    ['phoneReachable', 'Phones reachable', `${reachableCount} / ${droneCount}`],
+    ['topicsTracked', 'Topics tracked (total)', totalTopics],
+  ]);
+
+  updateRosDroneSelect(pubTable, 'published', droneNames);
+  updateRosDroneSelect(subTable, 'subscribed', droneNames);
+
+  const pubDrone = drones[rosSelectedDrone.published];
+  const subDrone = drones[rosSelectedDrone.subscribed];
+  const pubEntries = pubDrone ? Object.entries(pubDrone.topics).filter(([t]) => !t.startsWith('command/')) : [];
+  const subEntries = subDrone ? Object.entries(subDrone.topics).filter(([t]) => t.startsWith('command/')) : [];
+  updateRosTopicTable(pubTable, pubEntries);
+  updateRosTopicTable(subTable, subEntries);
+  updateRosDronePhonePill(pubTable, pubDrone);
+  updateRosDronePhonePill(subTable, subDrone);
+}
+
+async function loadRosStatus() {
+  try {
+    const resp = await fetch('/api/ros-status');
+    if (!resp.ok) return;
+    const report = await resp.json();
+    if (report && report.generatedAt) renderRosStatus(report);
+  } catch (err) {
+    /* dashboard not ready or monitor offline; keep previous view */
+  }
+}
+setInterval(loadRosStatus, 3000);
+loadRosStatus();
+
+// ---- Theme toggle (System / Light / Dark segmented control) ----
+const themeToggle = document.querySelector('#themeToggle');
+
+function applyTheme(theme) {
+  const light = theme === 'light'
+    || (theme !== 'dark' && window.matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.classList.toggle('light', light);
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('wb-theme') || 'system';
+  themeToggle.querySelectorAll('[data-theme]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.theme === saved);
+  });
+  applyTheme(saved);
+  themeToggle.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-theme]');
+    if (!btn) return;
+    localStorage.setItem('wb-theme', btn.dataset.theme);
+    themeToggle.querySelectorAll('[data-theme]').forEach((b) => b.classList.toggle('active', b === btn));
+    applyTheme(btn.dataset.theme);
+  });
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if ((localStorage.getItem('wb-theme') || 'system') === 'system') applyTheme('system');
+  });
+}
+initTheme();
 
 function renderVideoTiles(state) {
   for (const drone of state.drones) {
@@ -853,7 +1224,6 @@ function renderPublishTargets(state) {
 function renderPublishCatalog() {
   if (publishGrid.childElementCount) return;
   renderHttpPublishCatalog();
-  renderRosPublishCatalog();
 }
 
 function renderHttpPublishCatalog() {
@@ -867,22 +1237,6 @@ function renderHttpPublishCatalog() {
       item.className = 'publishItem';
       const requestLine = method === 'GET' ? `${method} http://DRONE_IP:8080${endpoint}` : `${method} http://DRONE_IP:8080${endpoint}\nBody: ${commandBody || '(empty)'}`;
       item.innerHTML = `<div class="publishItemHeader"><h4>${escapeHtml(title)}</h4><span class="publishMeta">${escapeHtml(method)} ${escapeHtml(endpoint)}</span></div><p class="publishDescription">${escapeHtml(commandDescription)}</p><pre class="publishCode">${escapeHtml(requestLine)}</pre>`;
-      body.appendChild(item);
-    }
-    publishGrid.appendChild(card);
-  }
-}
-
-function renderRosPublishCatalog() {
-  for (const [groupTitle, description, commands] of rosPublishCatalog) {
-    const card = document.createElement('section');
-    card.className = 'publishCard rosPublishCard';
-    card.innerHTML = `<div class="publishCardHeader"><div><h3>${escapeHtml(groupTitle)}</h3><p>${escapeHtml(description)}</p></div><span class="publishChannel ros">ROS 2</span></div><div class="publishCardBody"></div>`;
-    const body = card.querySelector('.publishCardBody');
-    for (const [title, kind, endpoint, typeName, example, commandDescription] of commands) {
-      const item = document.createElement('article');
-      item.className = 'publishItem';
-      item.innerHTML = `<div class="publishItemHeader"><h4>${escapeHtml(title)}</h4><span class="publishMeta">${escapeHtml(kind)} ${escapeHtml(endpoint)}</span></div><p class="publishDescription">${escapeHtml(commandDescription)}</p><div class="publishType">${escapeHtml(typeName)}</div><pre class="publishCode">${escapeHtml(example)}</pre>`;
       body.appendChild(item);
     }
     publishGrid.appendChild(card);
@@ -1086,12 +1440,19 @@ function ensureCharts(groupName) {
     card.className = 'chartCard';
     card.innerHTML = `<div class="chartTitle"><h3>${definition.title}</h3><span>${definition.unit}</span></div><div class="chartCanvas"></div>`;
     chartsGrid.appendChild(card);
+    const chartIsLight = document.documentElement.classList.contains('light');
     const chart = window.LightweightCharts.createChart(card.querySelector('.chartCanvas'), {
       autoSize: true,
-      layout: { background: { color: '#1a1d20' }, textColor: '#edf1f4' },
-      grid: { vertLines: { color: '#2b3137' }, horzLines: { color: '#2b3137' } },
-      timeScale: { timeVisible: true, secondsVisible: true, borderColor: '#343b42' },
-      rightPriceScale: { borderColor: '#343b42' },
+      layout: {
+        background: { color: chartIsLight ? '#ffffff' : '#131a24' },
+        textColor: chartIsLight ? '#10151d' : '#e8edf3',
+      },
+      grid: {
+        vertLines: { color: chartIsLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.06)' },
+        horzLines: { color: chartIsLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.06)' },
+      },
+      timeScale: { timeVisible: true, secondsVisible: true, borderColor: chartIsLight ? 'rgba(15,23,42,0.15)' : 'rgba(255,255,255,0.12)' },
+      rightPriceScale: { borderColor: chartIsLight ? 'rgba(15,23,42,0.15)' : 'rgba(255,255,255,0.12)' },
       crosshair: { mode: 1 },
     });
     chartInstances.set(chartKey, { chart, card, series: new Map() });
@@ -1424,17 +1785,31 @@ if (modalStreamingSelect) {
 droneModal.addEventListener('close', closeDroneModal);
 droneModal.addEventListener('click', (event) => { if (event.target === droneModal) closeDroneModal(); });
 
+// ---- Guide modal ----
+const guideModal = document.querySelector('#guideModal');
+document.querySelector('#guideBtn').addEventListener('click', () => { if (!guideModal.open) guideModal.showModal(); });
+document.querySelector('#guideCloseBtn').addEventListener('click', () => guideModal.close());
+guideModal.addEventListener('click', (event) => { if (event.target === guideModal) guideModal.close(); });
+
+// ---- Tab activation (persisted in the URL hash so a refresh/back-button keeps the view) ----
+const validTabs = new Set(Array.from(document.querySelectorAll('.tabButton'), (button) => button.dataset.tab));
+
+function activateTab(tab, { pushHistory = true } = {}) {
+  if (!validTabs.has(tab)) return;
+  document.querySelectorAll('.tabButton').forEach((item) => item.classList.toggle('active', item.dataset.tab === tab));
+  document.querySelectorAll('.tabPanel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
+  if (pushHistory && location.hash.slice(1) !== tab) history.replaceState(null, '', `#${tab}`);
+  if (tab === 'videoCharts' || tab === 'telemetryCharts') {
+    updateCharts(tab);
+    setTimeout(() => updateCharts(tab), 50);
+  }
+}
+
 document.querySelectorAll('.tabButton').forEach((button) => {
-  button.addEventListener('click', () => {
-    const tab = button.dataset.tab;
-    document.querySelectorAll('.tabButton').forEach((item) => item.classList.toggle('active', item === button));
-    document.querySelectorAll('.tabPanel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
-    if (tab === 'videoCharts' || tab === 'telemetryCharts') {
-      updateCharts(tab);
-      setTimeout(() => updateCharts(tab), 50);
-    }
-  });
+  button.addEventListener('click', () => activateTab(button.dataset.tab));
 });
+window.addEventListener('hashchange', () => activateTab(location.hash.slice(1), { pushHistory: false }));
+activateTab(validTabs.has(location.hash.slice(1)) ? location.hash.slice(1) : 'video', { pushHistory: false });
 
 const events = new EventSource('/api/events');
 events.onmessage = (event) => {

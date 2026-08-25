@@ -81,6 +81,49 @@ def test_command_helpers_format_requests():
     ]
 
 
+def test_request_set_setting_maps_key_to_endpoint():
+    client = RecordingDJIInterface()
+
+    assert client.requestSetSetting("maxFlightHeight", "120") == "ok"
+    assert client.requestSetSetting("distanceLimitEnabled", "true") == "ok"
+    assert client.requestSetSetting("streamingMode", "webrtc") == "ok"
+    assert client.requestSetSetting("rcControlMode", "jp") == "ok"
+    assert client.requestSetSetting("unknownKey", "x") == ""
+
+    assert client.calls == [
+        ("/send/setMaxFlightHeight", "120", False),
+        ("/send/setDistanceLimitEnabled", "true", False),
+        ("/send/streaming/mode", "webrtc", False),
+        ("/send/setRcControlMode", "jp", False),
+    ]
+
+
+def test_request_rc_pairing_actions():
+    client = RecordingDJIInterface()
+
+    assert client.requestRcPairingStart() == "ok"
+    assert client.requestRcPairingStop() == "ok"
+
+    assert client.calls == [
+        ("/send/rcPairing/start", "", False),
+        ("/send/rcPairing/stop", "", False),
+    ]
+
+
+def test_get_settings_parses_json(monkeypatch):
+    class Response:
+        status_code = 200
+        text = '{"droneName": "mini1", "videoSource": "drone"}'
+
+    monkeypatch.setattr(
+        "wildbridge_groundstation.dji_client.requests.get",
+        lambda url, timeout: Response(),
+    )
+    client = DJIInterface("192.168.1.42")
+
+    assert client.getSettings() == {"droneName": "mini1", "videoSource": "drone"}
+
+
 def test_stop_telemetry_closes_socket_and_joins_thread():
     class Socket:
         def __init__(self):
