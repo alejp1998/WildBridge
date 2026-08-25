@@ -469,6 +469,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private var gimbalAttitudeKey: DJIKey<Attitude> = GimbalKey.KeyGimbalAttitude.create()
     private var gimbalJointAttitudeKey: DJIKey<Attitude> = GimbalKey.KeyGimbalJointAttitude.create()
     private val compassHeadKey: DJIKey<Double> = FlightControllerKey.KeyCompassHeading.create()
+    private val altitudeKey: DJIKey<Double> = FlightControllerKey.KeyAltitude.create()
     private val homeLocationKey: DJIKey<LocationCoordinate2D> = FlightControllerKey.KeyHomeLocation.create()
     private val flightSpeedKey: DJIKey<Velocity3D> = FlightControllerKey.KeyAircraftVelocity.create()
     private val attitudeKey: DJIKey<Attitude> = FlightControllerKey.KeyAircraftAttitude.create()
@@ -3695,6 +3696,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     // ==================== Telemetry Data ====================
 
     private fun getLocation3D(): LocationCoordinate3D = location3DKey.get(LocationCoordinate3D(0.0, 0.0, .0))
+    private fun getAltitude(): Double = altitudeKey.get(0.0)
     private fun getSatelliteCount(): Int = satelliteCountKey.get(-1)
     private fun getGimbalAttitude(): Attitude = gimbalAttitudeKey.get(Attitude(0.0, 0.0, 0.0))
     private fun getGimbalJointAttitude(): Attitude = gimbalJointAttitudeKey.get(Attitude(0.0, 0.0, 0.0))
@@ -3791,6 +3793,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 heading = sdkMock.heading,
                 attitude = sdkMock.attitude.toString(),
                 location = sdkMock.location.toString(),
+                altitudeAGL = sdkMock.altitudeAGL,
                 gimbalAttitude = sdkMock.gimbalAttitude.toString(),
                 batteryPercent = sdkMock.batteryPercent,
                 satelliteCount = sdkMock.satelliteCount,
@@ -3843,6 +3846,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         telemetryCoordinator.heading = getHeading()
         telemetryCoordinator.attitude = getAttitude()
         telemetryCoordinator.location = location
+        telemetryCoordinator.altitudeASL = location.altitude
+        telemetryCoordinator.altitudeAGL = getAltitude()
         telemetryCoordinator.gimbalAttitude = getGimbalAttitude()
         telemetryCoordinator.gimbalJointAttitude = getGimbalJointAttitude()
         telemetryCoordinator.zoomFl = getCameraZoomFocalLength()

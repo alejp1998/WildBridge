@@ -254,8 +254,8 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
                     AUTONOMOUS_COMMAND_REJECTED
                 } else {
                     val yaw = postData.split(",")[0].toDouble()
-                    DroneController.gotoYaw(yaw)
-                    "Received: yaw: $yaw"
+                    val seq = DroneController.gotoYaw(yaw)
+                    "YAW_ACCEPTED seq=$seq Yaw=$yaw"
                 }
             },
             "/send/gotoAltitude" to { postData ->
@@ -263,8 +263,8 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
                     AUTONOMOUS_COMMAND_REJECTED
                 } else {
                     val targetAltitude = postData.split(",")[0].toDouble()
-                    DroneController.gotoAltitude(targetAltitude)
-                    "Received: Altitude: $targetAltitude"
+                    val seq = DroneController.gotoAltitude(targetAltitude)
+                    "ALTITUDE_ACCEPTED seq=$seq Altitude: $targetAltitude"
                 }
             },
             "/send/camera/zoom" to { postData ->

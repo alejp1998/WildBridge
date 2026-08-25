@@ -71,6 +71,9 @@ class TelemetryCoordinatorTest {
         
         val locationObj = json.getJSONObject("location")
         assertEquals(55.123, locationObj.getDouble("latitude"), 0.001)
+
+        // Barometric altitude relative to takeoff (KeyAltitude)
+        assertEquals(20.5, json.getDouble("altitude"), 0.001)
         
         assertEquals(82, json.getInt("batteryLevel"))
         assertEquals(18, json.getInt("satelliteCount"))
@@ -108,6 +111,7 @@ class TelemetryCoordinatorTest {
             heading = 90.0,
             attitude = """{"pitch":0.0,"roll":0.0,"yaw":90.0}""",
             location = """{"latitude":55.0,"longitude":12.0,"altitude":20.0}""",
+            altitudeAGL = 20.0,
             gimbalAttitude = """{"pitch":-15.0,"roll":0.0,"yaw":90.0}""",
             batteryPercent = 90,
             satelliteCount = 15,
@@ -125,6 +129,8 @@ class TelemetryCoordinatorTest {
         val json = JSONObject(jsonString)
 
         assertEquals("mock_drone", json.getString("droneName"))
+
+        assertEquals(20.0, json.getDouble("altitude"), 0.001)
         
         val speedObj = json.getJSONObject("speed")
         assertEquals(1.0, speedObj.getDouble("x"), 0.001)

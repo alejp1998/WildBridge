@@ -9,6 +9,7 @@ data class MockTelemetrySnapshot(
     val heading: Double,
     val attitude: String,
     val location: String,
+    val altitudeAGL: Double,
     val gimbalAttitude: String,
     val batteryPercent: Int,
     val satelliteCount: Int,
