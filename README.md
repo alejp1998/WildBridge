@@ -773,7 +773,7 @@ This work is part of the **WildDrone** project, funded by the European Union's H
 
 ## Contributors
 
-Additional WildBridge development and field testing contributors:
+Major contributors to WildBridge's development and field testing who are not listed as authors on the paper above:
 
 - [Alejandro Jarabo-Peñas](https://alejp.me)
 - [Juan Bravo-Arrabal](https://www.linkedin.com/in/juan-bravo-arrabal)
