@@ -9,6 +9,7 @@ via the WildBridge app. The node handles both command reception and telemetry pu
 
 import ast
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import numpy as np
@@ -20,7 +21,29 @@ from requests.exceptions import RequestException
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool, Empty, Float64, Float64MultiArray, Int32, String
 
-from dji_controller.submodules.dji_interface import *
+from dji_controller.submodules.dji_interface import DJIInterface, get_config
+
+# Command ack responses from the app have drifted across builds: newer ones embed
+# the seq ('WAYPOINT_ACCEPTED seq=5 ...'), older ones return bare text
+# ('Received: Altitude: 40.0'). Parse defensively — a malformed ack must never
+# raise inside a subscription callback, which would kill the whole node.
+_SEQ_RE = re.compile(r'\bseq=(\d+)', re.IGNORECASE)
+
+
+def parse_ack_seq(response):
+    """Extract the command seq from an app ack, or -1 when unknown/unparseable."""
+    if response is None:
+        return -1
+    text = str(response).strip()
+    if not text:
+        return -1
+    match = _SEQ_RE.search(text)
+    if match:
+        return int(match.group(1))
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return -1
 
 
 class DjiNode(Node):
@@ -132,6 +155,7 @@ class DjiNode(Node):
         self.heading_pub = self.create_publisher(Float64, 'heading', 10)
         self.attitude_pub = self.create_publisher(String, 'attitude', 10)
         self.location_pub = self.create_publisher(NavSatFix, 'location', 10)
+        self.altitude_pub = self.create_publisher(Float64, 'altitude', 10)
         self.gimbal_attitude_pub = self.create_publisher(
             String, 'gimbal_attitude', 10)
         self.gimbal_joint_attitude_pub = self.create_publisher(
@@ -337,7 +361,7 @@ class DjiNode(Node):
 
         seq = self.dji_interface.requestSendGoToWaypointNoseForward(
             latitude, longitude, altitude, yaw, speed)
-        self.waypoint_ack_pub.publish(Int32(data=int(seq) if seq is not None else -1))
+        self.waypoint_ack_pub.publish(Int32(data=parse_ack_seq(seq)))
 
     def goto_waypoint_hold_heading_callback(self, msg: Float64MultiArray):
         """Navigate to waypoint holding `yaw` for the whole flight (body-frame projection), so the
@@ -362,7 +386,12 @@ class DjiNode(Node):
         or legacy format: "[(lat, lon, alt), (lat, lon, alt), ...]"
         """
         self.get_logger().info("Received DJI native trajectory command.")
-        data = ast.literal_eval(msg.data)
+        try:
+            data = ast.literal_eval(msg.data)
+        except (ValueError, SyntaxError, TypeError) as exc:
+            self.get_logger().warning(
+                f"Malformed DJI native trajectory payload, ignoring: {exc}")
+            return
 
         # Support both formats: (speed, waypoints) tuple or just waypoints list
         if isinstance(data, tuple) and len(data) == 2:
@@ -378,12 +407,12 @@ class DjiNode(Node):
     def goto_yaw_callback(self, msg):
         self.get_logger().info("Received goto yaw command.")
         seq = self.dji_interface.requestSendGotoYaw(msg.data)
-        self.yaw_ack_pub.publish(Int32(data=int(seq) if seq is not None else -1))
+        self.yaw_ack_pub.publish(Int32(data=parse_ack_seq(seq)))
 
     def goto_altitude_callback(self, msg):
         self.get_logger().info("Received goto altitude command.")
         seq = self.dji_interface.requestSendGotoAltitude(msg.data)
-        self.altitude_ack_pub.publish(Int32(data=int(seq) if seq is not None else -1))
+        self.altitude_ack_pub.publish(Int32(data=parse_ack_seq(seq)))
 
     def gimbal_pitch_callback(self, msg):
         self.get_logger().info("Received gimbal pitch command.")
@@ -553,6 +582,11 @@ class DjiNode(Node):
                 longitude=float(location.get('longitude', 0.0)),
                 altitude=float(location.get('altitude', 0.0))
             ))
+
+            # Barometric altitude relative to takeoff (app's KeyAltitude — the
+            # same value the app's own altitude widget displays)
+            self.altitude_pub.publish(
+                Float64(data=float(telemetry.get('altitude', 0.0))))
 
             # Gimbal
             gimbal_attitude = telemetry.get('gimbalAttitude', {})
