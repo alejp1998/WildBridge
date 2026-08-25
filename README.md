@@ -260,16 +260,29 @@ Settings can be viewed and changed for each drone from the **Settings** tab: it 
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoTestTab.png" width="100%"><br><sub><b>Video</b><br>Live WHIP/WHEP tiles per drone with quick FPS/loss/telemetry stats</sub></td>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/HealthTab.png" width="100%"><br><sub><b>Health</b><br>Correlated phone/sender/MediaMTX/browser diagnostics, worst symptom first</sub></td>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoChartsTab.png" width="100%"><br><sub><b>Video Charts</b><br>Decoded FPS, bitrate, packet loss, and jitter over time</sub></td>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/TelemetryTab.png" width="100%"><br><sub><b>Telemetry</b><br>Full nested live state tree per drone</sub></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoTestTab.png" width="100%"></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/HealthTab.png" width="100%"></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoChartsTab.png" width="100%"></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/TelemetryTab.png" width="100%"></td>
   </tr>
   <tr>
-    <td align="center"><img src="WildBridgeReadmePics/TelemetryChartsTab.png" width="100%"><br><sub><b>Telemetry Charts</b><br>Battery, satellites, altitude, and Wi-Fi RSSI over time</sub></td>
-    <td align="center"><img src="WildBridgeReadmePics/SettingsTab.png" width="100%"><br><sub><b>Settings</b><br>View and change DJI/app settings per drone over HTTP</sub></td>
-    <td align="center"><img src="WildBridgeReadmePics/PublishTab.png" width="100%"><br><sub><b>Publish</b><br>Full phone HTTP command catalog for manual testing</sub></td>
-    <td align="center"><img src="WildBridgeReadmePics/RosTab.png" width="100%"><br><sub><b>ROS</b><br>Per-drone ROS topic liveness and rates from ros-monitor</sub></td>
+    <td align="center"><sub><b>Video</b><br>Live WHIP/WHEP tiles per drone with quick FPS/loss/telemetry stats</sub></td>
+    <td align="center"><sub><b>Health</b><br>Correlated phone/sender/MediaMTX/browser diagnostics, worst symptom first</sub></td>
+    <td align="center"><sub><b>Video Charts</b><br>Decoded FPS, bitrate, packet loss, and jitter over time</sub></td>
+    <td align="center"><sub><b>Telemetry</b><br>Full nested live state tree per drone</sub></td>
+  </tr>
+  <tr><td colspan="4">&nbsp;</td></tr>
+  <tr>
+    <td align="center"><img src="WildBridgeReadmePics/TelemetryChartsTab.png" width="100%"></td>
+    <td align="center"><img src="WildBridgeReadmePics/SettingsTab.png" width="100%"></td>
+    <td align="center"><img src="WildBridgeReadmePics/PublishTab.png" width="100%"></td>
+    <td align="center"><img src="WildBridgeReadmePics/RosTab.png" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Telemetry Charts</b><br>Battery, satellites, altitude, and Wi-Fi RSSI over time</sub></td>
+    <td align="center"><sub><b>Settings</b><br>View and change DJI/app settings per drone over HTTP</sub></td>
+    <td align="center"><sub><b>Publish</b><br>Full phone HTTP command catalog for manual testing</sub></td>
+    <td align="center"><sub><b>ROS</b><br>Per-drone ROS topic liveness and rates from ros-monitor</sub></td>
   </tr>
 </table>
 
