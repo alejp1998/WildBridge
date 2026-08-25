@@ -56,6 +56,27 @@ internal interface WildBridgeCommandHost {
     val currentDetectedTargets: List<DetectedTarget>
     var lrfTargetLocation: LocationCoordinate3D?
 
+    /** Full settings snapshot (app prefs + DJI flight limits) as JSON, for GET /config/settings. */
+    fun readSettingsJson(): String
+
+    /** Set the drone name pref; returns false when the name is rejected. */
+    fun setDroneName(name: String): Boolean
+
+    /** Set the video source (drone/phone/mock); false when rejected. */
+    fun setVideoSource(value: String): Boolean
+    /** Set the WebRTC resolution preset (auto/1080p/720p/480p); false when rejected. */
+    fun setWebRtcResolution(value: String): Boolean
+    /** Set the WebRTC frame rate (5/10/15/20/25/30); false when rejected. */
+    fun setWebRtcFps(value: Int): Boolean
+    /** Toggle detections. */
+    fun setDetectionsEnabled(enabled: Boolean)
+    /** Set the detection source (none/dji_onboard/yolo_on_phone); false when rejected. */
+    fun setDetectionSource(value: String): Boolean
+    /** Set the edge confidence threshold; false when rejected. */
+    fun setEdgeConfidence(threshold: Float): Boolean
+    /** Set the MediaMTX WHIP server (blank = auto/client IP); false when rejected. */
+    fun setMediamtxServer(value: String): Boolean
+
     fun restartActiveStreaming()
     fun setStreamingMode(mode: StreamingMode)
     fun startAutoSensing()
@@ -305,6 +326,120 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
                     "RTH altitude set to $altitude m"
                 } else {
                     "Invalid altitude value"
+                }
+            },
+            "/send/setMaxFlightHeight" to { postData ->
+                val height = postData.toIntOrNull()
+                if (height != null) {
+                    DroneController.setMaxFlightHeight(height)
+                    "Max flight height set to $height m"
+                } else {
+                    "Invalid height value"
+                }
+            },
+            "/send/setMaxFlightDistance" to { postData ->
+                val distance = postData.toIntOrNull()
+                if (distance != null) {
+                    DroneController.setMaxFlightDistance(distance)
+                    "Max flight distance set to $distance m"
+                } else {
+                    "Invalid distance value"
+                }
+            },
+            "/send/setDistanceLimitEnabled" to { postData ->
+                when (postData.trim().lowercase()) {
+                    "true", "1", "on", "enable" -> {
+                        DroneController.setDistanceLimitEnabled(true)
+                        "Distance limit enabled"
+                    }
+                    "false", "0", "off", "disable" -> {
+                        DroneController.setDistanceLimitEnabled(false)
+                        "Distance limit disabled"
+                    }
+                    else -> "Invalid value (use true/false)"
+                }
+            },
+            "/send/setRcControlMode" to { postData ->
+                val mode = postData.trim().lowercase()
+                if (DroneController.setRcControlMode(mode)) {
+                    "RC control mode set to $mode"
+                } else {
+                    "Invalid control mode (jp|usa|ch|custom)"
+                }
+            },
+            "/send/rcPairing/start" to {
+                DroneController.requestRcPairing()
+                "RC pairing requested"
+            },
+            "/send/rcPairing/stop" to {
+                DroneController.stopRcPairing()
+                "RC pairing stopped"
+            },
+            "/send/setDroneName" to { postData ->
+                if (host.setDroneName(postData)) {
+                    "Drone name set to ${host.droneName}"
+                } else {
+                    "Invalid name (must be 1-32 non-empty characters)"
+                }
+            },
+            "/send/setVideoSource" to { postData ->
+                val value = postData.trim()
+                if (host.setVideoSource(value)) {
+                    "Video source set to $value"
+                } else {
+                    "Invalid video source (drone|phone|mock)"
+                }
+            },
+            "/send/setWebRtcResolution" to { postData ->
+                val value = postData.trim()
+                if (host.setWebRtcResolution(value)) {
+                    "WebRTC resolution set to $value"
+                } else {
+                    "Invalid resolution (auto|1080p|720p|480p)"
+                }
+            },
+            "/send/setWebRtcFps" to { postData ->
+                val fps = postData.toIntOrNull()
+                if (fps != null && host.setWebRtcFps(fps)) {
+                    "WebRTC FPS set to $fps"
+                } else {
+                    "Invalid FPS (5|10|15|20|25|30)"
+                }
+            },
+            "/send/setDetectionsEnabled" to { postData ->
+                when (postData.trim().lowercase()) {
+                    "true", "1", "on", "enable" -> {
+                        host.setDetectionsEnabled(true)
+                        "Detections enabled"
+                    }
+                    "false", "0", "off", "disable" -> {
+                        host.setDetectionsEnabled(false)
+                        "Detections disabled"
+                    }
+                    else -> "Invalid value (use true/false)"
+                }
+            },
+            "/send/setDetectionSource" to { postData ->
+                val value = postData.trim()
+                if (host.setDetectionSource(value)) {
+                    "Detection source set to $value"
+                } else {
+                    "Invalid source (none|dji_onboard|yolo_on_phone)"
+                }
+            },
+            "/send/setEdgeConfidence" to { postData ->
+                val threshold = postData.toFloatOrNull()
+                if (threshold != null && host.setEdgeConfidence(threshold)) {
+                    "Edge confidence set to $threshold"
+                } else {
+                    "Invalid threshold (0.10-0.70 in 0.05 steps)"
+                }
+            },
+            "/send/setMediamtxServer" to { postData ->
+                if (host.setMediamtxServer(postData)) {
+                    "MediaMTX server set to ${postData.trim()}"
+                } else {
+                    "Invalid server value"
                 }
             },
             "/send/deactivateManualOverride" to {
@@ -599,8 +734,9 @@ internal class SimpleHttpServer(
                     """{"droneName":"${host.droneName}","ipAddress":"$deviceIp","httpPort":$HTTP_PORT,""" +
                         """"telemetryPort":$TELEMETRY_PORT,"videoMode":"whip"}"""
                 }
+                "/config/settings" -> host.readSettingsJson()
                 else -> "Use POST for commands. Telemetry available on port $TELEMETRY_PORT. " +
-                    "Config available at GET /config"
+                    "Config available at GET /config; settings at GET /config/settings"
             }
         }
 

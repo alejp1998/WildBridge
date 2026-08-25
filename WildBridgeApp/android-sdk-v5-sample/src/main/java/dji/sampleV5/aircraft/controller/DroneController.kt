@@ -16,10 +16,17 @@ import dji.sdk.keyvalue.value.flightcontroller.VerticalControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VirtualStickFlightControlParam
 import dji.sdk.keyvalue.value.flightcontroller.YawControlMode
 import dji.sampleV5.aircraft.util.ToastUtils
+import dji.sdk.keyvalue.key.AirLinkKey
 import dji.sdk.keyvalue.key.DJIKey
 import dji.sdk.keyvalue.key.FlightControllerKey
+import dji.sdk.keyvalue.key.RemoteControllerKey
+import dji.sdk.keyvalue.value.airlink.FrequencyBand
+import dji.sdk.keyvalue.value.remotecontroller.ControlMode
+import dji.sdk.keyvalue.value.remotecontroller.PairingState
+import dji.v5.et.action
 import dji.sdk.keyvalue.value.common.LocationCoordinate3D
 import dji.v5.et.create
+import dji.v5.et.listen
 import dji.v5.et.get
 import kotlin.math.PI
 import kotlin.math.abs
@@ -1443,9 +1450,104 @@ object DroneController {
     }
 
     private val goHomeHeightKey: DJIKey<Int> = FlightControllerKey.KeyGoHomeHeight.create()
+    private val maxFlightHeightKey: DJIKey<Int> = FlightControllerKey.KeyHeightLimit.create()
+    private val maxFlightDistanceKey: DJIKey<Int> = FlightControllerKey.KeyDistanceLimit.create()
+    private val distanceLimitEnabledKey: DJIKey<Boolean> = FlightControllerKey.KeyDistanceLimitEnabled.create()
+
+    @Volatile private var cachedRTHAltitude: Int = -1
+    @Volatile private var cachedMaxFlightHeight: Int = -1
+    @Volatile private var cachedMaxFlightDistance: Int = -1
+    @Volatile private var cachedDistanceLimitEnabled: Boolean = false
+    @Volatile private var flightLimitListenersRegistered: Boolean = false
+
+    // .get(default) only reads KeyManager's cache and never triggers a live fetch, so these
+    // stayed at their -1/false fallback forever even with the aircraft connected. Register
+    // persistent listeners (idempotent, same pattern as Payload.kt's setupLaserMeasureListener)
+    // so they reflect the aircraft's real configuration.
+    private fun setupFlightLimitListeners() {
+        if (flightLimitListenersRegistered) return
+        goHomeHeightKey.listen(this) { newValue: Int? -> cachedRTHAltitude = newValue ?: -1 }
+        maxFlightHeightKey.listen(this) { newValue: Int? -> cachedMaxFlightHeight = newValue ?: -1 }
+        maxFlightDistanceKey.listen(this) { newValue: Int? -> cachedMaxFlightDistance = newValue ?: -1 }
+        distanceLimitEnabledKey.listen(this) { newValue: Boolean? -> cachedDistanceLimitEnabled = newValue ?: false }
+        flightLimitListenersRegistered = true
+    }
+
+    fun getRTHAltitude(): Int {
+        setupFlightLimitListeners()
+        return cachedRTHAltitude
+    }
 
     fun setRTHAltitude(altitude: Int) {
         goHomeHeightKey.set(altitude)
         ToastUtils.showToast("RTH altitude set to $altitude m")
+    }
+
+    fun getMaxFlightHeight(): Int {
+        setupFlightLimitListeners()
+        return cachedMaxFlightHeight
+    }
+
+    fun setMaxFlightHeight(height: Int) {
+        maxFlightHeightKey.set(height)
+        ToastUtils.showToast("Max flight height set to $height m")
+    }
+
+    fun getMaxFlightDistance(): Int {
+        setupFlightLimitListeners()
+        return cachedMaxFlightDistance
+    }
+
+    fun setMaxFlightDistance(distance: Int) {
+        maxFlightDistanceKey.set(distance)
+        ToastUtils.showToast("Max flight distance set to $distance m")
+    }
+
+    fun getDistanceLimitEnabled(): Boolean {
+        setupFlightLimitListeners()
+        return cachedDistanceLimitEnabled
+    }
+
+    fun setDistanceLimitEnabled(enabled: Boolean) {
+        distanceLimitEnabledKey.set(enabled)
+        ToastUtils.showToast("Distance limit ${if (enabled) "enabled" else "disabled"}")
+    }
+
+    // --- RC stick mode (ControlMode: JP / USA / CH / CUSTOM) ---
+    private val controlModeKey: DJIKey<ControlMode> = RemoteControllerKey.KeyControlMode.create()
+
+    fun getRcControlMode(): String = controlModeKey.get(ControlMode.UNKNOWN).name.lowercase()
+
+    fun setRcControlMode(value: String): Boolean {
+        val mode = runCatching { ControlMode.valueOf(value.uppercase()) }.getOrNull()
+            ?: return false
+        if (mode == ControlMode.UNKNOWN) return false
+        controlModeKey.set(mode)
+        ToastUtils.showToast("RC control mode set to ${mode.name}")
+        return true
+    }
+
+    // --- RC pairing state + start/stop pairing actions ---
+    private val pairingStatusKey: DJIKey<PairingState> = RemoteControllerKey.KeyPairingStatus.create()
+
+    fun getRcPairingStatus(): String = pairingStatusKey.get(PairingState.UNKNOWN).name.lowercase()
+
+    fun requestRcPairing() {
+        RemoteControllerKey.KeyRequestPairing.create().action()
+        ToastUtils.showToast("RC pairing requested")
+    }
+
+    fun stopRcPairing() {
+        RemoteControllerKey.KeyStopPairing.create().action()
+        ToastUtils.showToast("RC pairing stopped")
+    }
+
+    // --- HD transmission frequency band (read-only info) ---
+    private val frequencyBandKey: DJIKey<FrequencyBand> = AirLinkKey.KeyFrequencyBand.create()
+
+    fun getHdFrequencyBand(): String = when (frequencyBandKey.get(FrequencyBand.UNKNOWN)) {
+        FrequencyBand.BAND_2_DOT_4G, FrequencyBand.BAND_1_DOT_4G -> "2.4g"
+        FrequencyBand.BAND_MULTI -> "5g"
+        else -> "unknown"
     }
 }

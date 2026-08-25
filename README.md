@@ -256,15 +256,22 @@ docker compose -f compose.video-test.yaml ps
 
 Runtime diagnostics are written under `GroundStation/video_test/logs/`. Those logs are intentionally ignored by git.
 
-![Video test dashboard](WildBridgeReadmePics/VideoTestTab.png)
+Settings can be viewed and changed for each drone from the **Settings** tab: it reads and writes DJI flight limits (RTH altitude, max height/distance), RC pairing and stick mode, and app/video settings over HTTP, and shows read-only rows for the drone name, the detected aircraft model, and the control profile (speed/PID/gimbal profile) automatically selected for it — so you can confirm the right profile is active without opening the app on the phone.
 
-![Health tab](WildBridgeReadmePics/HealthTab.png)
-
-![Telemetry tab](WildBridgeReadmePics/TelemetryTab.png)
-
-![Telemetry charts tab](WildBridgeReadmePics/TelemetryChartsTab.png)
-
-![Video charts tab](WildBridgeReadmePics/VideoChartsTab.png)
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoTestTab.png" width="100%"><br><sub><b>Video</b><br>Live WHIP/WHEP tiles per drone with quick FPS/loss/telemetry stats</sub></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/HealthTab.png" width="100%"><br><sub><b>Health</b><br>Correlated phone/sender/MediaMTX/browser diagnostics, worst symptom first</sub></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoChartsTab.png" width="100%"><br><sub><b>Video Charts</b><br>Decoded FPS, bitrate, packet loss, and jitter over time</sub></td>
+    <td align="center" width="25%"><img src="WildBridgeReadmePics/TelemetryTab.png" width="100%"><br><sub><b>Telemetry</b><br>Full nested live state tree per drone</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="WildBridgeReadmePics/TelemetryChartsTab.png" width="100%"><br><sub><b>Telemetry Charts</b><br>Battery, satellites, altitude, and Wi-Fi RSSI over time</sub></td>
+    <td align="center"><img src="WildBridgeReadmePics/SettingsTab.png" width="100%"><br><sub><b>Settings</b><br>View and change DJI/app settings per drone over HTTP</sub></td>
+    <td align="center"><img src="WildBridgeReadmePics/PublishTab.png" width="100%"><br><sub><b>Publish</b><br>Full phone HTTP command catalog for manual testing</sub></td>
+    <td align="center"><img src="WildBridgeReadmePics/RosTab.png" width="100%"><br><sub><b>ROS</b><br>Per-drone ROS topic liveness and rates from ros-monitor</sub></td>
+  </tr>
+</table>
 
 ---
 
@@ -543,12 +550,12 @@ GroundStation/ROS/
 │   ├── controller.py        # DjiNode: 45+ topics, 20 Hz timer
 │   └── submodules/dji_interface.py
 └── wildview_bringup/
-    ├── auto_discovery.launch.py
-    ├── auto_discovery_native.launch.py
+    ├── auto_discovery_native.launch.py  # one namespaced dji_node per discovered drone, re-scans periodically
+    ├── swarm_connection.launch.py
     └── config/parameters.yaml
 ```
 
-### Published Topics (per drone namespace `/drone_N/`)
+### Published Topics (per drone namespace, e.g. `/mini1/`)
 
 | Topic | Type | Description |
 |-------|------|-------------|
@@ -644,11 +651,11 @@ The image is based on `ros:humble` with CycloneDDS, `cv-bridge`, `vision-opencv`
 ```bash
 cd GroundStation/ROS
 colcon build --symlink-install && source install/setup.bash
-ros2 launch wildview_bringup auto_discovery.launch.py
+ros2 launch wildview_bringup auto_discovery_native.launch.py
 
-# Example commands
-ros2 topic pub /drone_1/command/takeoff std_msgs/msg/Empty "{}"
-ros2 topic pub /drone_1/command/goto_waypoint_nose_forward std_msgs/msg/Float64MultiArray \
+# Example commands (namespace is the drone's own name, e.g. "mini1")
+ros2 topic pub /mini1/command/takeoff std_msgs/msg/Empty "{}"
+ros2 topic pub /mini1/command/goto_waypoint_nose_forward std_msgs/msg/Float64MultiArray \
   "data: [49.306254, 4.593728, 20.0, 90.0, 5.0]"
 ```
 

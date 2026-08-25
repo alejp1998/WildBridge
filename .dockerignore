@@ -1,0 +1,28 @@
+# Docker build context exclusion for builds that use the repository root as
+# context (e.g. the ros-monitor image). Keeps the context small and avoids
+# shipping build artifacts, secrets, or the Android tree into the image.
+.git
+**/build
+**/outputs
+**/__pycache__
+**/*.pyc
+**/.venv
+*.apk
+*.ndjson
+local.properties
+google-services.json
+INTERNAL.md
+WildBridgeApp
+GroundStation/video_test/logs
+GroundStation/video_test/webapp
+GroundStation/tests
+GroundStation/Python/test_scripts
+GroundStation/ROS/drone_videofeed
+GroundStation/ROS/wildview_bringup
+# ...except the launch file the ros-monitor image reuses for auto-discovery.
+!GroundStation/ROS/wildview_bringup/launch/auto_discovery_native.launch.py
+GroundStation/ROS/requirements.txt
+compose.video-test.yaml
+verify-integration.sh
+README.md
+LICENSE

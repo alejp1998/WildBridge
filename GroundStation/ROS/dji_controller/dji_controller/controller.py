@@ -90,6 +90,10 @@ class DjiNode(Node):
         self.create_subscription(
             Float64, 'command/set_rth_altitude', self.set_rth_altitude_callback, 10)
 
+        # Generic settings write: payload is 'key=value' (webapp setting keys)
+        self.create_subscription(
+            String, 'command/set_setting', self.set_setting_callback, 10)
+
         # Virtual stick control subscriber (leftX, leftY, rightX, rightY)
         self.create_subscription(
             Float64MultiArray, 'command/stick', self.stick_callback, 10)
@@ -233,6 +237,10 @@ class DjiNode(Node):
         # Timer to publish telemetry at regular intervals
         # Publish every 1/20 second (50ms)
         self.create_timer(0.05, self.publish_states)
+
+        # Settings snapshot at 1 Hz (settings change rarely; telemetry stays at 20 Hz)
+        self.settings_pub = self.create_publisher(String, 'state/settings', 10)
+        self.create_timer(1.0, self.publish_settings)
 
         self.get_logger().info(
             f"DroneNode initialized and connected to IP: {self.ip_rc}")
@@ -400,6 +408,29 @@ class DjiNode(Node):
     def set_rth_altitude_callback(self, msg):
         self.get_logger().info("Received set RTH altitude command.")
         self.dji_interface.requestSetRTHAltitude(msg.data)
+
+    def set_setting_callback(self, msg):
+        """Set a drone/app setting. Payload: 'key=value' (webapp setting keys)."""
+        self.get_logger().info(f"Received set setting command: {msg.data}")
+        text = msg.data.strip()
+        key, sep, value = text.partition('=')
+        key = key.strip()
+        value = value.strip()
+        if not sep or not key or not value:
+            self.get_logger().warning(
+                f"Invalid set_setting payload: {msg.data!r}; expected 'key=value'")
+            return
+        result = self.dji_interface.requestSetSetting(key, value)
+        if result:
+            self.get_logger().info(f"Setting {key} updated: {result}")
+        else:
+            self.get_logger().error(f"Failed to set {key}")
+
+    def publish_settings(self):
+        """Publish the current settings JSON on state/settings."""
+        settings = self.dji_interface.getSettings()
+        if settings is not None:
+            self.settings_pub.publish(String(data=json.dumps(settings)))
 
     def stick_callback(self, msg: Float64MultiArray):
         """Virtual stick control. Expected: [leftX, leftY, rightX, rightY] in range [-1, 1]."""
@@ -625,14 +656,20 @@ class DjiNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = DjiNode()
+    if not rclpy.ok():
+        # DjiNode.__init__ already shut down the context (connection failure);
+        # spinning on a dead context would raise.
+        return
     try:
         rclpy.spin(node)
     finally:
-        # __init__ returns early when the connection check fails, before the pool exists
+        # Guard against a double shutdown (rclpy raises if the context is not
+        # initialized); the pool may not exist if init failed late.
         if getattr(node, 'blocking_calls', None):
             node.blocking_calls.shutdown(wait=False)
-        node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

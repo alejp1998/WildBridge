@@ -1242,6 +1242,114 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = checked
     }
 
+    private fun jsonEscape(value: String): String =
+        value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    override fun readSettingsJson(): String {
+        return buildString {
+            append("{")
+            append("\"droneName\":\"${jsonEscape(droneName)}\",")
+            append("\"videoSource\":\"${getVideoSourceMode().prefValue}\",")
+            append("\"streamingMode\":\"${getStreamingMode().prefValue}\",")
+            append("\"webrtcResolution\":\"${getWebRTCResolutionPreset().prefValue}\",")
+            append("\"webrtcFps\":${getWebRTCFps()},")
+            append("\"detectionSource\":\"${getDetectionSource().prefValue}\",")
+            append("\"detectionsEnabled\":${isDetectionActiveForUi()},")
+            append("\"edgeConfidenceThreshold\":${getEdgeConfidenceThreshold()},")
+            append("\"mediamtxServer\":\"${jsonEscape(getMediamtxServer())}\",")
+            append("\"rthAltitude\":${DroneController.getRTHAltitude()},")
+            append("\"maxFlightHeight\":${DroneController.getMaxFlightHeight()},")
+            append("\"maxFlightDistance\":${DroneController.getMaxFlightDistance()},")
+            append("\"distanceLimitEnabled\":${DroneController.getDistanceLimitEnabled()},")
+            append("\"rcControlMode\":\"${DroneController.getRcControlMode()}\",")
+            append("\"rcPairingStatus\":\"${DroneController.getRcPairingStatus()}\",")
+            append("\"hdFrequencyBand\":\"${DroneController.getHdFrequencyBand()}\",")
+            // Read-only: which aircraft the SDK actually detected and which control profile
+            // (speed limits, PID gains, gimbal/payload wiring) was selected for it, so an
+            // operator can confirm the right profile is active without opening the app.
+            val detectedProductType = productTypeKey.get(ProductType.UNKNOWN) ?: ProductType.UNKNOWN
+            val activeControlProfile = DroneControlProfiles.fromProductType(detectedProductType)
+            append("\"detectedAircraft\":\"${jsonEscape(detectedProductType.name)}\",")
+            append("\"controlProfile\":\"${jsonEscape(activeControlProfile.displayName)}\",")
+            // UI grouping metadata: each setting key maps to a group slug so
+            // consumers (dashboard, ROS, ...) can render settings in sections.
+            append("\"groups\":{")
+            append("\"droneName\":\"identity\",")
+            append("\"detectedAircraft\":\"identity\",")
+            append("\"controlProfile\":\"identity\",")
+            append("\"videoSource\":\"video\",")
+            append("\"streamingMode\":\"video\",")
+            append("\"webrtcResolution\":\"video\",")
+            append("\"webrtcFps\":\"video\",")
+            append("\"mediamtxServer\":\"video\",")
+            append("\"rthAltitude\":\"flight\",")
+            append("\"maxFlightHeight\":\"flight\",")
+            append("\"maxFlightDistance\":\"flight\",")
+            append("\"distanceLimitEnabled\":\"flight\",")
+            append("\"detectionsEnabled\":\"detection\",")
+            append("\"detectionSource\":\"detection\",")
+            append("\"edgeConfidenceThreshold\":\"detection\",")
+            append("\"rcControlMode\":\"rc\"")
+            append("}")
+            append("}")
+        }
+    }
+
+    override fun setDroneName(name: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || trimmed.length > 32) return false
+        droneName = trimmed
+        sharedPreferences.edit().putString(PREF_DRONE_NAME, trimmed).apply()
+        WildBridgeFlightLogger.setDroneName(trimmed)
+        mainHandler.post { updateDroneNameDisplay() }
+        Log.i(TAG, "Drone name set to: $trimmed")
+        return true
+    }
+
+    override fun setVideoSource(value: String): Boolean {
+        val mode = VideoSourceMode.entries.firstOrNull { it.prefValue.equals(value, ignoreCase = true) } ?: return false
+        mainHandler.post { setVideoSourceMode(mode) }
+        return true
+    }
+
+    override fun setWebRtcResolution(value: String): Boolean {
+        val preset = StreamResolutionPreset.entries.firstOrNull { it.prefValue.equals(value, ignoreCase = true) } ?: return false
+        sharedPreferences.edit().putString(PREF_WEBRTC_RESOLUTION, preset.prefValue).apply()
+        mainHandler.post { webRTCStreamer?.changeMediaOptions(buildWebRTCOptions()) }
+        return true
+    }
+
+    override fun setWebRtcFps(value: Int): Boolean {
+        if (!WEBRTC_FPS_OPTIONS.contains(value)) return false
+        sharedPreferences.edit().putInt(PREF_WEBRTC_FPS, value).apply()
+        mainHandler.post { webRTCStreamer?.changeMediaOptions(buildWebRTCOptions()) }
+        return true
+    }
+
+    override fun setDetectionSource(value: String): Boolean {
+        val source = DetectionSource.entries.firstOrNull { it.prefValue.equals(value, ignoreCase = true) } ?: return false
+        mainHandler.post { setDetectionSource(source) }
+        return true
+    }
+
+    override fun setEdgeConfidence(threshold: Float): Boolean {
+        if (EDGE_CONFIDENCE_OPTIONS.none { kotlin.math.abs(it - threshold) < 0.001f }) return false
+        sharedPreferences.edit().putFloat(PREF_EDGE_CONFIDENCE_THRESHOLD, threshold).apply()
+        telemetryCoordinator.edgeConfidenceThreshold = threshold
+        return true
+    }
+
+    override fun setMediamtxServer(value: String): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.length > 200) return false
+        sharedPreferences.edit().putString(PREF_MEDIAMTX_SERVER, trimmed).apply()
+        Log.i(TAG, "Mediamtx server set to: ${if (trimmed.isEmpty()) "auto (client IP)" else trimmed}")
+        return true
+    }
+
+    private fun getMediamtxServer(): String =
+        sharedPreferences.getString(PREF_MEDIAMTX_SERVER, "")?.trim().orEmpty()
+
     override fun readThermalMaxTempNow(): Double? {
         // Make sure the pipeline is armed even if capture is the very first thermal action.
         armThermalMeasurement()
@@ -1983,14 +2091,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private fun getDetectionSource(): DetectionSource {
         val stored = sharedPreferences.getString(PREF_DETECTION_SOURCE, null)
         if (stored == null && sharedPreferences.getBoolean(PREF_EDGE_DETECTION_ENABLED, false)) {
+            // Legacy migration: edge detection used to be a standalone toggle.
             return DetectionSource.YOLO_ON_PHONE
         }
-        return DetectionSource.fromPref(stored).takeIf { it != DetectionSource.NONE } ?: DetectionSource.YOLO_ON_PHONE
+        // "none" (or an unset pref) stays NONE — detections are off by default.
+        return DetectionSource.fromPref(stored)
     }
 
     private fun setDetectionSource(source: DetectionSource) {
-        val selectedSource = source.takeIf { it != DetectionSource.NONE } ?: DetectionSource.YOLO_ON_PHONE
-        if (selectedSource == DetectionSource.DJI_ONBOARD && !aircraftConnected) {
+        if (source == DetectionSource.DJI_ONBOARD && !aircraftConnected) {
             Toast.makeText(this, "DJI onboard detections need a connected drone", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1999,17 +2108,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         stopEdgeDetection()
 
         sharedPreferences.edit()
-            .putString(PREF_DETECTION_SOURCE, selectedSource.prefValue)
+            .putString(PREF_DETECTION_SOURCE, source.prefValue)
             .putBoolean(
                 PREF_EDGE_DETECTION_ENABLED,
-                isDetectionsEnabled() && selectedSource == DetectionSource.YOLO_ON_PHONE
+                isDetectionsEnabled() && source == DetectionSource.YOLO_ON_PHONE
             )
             .apply()
 
         findViewById<Switch>(R.id.sw_auto_sensing)?.isChecked = isDetectionsEnabled()
-            && selectedSource == DetectionSource.DJI_ONBOARD
+            && source == DetectionSource.DJI_ONBOARD
         findViewById<Switch>(R.id.sw_edge_detection)?.isChecked = isDetectionsEnabled()
-            && selectedSource == DetectionSource.YOLO_ON_PHONE
+            && source == DetectionSource.YOLO_ON_PHONE
 
         when (activeDetectionSource()) {
             DetectionSource.NONE -> updateEdgeMetricsView(EdgeDetectionMetrics(status = "off"))
@@ -2022,7 +2131,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         invalidateOptionsMenu()
     }
 
-    private fun setDetectionsEnabled(enabled: Boolean) {
+    override fun setDetectionsEnabled(enabled: Boolean) {
         if (enabled && getDetectionSource() == DetectionSource.DJI_ONBOARD && !aircraftConnected) {
             Toast.makeText(this, "DJI onboard detections need a connected drone", Toast.LENGTH_SHORT).show()
             return

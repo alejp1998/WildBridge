@@ -74,3 +74,6 @@ diagnose_network.py
 # Documentation generated during development
 DISCOVERY_IMPROVEMENTS.md
 ANDROID_FIX_REQUIRED.md
+
+# Team-private notes (contains credentials — never commit)
+INTERNAL.md
