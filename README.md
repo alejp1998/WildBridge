@@ -775,10 +775,8 @@ This work is part of the **WildDrone** project, funded by the European Union's H
 
 Additional WildBridge development and field testing contributors:
 
-- Alejandro Jarabo-Peñas
-- Juan Bravo-Arrabal
-
----
+- [Alejandro Jarabo-Peñas](https://alejp.me)
+- [Juan Bravo-Arrabal](https://www.linkedin.com/in/juan-bravo-arrabal)
 
 ---
 
