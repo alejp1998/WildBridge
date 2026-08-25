@@ -1,0 +1,70 @@
+package dji.sampleV5.aircraft.mavlink
+
+/**
+ * One consistent read of the aircraft state, in plain units, with no DJI SDK types.
+ *
+ * The mavlink package stays free of SDK imports for the same reason `TelemetryCoordinator` does:
+ * the mapping from DJI values to wire values is the part worth testing, and it should not need a
+ * drone (or the SDK on the classpath) to exercise. The host activity builds this from the same
+ * accessors that feed the JSON telemetry cache, so the two surfaces cannot report different
+ * numbers for the same instant.
+ *
+ * Unknown values use the conventions the MAVLink field documentation specifies rather than a
+ * plausible-looking zero — see the `INVALID_*` constants.
+ */
+internal data class MavlinkSnapshot(
+    val droneName: String = "",
+
+    // Position. Altitudes in metres: [altitudeAslM] above mean sea level, [altitudeAglM]
+    // relative to the take-off point.
+    val latitudeDeg: Double = 0.0,
+    val longitudeDeg: Double = 0.0,
+    val altitudeAslM: Double = 0.0,
+    val altitudeAglM: Double = 0.0,
+
+    // Velocity in the NED frame, metres per second. Down is positive.
+    val velocityNorthMps: Double = 0.0,
+    val velocityEastMps: Double = 0.0,
+    val velocityDownMps: Double = 0.0,
+
+    // Attitude and heading in degrees. [headingDeg] is true north, as DJI reports it.
+    val rollDeg: Double = 0.0,
+    val pitchDeg: Double = 0.0,
+    val yawDeg: Double = 0.0,
+    val headingDeg: Double = 0.0,
+
+    val satelliteCount: Int = INVALID_SATELLITES,
+
+    /** Battery charge 0..100, or [INVALID_BATTERY] when the SDK has not reported one yet. */
+    val batteryPercent: Int = INVALID_BATTERY,
+    /** Seconds of flight remaining, or 0 meaning "no estimate provided" per BATTERY_STATUS. */
+    val remainingFlightTimeS: Int = 0,
+
+    val homeLatitudeDeg: Double = 0.0,
+    val homeLongitudeDeg: Double = 0.0,
+    val homeAltitudeAslM: Double = 0.0,
+    val homeSet: Boolean = false,
+
+    /** DJI flight mode name, used only to derive the reported mode. */
+    val flightMode: String = "UNKNOWN",
+
+    /**
+     * Motors running. DJI exposes no arm/disarm concept, so this is the only honest source for
+     * the heartbeat's armed flag — deriving it from the flight mode instead reports armed on the
+     * ground, which is what the ground station must never be told.
+     */
+    val motorsRunning: Boolean = false,
+
+    val manualOverrideActive: Boolean = false
+) {
+    companion object {
+        const val INVALID_BATTERY = -1
+        const val INVALID_SATELLITES = -1
+
+        /** GPS_RAW_INT / GLOBAL_POSITION_INT "unknown" for uint16 fields. */
+        const val UINT16_UNKNOWN = 0xFFFF
+
+        /** BATTERY_STATUS temperature "unknown" (INT16_MAX). */
+        const val INT16_UNKNOWN = 32767
+    }
+}

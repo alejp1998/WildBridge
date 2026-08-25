@@ -76,6 +76,9 @@ import dji.sampleV5.aircraft.models.BasicAircraftControlVM
 import dji.sampleV5.aircraft.models.MediaVM
 import dji.sampleV5.aircraft.models.PayloadWidgetVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
+import dji.sampleV5.aircraft.mavlink.MavlinkEndpointConfig
+import dji.sampleV5.aircraft.mavlink.MavlinkSnapshot
+import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
 import dji.sampleV5.aircraft.webrtc.WebRTCMediaOptions
 import dji.sampleV5.aircraft.webrtc.WebRTCStreamer
@@ -305,6 +308,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     // Servers
     private var httpServer: SimpleHttpServer? = null
     private var telemetryServer: TelemetryServer? = null
+
+    /**
+     * MAVLink 2 telemetry endpoint. Disabled unless `wb_mav_0_enabled` is set, following PX4's
+     * pattern of switching MAVLink instances on by parameter rather than by build.
+     */
+    private var mavlinkEndpoint: MavlinkTelemetryEndpoint? = null
     private var webRTCStreamer: WebRTCStreamer? = null
     @Volatile private var lastWhipUrl: String? = null  // Remembered for FPS/Quality mode restarts
     @Volatile private var lastClientIp: String? = null
@@ -3484,6 +3493,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             Log.w(TAG, "Telemetry port $TELEMETRY_PORT already in use")
         }
 
+        // Start the MAVLink 2 telemetry endpoint (no-op unless enabled by preference).
+        startMavlinkEndpoint()
+
         // WebRTC video via WHIP — create the shared frame source/publisher.
         // WHIP publishing starts automatically when bridge connects to telemetry.
         runCatching {
@@ -3572,6 +3584,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             // Stop all servers
             telemetryServer?.onFirstClientConnected = null
             telemetryServer?.stop()
+            mavlinkEndpoint?.stop()
+            mavlinkEndpoint = null
             webRTCStreamer?.listener = null
             stopActiveStreaming()
             discoveryManager.stopDiscoveryServer()
@@ -3833,6 +3847,111 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         }
         @Suppress("DEPRECATION")
         return wifiManager?.connectionInfo?.rssi ?: -100
+    }
+
+    // ==================== MAVLink ====================
+
+    /**
+     * Read the MAVLink endpoint settings, PX4-instance style.
+     *
+     * Disabled by default: a second surface onto a flying aircraft is switched on deliberately,
+     * per aircraft, rather than shipped hot. Enable in the field with
+     * `adb shell` or the settings backup file by setting `wb_mav_0_enabled` to true.
+     */
+    private fun readMavlinkConfig(): MavlinkEndpointConfig {
+        // These preferences are edited by hand in the field (adb, or the settings backup file), so
+        // a value stored with the wrong type must not crash the app on startup.
+        val port = prefIntOrDefault(
+            MavlinkEndpointConfig.PREF_PORT, MavlinkEndpointConfig.DEFAULT_GCS_PORT
+        )
+        return MavlinkEndpointConfig(
+            enabled = runCatching {
+                sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ENABLED, false)
+            }.getOrDefault(false),
+            targetHost = runCatching {
+                sharedPreferences.getString(MavlinkEndpointConfig.PREF_HOST, "")
+            }.getOrNull().orEmpty(),
+            targetPort = port,
+            listenPort = port,
+            mode = MavlinkEndpointConfig.Profile.fromPref(
+                runCatching {
+                    sharedPreferences.getString(MavlinkEndpointConfig.PREF_MODE, null)
+                }.getOrNull()
+            ),
+            systemId = prefIntOrDefault(
+                MavlinkEndpointConfig.PREF_SYSTEM_ID, MavlinkEndpointConfig.DEFAULT_SYSTEM_ID
+            )
+        )
+    }
+
+    /** Read an int preference that may have been stored as a string by a hand edit. */
+    private fun prefIntOrDefault(key: String, fallback: Int): Int =
+        runCatching { sharedPreferences.getInt(key, fallback) }
+            .recoverCatching { sharedPreferences.getString(key, null)?.toInt() ?: fallback }
+            .getOrDefault(fallback)
+
+    /**
+     * One consistent read of aircraft state for the MAVLink endpoint.
+     *
+     * Deliberately reads the same accessors that feed [rebuildRealTelemetryCache] rather than the
+     * cached JSON, so the two surfaces cannot report different numbers for the same instant while
+     * both are live.
+     *
+     * DJI reports no arming state, so `motorsRunning` comes from KeyIsFlying — the only honest
+     * source. Deriving it from the flight mode, as the ground-station helper currently does,
+     * reports armed while the aircraft is sitting on the ground.
+     */
+    private fun buildMavlinkSnapshot(): MavlinkSnapshot {
+        val location = getLocation3D()
+        val homeLocation = getHomeLocation()
+        val speed = getSpeed()
+        val attitude = getAttitude()
+        val altitudeAgl = getAltitude()
+
+        return MavlinkSnapshot(
+            droneName = droneName,
+            latitudeDeg = location.latitude,
+            longitudeDeg = location.longitude,
+            altitudeAslM = location.altitude,
+            altitudeAglM = altitudeAgl,
+            velocityNorthMps = speed.x,
+            velocityEastMps = speed.y,
+            velocityDownMps = speed.z,
+            rollDeg = attitude.roll,
+            pitchDeg = attitude.pitch,
+            yawDeg = attitude.yaw,
+            headingDeg = getHeading(),
+            satelliteCount = getSatelliteCount(),
+            batteryPercent = getBatteryLevel(),
+            remainingFlightTimeS = goHomeAssessmentProcessor.value.remainingFlightTime,
+            homeLatitudeDeg = homeLocation.latitude,
+            homeLongitudeDeg = homeLocation.longitude,
+            // DJI's home point carries no altitude, so the take-off altitude AMSL is recovered
+            // from the difference between the two altitudes the SDK does report.
+            homeAltitudeAslM = location.altitude - altitudeAgl,
+            homeSet = isHomeSet(),
+            flightMode = getFlightMode().name,
+            motorsRunning = isFlyingKey.get(false),
+            manualOverrideActive = DroneController.isManualOverrideActive
+        )
+    }
+
+    private fun startMavlinkEndpoint() {
+        val config = readMavlinkConfig()
+        if (!config.enabled) {
+            Log.i(TAG, "MAVLink endpoint disabled (${MavlinkEndpointConfig.PREF_ENABLED}=false)")
+            return
+        }
+        runCatching {
+            val endpoint = MavlinkTelemetryEndpoint(config, ::buildMavlinkSnapshot)
+            endpoint.onPeerDiscovered = { peer ->
+                Log.i(TAG, "MAVLink ground station at $peer")
+            }
+            endpoint.start()
+            mavlinkEndpoint = endpoint
+        }.onFailure { error ->
+            Log.e(TAG, "Error starting MAVLink endpoint: ${error.message}", error)
+        }
     }
 
     private fun rebuildRealTelemetryCache() {
