@@ -25,7 +25,17 @@ internal object MavlinkCrc {
         MavlinkMsgId.BATTERY_STATUS to 154,
         MavlinkMsgId.AUTOPILOT_VERSION to 178,
         MavlinkMsgId.HOME_POSITION to 104,
-        MavlinkMsgId.STATUSTEXT to 83
+        MavlinkMsgId.STATUSTEXT to 83,
+        MavlinkMsgId.PARAM_VALUE to 220,
+        MavlinkMsgId.MISSION_COUNT to 221,
+        MavlinkMsgId.CAMERA_INFORMATION to 92,
+        MavlinkMsgId.VIDEO_STREAM_INFORMATION to 109,
+        MavlinkMsgId.COMMAND_ACK to 143,
+        // Received, not sent — needed to validate the checksum of inbound commands.
+        MavlinkMsgId.COMMAND_INT to 158,
+        MavlinkMsgId.COMMAND_LONG to 152,
+        MavlinkMsgId.PARAM_REQUEST_LIST to 159,
+        MavlinkMsgId.MISSION_REQUEST_LIST to 132
     )
 
     /** Accumulate one byte into a running CRC. */

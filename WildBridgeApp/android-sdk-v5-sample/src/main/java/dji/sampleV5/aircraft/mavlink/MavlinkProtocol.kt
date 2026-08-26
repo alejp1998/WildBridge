@@ -15,6 +15,24 @@ internal object MavlinkMsgId {
     const val AUTOPILOT_VERSION = 148
     const val HOME_POSITION = 242
     const val STATUSTEXT = 253
+
+    // Parameter and mission protocols. QGroundControl will not finish its initial-connect state
+    // machine without answers to these, and until it does, its camera manager discards every
+    // message it receives — so the video stream is never discovered. Found by running QGC.
+    const val PARAM_REQUEST_LIST = 21
+    const val PARAM_VALUE = 22
+    const val MISSION_REQUEST_LIST = 43
+    const val MISSION_COUNT = 44
+
+    // Camera component (see MavlinkCameraComponent).
+    const val CAMERA_INFORMATION = 259
+    const val VIDEO_STREAM_INFORMATION = 269
+
+    // Command protocol. COMMAND_LONG and COMMAND_INT are received only; the endpoint answers
+    // requests for messages and refuses everything else.
+    const val COMMAND_INT = 75
+    const val COMMAND_LONG = 76
+    const val COMMAND_ACK = 77
 }
 
 /**
@@ -45,6 +63,37 @@ internal object Mav {
 
     const val COMP_ID_AUTOPILOT1 = 1
 
+    /**
+     * Camera component id. QGroundControl only looks for cameras in the range
+     * MAV_COMP_ID_CAMERA..MAV_COMP_ID_CAMERA6 (100..105), so the video stream is not discoverable
+     * from any other component id.
+     */
+    const val COMP_ID_CAMERA = 100
+
+    const val TYPE_CAMERA = 30
+
+    const val RESULT_ACCEPTED = 0
+    const val RESULT_DENIED = 2
+    const val RESULT_UNSUPPORTED = 3
+
+    const val CMD_SET_MESSAGE_INTERVAL = 511
+    const val CMD_REQUEST_MESSAGE = 512
+    const val CMD_REQUEST_CAMERA_INFORMATION = 521
+    const val CMD_REQUEST_VIDEO_STREAM_INFORMATION = 2504
+    const val CMD_REQUEST_VIDEO_STREAM_STATUS = 2505
+
+    const val CAMERA_CAP_HAS_VIDEO_STREAM = 256L
+
+    /**
+     * RTSP, not WHEP. VIDEO_STREAM_TYPE_WHEP exists in the definitions, but QGroundControl's
+     * VideoManager only auto-selects a source for RTSP, RTP/UDP, TCP-MPEG and MPEG-TS — a WHEP
+     * stream would be advertised and then ignored. MediaMTX already republishes the WHIP ingest
+     * on RTSP, so RTSP is both honest and the one that works.
+     */
+    const val VIDEO_STREAM_TYPE_RTSP = 0
+    const val VIDEO_STREAM_ENCODING_H264 = 1
+    const val VIDEO_STREAM_STATUS_RUNNING = 1
+
     const val SEVERITY_INFO = 6
     const val SEVERITY_WARNING = 4
 
@@ -68,6 +117,9 @@ internal object Mav {
 
     /** MAVLink wire-format version reported in HEARTBEAT. Always 3 for MAVLink 2. */
     const val MAVLINK_VERSION = 3
+
+    /** MAV_PARAM_TYPE_REAL32. Every WildBridge parameter is a float for now. */
+    const val PARAM_TYPE_REAL32 = 9
 }
 
 /**

@@ -78,6 +78,7 @@ import dji.sampleV5.aircraft.models.PayloadWidgetVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.mavlink.MavlinkEndpointConfig
 import dji.sampleV5.aircraft.mavlink.MavlinkSnapshot
+import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
 import dji.sampleV5.aircraft.webrtc.WebRTCMediaOptions
@@ -3936,6 +3937,47 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         )
     }
 
+    /**
+     * The video stream to advertise to a ground station, or null while nothing is publishing.
+     *
+     * Derived from the WHIP URL the app is already publishing to, so the ground-station address is
+     * never configured twice: MediaMTX ingests the WHIP publish and republishes the same stream on
+     * RTSP, which is the transport QGroundControl can actually play. Returning null while no
+     * stream is up is deliberate — advertising a dead RTSP URL makes a ground station sit in a
+     * connect-retry loop, which is worse than reporting no stream.
+     */
+    private fun currentMavlinkVideoStream(): MavlinkVideoStream? =
+        MavlinkVideoStream.fromWhipUrl(lastWhipUrl, droneName)
+
+    /**
+     * The active control profile, published as read-only MAVLink parameters.
+     *
+     * Two reasons this exists now rather than in a later phase. It is what a ground station needs
+     * to finish connecting — QGroundControl's camera manager discards every message, including the
+     * camera heartbeat, until its initial-connect state machine completes, and that machine blocks
+     * on the parameter download. And it makes the per-airframe tuning visible in a standard
+     * parameter editor instead of being a constant nobody outside the source can see.
+     *
+     * Read-only for now: these are published, not settable. Making them writable is a change with
+     * its own safety review, since they are the gains an autonomous control loop flies on.
+     */
+    private fun mavlinkParameters(): List<Pair<String, Float>> {
+        val profile = DroneControlProfiles.activeProfile()
+        return listOf(
+            "WB_DIST_KP" to profile.distanceKp.toFloat(),
+            "WB_DIST_KI" to profile.distanceKi.toFloat(),
+            "WB_DIST_KD" to profile.distanceKd.toFloat(),
+            "WB_YAW_KP" to profile.yawKp.toFloat(),
+            "WB_YAW_RATE_MAX" to profile.maxYawRateDegS.toFloat(),
+            "WB_SPD_MAX" to profile.maxHorizontalSpeedMps.toFloat(),
+            "WB_ACC_MAX" to profile.maxHorizontalAccelMps2.toFloat(),
+            "WB_SPD_CRUISE" to profile.defaultCruiseSpeedMps.toFloat(),
+            "WB_WP_ACC_RAD" to DroneController.WP_ACCEPT_DISTANCE_M.toFloat(),
+            "WB_WP_ACC_ALT" to DroneController.WP_ACCEPT_ALTITUDE_M.toFloat(),
+            "WB_WP_ACC_YAW" to DroneController.WP_ACCEPT_YAW_DEG.toFloat()
+        )
+    }
+
     private fun startMavlinkEndpoint() {
         val config = readMavlinkConfig()
         if (!config.enabled) {
@@ -3943,7 +3985,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             return
         }
         runCatching {
-            val endpoint = MavlinkTelemetryEndpoint(config, ::buildMavlinkSnapshot)
+            val endpoint = MavlinkTelemetryEndpoint(
+                config, ::buildMavlinkSnapshot, ::currentMavlinkVideoStream, ::mavlinkParameters
+            )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")
             }

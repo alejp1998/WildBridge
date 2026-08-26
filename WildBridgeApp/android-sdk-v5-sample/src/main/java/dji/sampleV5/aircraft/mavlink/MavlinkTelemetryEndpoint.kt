@@ -13,10 +13,12 @@ import kotlin.concurrent.thread
  * MAVLink 2 telemetry endpoint: streams the phase-1 message set over UDP so a stock ground station
  * shows the aircraft with no plugin and no configuration file.
  *
- * This is deliberately **send-only for control purposes**. Inbound datagrams are read for exactly
- * one reason — to learn the address of a ground station that found us first — and are otherwise
- * discarded. Nothing here can command the aircraft, which is what makes the phase reviewable
- * without a flight-safety argument.
+ * Inbound traffic is handled, but only just: a datagram can teach the endpoint where a ground
+ * station lives, and it can ask for the camera and video-stream descriptions. Every other command
+ * is acknowledged `MAV_RESULT_UNSUPPORTED` and dropped. **No inbound message can reach a flight
+ * control path, because no such path is wired up here** — that is what keeps this reviewable
+ * without a flight-safety argument, and it is a property to preserve deliberately rather than
+ * lose by accident. See [handleCommand].
  *
  * Messages are streamed at per-message rates rather than one uniform tick. A single rate is what
  * makes a link feel sluggish: attitude needs to be smooth, battery does not, and sending both at
@@ -24,9 +26,27 @@ import kotlin.concurrent.thread
  */
 internal class MavlinkTelemetryEndpoint(
     private val config: MavlinkEndpointConfig,
-    private val snapshotProvider: () -> MavlinkSnapshot
+    private val snapshotProvider: () -> MavlinkSnapshot,
+    /**
+     * The RTSP URL a ground station should play, or null when no stream is running. Advertised as
+     * VIDEO_STREAM_INFORMATION so QGroundControl configures its own video source instead of the
+     * operator typing a URL.
+     */
+    private val videoStreamProvider: () -> MavlinkVideoStream? = { null },
+    /**
+     * Read-only parameters to publish, typically the active control profile. Empty is valid but
+     * costs a ground station its initial connect — see [handleListRequest].
+     */
+    private val parameterProvider: () -> List<Pair<String, Float>> = { emptyList() }
 ) {
     private val framer = MavlinkFramer(config.systemId)
+
+    /**
+     * The camera is a separate MAVLink component, which is not decoration: QGroundControl only
+     * looks for cameras on component ids 100..105, so a stream advertised from the autopilot
+     * component is never discovered.
+     */
+    private val cameraFramer = MavlinkFramer(config.systemId, Mav.COMP_ID_CAMERA)
     private val bootNanos = System.nanoTime()
 
     private var socket: DatagramSocket? = null
@@ -124,6 +144,8 @@ internal class MavlinkTelemetryEndpoint(
             if (!received) break
             if (packet.length > 0 && buffer[0] == MavlinkFramer.MAGIC_V2) {
                 notePeer(InetSocketAddress(packet.address, packet.port))
+                MavlinkInbound.parseCommand(buffer, packet.length)?.let(::handleCommand)
+                MavlinkInbound.parseListRequest(buffer, packet.length)?.let(::handleListRequest)
             }
         }
     }
@@ -153,7 +175,7 @@ internal class MavlinkTelemetryEndpoint(
 
             for (stream in streams) {
                 if (stream.due(elapsedMs)) {
-                    runCatching { sendOnce(stream.messageId, stream.build(snapshot)) }
+                    runCatching { sendOnce(stream.messageId, stream.build(snapshot), stream.camera) }
                         .onFailure { error -> Log.w(TAG, "Send failed: ${error.message}") }
                 }
             }
@@ -189,14 +211,182 @@ internal class MavlinkTelemetryEndpoint(
             ) { MavlinkMessages.attitude(it, timeBootMs()) },
             Stream(MavlinkMsgId.AUTOPILOT_VERSION, VERSION_INTERVAL_MS) {
                 MavlinkMessages.autopilotVersion()
+            },
+            // The camera component's own heartbeat. Without it QGroundControl never asks for
+            // CAMERA_INFORMATION, and the video stream is never discovered.
+            Stream(MavlinkMsgId.HEARTBEAT, HEARTBEAT_INTERVAL_MS, camera = true) {
+                MavlinkMessages.cameraHeartbeat()
             }
         )
     }
 
-    private fun sendOnce(messageId: Int, payload: ByteArray) {
+    /**
+     * Answer the only inbound commands this endpoint implements: "send me that message".
+     *
+     * **This is the whole command surface, and it is an allowlist by construction.** Every command
+     * outside the four below is acknowledged with `MAV_RESULT_UNSUPPORTED` and nothing else
+     * happens — a takeoff, a mode change or a waypoint reaches no code path here, because none
+     * exists. That property is what keeps this phase reviewable without a flight-safety argument,
+     * and it should be preserved deliberately rather than eroded when commands do arrive: the
+     * intent is that the allowlist grows by decision, not by a `when` branch quietly falling
+     * through.
+     *
+     * QGroundControl asks for camera information two ways, alternating between
+     * `MAV_CMD_REQUEST_MESSAGE` and the deprecated `MAV_CMD_REQUEST_CAMERA_INFORMATION`, so both
+     * are handled or discovery stalls on the retry loop.
+     */
+    private fun handleCommand(command: MavlinkCommand) {
+        val forCamera = command.targetComponent == Mav.COMP_ID_CAMERA ||
+            command.targetComponent == 0
+
+        val result = when (command.command) {
+            Mav.CMD_REQUEST_MESSAGE -> sendRequestedMessage(command.param1.toInt(), forCamera)
+            Mav.CMD_REQUEST_CAMERA_INFORMATION ->
+                if (forCamera) sendCameraInformation() else Mav.RESULT_UNSUPPORTED
+            Mav.CMD_REQUEST_VIDEO_STREAM_INFORMATION ->
+                if (forCamera) sendVideoStreamInformation() else Mav.RESULT_UNSUPPORTED
+            else -> {
+                Log.d(TAG, "Refusing unsupported command ${command.command}")
+                Mav.RESULT_UNSUPPORTED
+            }
+        }
+
+        val ack = MavlinkMessages.commandAck(
+            command = command.command,
+            result = result,
+            targetSystem = command.senderSystem,
+            targetComponent = command.senderComponent
+        )
+        // The ack must come from the component that was addressed, or the requester will not
+        // match it to its request.
+        sendOnce(MavlinkMsgId.COMMAND_ACK, ack, fromCamera = forCamera)
+    }
+
+    /**
+     * Answer a parameter or plan list request.
+     *
+     * This exists because of something only discovered by running QGroundControl against the
+     * endpoint: `QGCCameraManager::_mavlinkMessageReceived` returns immediately while
+     * `_initialConnectComplete` is false, so until the initial-connect state machine finishes,
+     * **every camera heartbeat is discarded and the video stream is never discovered.** That state
+     * machine blocks on the parameter and plan downloads. Answering them is therefore not
+     * housekeeping — it is the prerequisite for video.
+     *
+     * Neither reply changes vehicle state: one publishes read-only values, the other says the
+     * plan is empty.
+     */
+    private fun handleListRequest(request: MavlinkListRequest) {
+        when (request.messageId) {
+            MavlinkMsgId.PARAM_REQUEST_LIST -> sendParameterList()
+            MavlinkMsgId.MISSION_REQUEST_LIST -> sendOnce(
+                MavlinkMsgId.MISSION_COUNT,
+                MavlinkMessages.missionCount(
+                    targetSystem = request.senderSystem,
+                    targetComponent = request.senderComponent,
+                    missionType = request.missionType
+                )
+            )
+        }
+    }
+
+    private fun sendParameterList() {
+        val parameters = runCatching { parameterProvider() }.getOrDefault(emptyList())
+        if (parameters.isEmpty()) {
+            Log.w(TAG, "No parameters to publish; a ground station may not complete its connect")
+            return
+        }
+        parameters.forEachIndexed { index, (name, value) ->
+            sendOnce(
+                MavlinkMsgId.PARAM_VALUE,
+                MavlinkMessages.paramValue(name, value, parameters.size, index)
+            )
+        }
+        Log.i(TAG, "Published ${parameters.size} parameters")
+    }
+
+    /**
+     * Serve one message on request. The set is small and explicit — a message not listed here is
+     * refused rather than silently ignored, so a ground station gets an answer instead of a
+     * retry loop.
+     *
+     * AUTOPILOT_VERSION is here because QGroundControl's initial-connect state machine asks for it
+     * by name and retries until it gives up; streaming it on a timer is not enough. That was found
+     * by running QGC against this endpoint and reading "RequestAutopilotVersion: Max retries
+     * exhausted" in its log.
+     */
+    private fun sendRequestedMessage(messageId: Int, forCamera: Boolean): Int = when {
+        messageId == MavlinkMsgId.AUTOPILOT_VERSION -> {
+            sendOnce(MavlinkMsgId.AUTOPILOT_VERSION, MavlinkMessages.autopilotVersion())
+            Mav.RESULT_ACCEPTED
+        }
+
+        messageId == MavlinkMsgId.HOME_POSITION -> {
+            val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
+            sendOnce(MavlinkMsgId.HOME_POSITION, MavlinkMessages.homePosition(snapshot))
+            Mav.RESULT_ACCEPTED
+        }
+
+        messageId == MavlinkMsgId.CAMERA_INFORMATION && forCamera -> sendCameraInformation()
+
+        messageId == MavlinkMsgId.VIDEO_STREAM_INFORMATION && forCamera ->
+            sendVideoStreamInformation()
+
+        else -> {
+            Log.d(TAG, "Refusing request for message $messageId")
+            Mav.RESULT_UNSUPPORTED
+        }
+    }
+
+    private fun sendCameraInformation(): Int {
+        val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
+        sendOnce(
+            MavlinkMsgId.CAMERA_INFORMATION,
+            MavlinkMessages.cameraInformation(
+                timeBootMs = timeBootMs(),
+                vendorName = CAMERA_VENDOR,
+                modelName = snapshot.droneName.ifBlank { CAMERA_MODEL_FALLBACK }
+            ),
+            fromCamera = true
+        )
+        return Mav.RESULT_ACCEPTED
+    }
+
+    /**
+     * Advertise the stream, or refuse honestly when there is not one.
+     *
+     * Returning DENIED rather than inventing a URL matters: a ground station that is handed a dead
+     * RTSP address spends a long time failing to connect to it, which is worse than being told
+     * there is no stream.
+     */
+    private fun sendVideoStreamInformation(): Int {
+        val stream = runCatching { videoStreamProvider() }.getOrNull()
+        if (stream == null || stream.uri.isBlank()) {
+            Log.i(TAG, "No video stream to advertise yet")
+            return Mav.RESULT_DENIED
+        }
+        sendOnce(
+            MavlinkMsgId.VIDEO_STREAM_INFORMATION,
+            MavlinkMessages.videoStreamInformation(
+                uri = stream.uri,
+                name = stream.name,
+                framerate = stream.framerate,
+                widthPx = stream.widthPx,
+                heightPx = stream.heightPx
+            ),
+            fromCamera = true
+        )
+        Log.i(TAG, "Advertised video stream ${stream.uri}")
+        return Mav.RESULT_ACCEPTED
+    }
+
+    private fun sendOnce(messageId: Int, payload: ByteArray, fromCamera: Boolean = false) {
         val bound = socket ?: return
         if (bound.isClosed) return
-        val frame = framer.frame(messageId, payload)
+        val frame = if (fromCamera) {
+            cameraFramer.frame(messageId, payload)
+        } else {
+            framer.frame(messageId, payload)
+        }
         for (destination in destinations()) {
             runCatching {
                 bound.send(DatagramPacket(frame, frame.size, destination))
@@ -233,6 +423,8 @@ internal class MavlinkTelemetryEndpoint(
     private class Stream(
         val messageId: Int,
         private val intervalMs: Long,
+        /** Send from the camera component rather than the autopilot component. */
+        val camera: Boolean = false,
         private val builder: (MavlinkSnapshot) -> ByteArray
     ) {
         private var accumulatedMs = Long.MAX_VALUE / 2
@@ -262,5 +454,8 @@ internal class MavlinkTelemetryEndpoint(
         private const val POSITION_INTERVAL_MS = 200L
         private const val ATTITUDE_INTERVAL_MS = 100L
         private const val VERSION_INTERVAL_MS = 5_000L
+
+        private const val CAMERA_VENDOR = "WildBridge"
+        private const val CAMERA_MODEL_FALLBACK = "DJI Camera"
     }
 }

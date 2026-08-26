@@ -52,6 +52,20 @@ internal object MavlinkMessages {
     }
 
     /**
+     * The camera component's heartbeat. Same layout as [heartbeat], but it announces a camera
+     * rather than a vehicle, and carries no mode or armed state — those belong to the aircraft.
+     */
+    fun cameraHeartbeat(): ByteArray =
+        PayloadWriter()
+            .u32(0) // custom_mode
+            .u8(Mav.TYPE_CAMERA)
+            .u8(Mav.AUTOPILOT_INVALID)
+            .u8(0) // base_mode
+            .u8(Mav.STATE_ACTIVE)
+            .u8(Mav.MAVLINK_VERSION)
+            .build()
+
+    /**
      * present(u32), enabled(u32), health(u32), load(u16), voltage_battery(u16),
      * current_battery(i16), drop_rate_comm(u16), errors_comm(u16), errors_count1..4(u16),
      * battery_remaining(i8)
@@ -207,6 +221,119 @@ internal object MavlinkMessages {
             .chars(text, STATUSTEXT_LENGTH)
             .build()
 
+    /**
+     * param_value(f), param_count(u16), param_index(u16), param_id(char[16]), param_type(u8)
+     */
+    fun paramValue(name: String, value: Float, count: Int, index: Int): ByteArray =
+        PayloadWriter()
+            .f32(value)
+            .u16(count)
+            .u16(index)
+            .chars(name, PARAM_ID_LENGTH)
+            .u8(Mav.PARAM_TYPE_REAL32)
+            .build()
+
+    /**
+     * count(u16), target_system(u8), target_component(u8), [ext] mission_type(u8)
+     *
+     * Always zero items. WildBridge stores no MAVLink plan — DJI owns the geofence, and native
+     * waypoint missions do not round-trip through MISSION_ITEM_INT. Answering "empty" is honest
+     * and lets a ground station finish its plan download instead of retrying.
+     */
+    fun missionCount(targetSystem: Int, targetComponent: Int, missionType: Int): ByteArray =
+        PayloadWriter()
+            .u16(0)
+            .u8(targetSystem)
+            .u8(targetComponent)
+            .u8(missionType)
+            .build()
+
+    /**
+     * command(u16), result(u8), [ext] progress(u8), result_param2(i32),
+     * target_system(u8), target_component(u8)
+     *
+     * The target fields are extensions, but a ground station uses them to route the ack back to
+     * the request it made, so they are always populated rather than left to truncation.
+     */
+    fun commandAck(
+        command: Int,
+        result: Int,
+        targetSystem: Int,
+        targetComponent: Int
+    ): ByteArray =
+        PayloadWriter()
+            .u16(command)
+            .u8(result)
+            .u8(0) // progress
+            .i32(0) // result_param2
+            .u8(targetSystem)
+            .u8(targetComponent)
+            .build()
+
+    /**
+     * time_boot_ms(u32), firmware_version(u32), focal_length(f), sensor_size_h(f),
+     * sensor_size_v(f), flags(u32), resolution_h(u16), resolution_v(u16),
+     * cam_definition_version(u16), vendor_name(u8[32]), model_name(u8[32]), lens_id(u8),
+     * cam_definition_uri(char[140])
+     *
+     * Only [Mav.CAMERA_CAP_HAS_VIDEO_STREAM] is claimed. Capture and recording are not implemented
+     * yet, and advertising them would put buttons in a ground station that do nothing — the same
+     * failure the takeoff button already demonstrates.
+     *
+     * `cam_definition_uri` is left empty: a camera definition file is how per-camera settings get
+     * rendered, and there are none to expose until the detection and streaming parameters land.
+     */
+    fun cameraInformation(
+        timeBootMs: Long,
+        vendorName: String,
+        modelName: String
+    ): ByteArray =
+        PayloadWriter()
+            .u32(timeBootMs)
+            .u32(0) // firmware_version
+            .f32(0f) // focal_length: unknown, varies with the DJI payload fitted
+            .f32(0f).f32(0f) // sensor size: unknown
+            .u32(Mav.CAMERA_CAP_HAS_VIDEO_STREAM)
+            .u16(0).u16(0) // still-capture resolution: not applicable while capture is unclaimed
+            .u16(0) // cam_definition_version
+            .chars(vendorName, NAME_FIELD_LENGTH)
+            .chars(modelName, NAME_FIELD_LENGTH)
+            .u8(0) // lens_id
+            .chars("", CAM_DEFINITION_URI_LENGTH)
+            .build()
+
+    /**
+     * framerate(f), bitrate(u32), flags(u16), resolution_h(u16), resolution_v(u16),
+     * rotation(u16), hfov(u16), stream_id(u8), count(u8), type(u8), name(char[32]),
+     * uri(char[160]), [ext] encoding(u8), camera_device_id(u8)
+     *
+     * The URI is what makes this worth sending: QGroundControl's VideoManager reads it, sets its
+     * own RTSP URL and video source from it, and starts playing without the operator configuring
+     * anything.
+     */
+    fun videoStreamInformation(
+        uri: String,
+        name: String,
+        framerate: Float,
+        widthPx: Int,
+        heightPx: Int
+    ): ByteArray =
+        PayloadWriter()
+            .f32(framerate)
+            .u32(0) // bitrate: unknown
+            .u16(Mav.VIDEO_STREAM_STATUS_RUNNING)
+            .u16(widthPx.coerceIn(0, MavlinkSnapshot.UINT16_UNKNOWN))
+            .u16(heightPx.coerceIn(0, MavlinkSnapshot.UINT16_UNKNOWN))
+            .u16(0) // rotation
+            .u16(0) // hfov: unknown
+            .u8(STREAM_ID)
+            .u8(1) // count: one stream
+            .u8(Mav.VIDEO_STREAM_TYPE_RTSP)
+            .chars(name, NAME_FIELD_LENGTH)
+            .chars(uri, STREAM_URI_LENGTH)
+            .u8(Mav.VIDEO_STREAM_ENCODING_H264)
+            .build()
+
     // ---- conversions -------------------------------------------------------
 
     fun groundSpeedMps(snapshot: MavlinkSnapshot): Double =
@@ -254,6 +381,13 @@ internal object MavlinkMessages {
     private const val QUATERNION_LENGTH = 4
     private const val CUSTOM_VERSION_BYTES = 8
     private const val STATUSTEXT_LENGTH = 50
+    private const val NAME_FIELD_LENGTH = 32
+    private const val PARAM_ID_LENGTH = 16
+    private const val CAM_DEFINITION_URI_LENGTH = 140
+    private const val STREAM_URI_LENGTH = 160
+
+    /** MAVLink numbers video streams from 1. */
+    const val STREAM_ID = 1
     private const val FULL_CIRCLE_DEG = 360.0
     private const val HALF_CIRCLE_DEG = 180.0
     private const val MAX_CDEG = 35999
