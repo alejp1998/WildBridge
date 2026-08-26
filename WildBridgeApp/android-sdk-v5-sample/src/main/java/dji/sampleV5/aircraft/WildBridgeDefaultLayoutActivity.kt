@@ -4460,6 +4460,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             yaw: Float
         ): CommandResult {
             mavlinkFlightGate()?.let { return it }
+            // Refused while the pilot has the sticks, exactly as /send/stick is. The latch
+            // already drops virtual stick, so these would most likely be ignored anyway — but
+            // "most likely ignored" is not the guarantee to rely on when the pilot has taken
+            // over, and the two surfaces disagreeing about it is its own bug.
+            if (DroneController.shouldRejectAutonomousCommand("stick")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
             // DJI's sticks: left is yaw/throttle, right is roll/pitch. MAVLink's axes are named
             // for what they do, so the mapping is by meaning rather than by position.
             DroneController.setStick(
@@ -4598,6 +4605,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             executor: MissionExecutor
         ): CommandResult {
             mavlinkFlightGate()?.let { return it }
+            // A plan is an autonomous command like any other. The sequencer aborts on the first
+            // leg if the latch is set, but refusing it here says so plainly rather than
+            // accepting a mission that is going to stop immediately.
+            if (DroneController.shouldRejectAutonomousCommand("mission")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
             stopMission()
             return when (executor) {
                 MissionExecutor.DJI_NATIVE -> startNative(items)
