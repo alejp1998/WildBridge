@@ -9,11 +9,12 @@ package dji.sampleV5.aircraft.mavlink
  * enabled per aircraft rather than per build, and so a second instance can later serve the Safety
  * Computer with its own profile and rate.
  *
- * [enabled] defaults to false: a second control surface on a flying platform ships dark and is
- * switched on deliberately.
+ * [enabled] defaults to true so a freshly installed device is reachable without hand-editing
+ * prefs. This is safe only because the surface is payload-only — no flight motion is wired through
+ * it. The operator-control / signing gate arrives with the authority phase and re-hardens this.
  */
 internal data class MavlinkEndpointConfig(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     /** Where to send. Empty means broadcast on the local subnet. */
     val targetHost: String = "",
     val targetPort: Int = DEFAULT_GCS_PORT,

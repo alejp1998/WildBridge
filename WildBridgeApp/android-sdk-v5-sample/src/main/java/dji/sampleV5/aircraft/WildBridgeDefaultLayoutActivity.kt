@@ -3892,8 +3892,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         )
         return MavlinkEndpointConfig(
             enabled = runCatching {
-                sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ENABLED, false)
-            }.getOrDefault(false),
+                sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ENABLED, true)
+            }.getOrDefault(true),
             targetHost = runCatching {
                 sharedPreferences.getString(MavlinkEndpointConfig.PREF_HOST, "")
             }.getOrNull().orEmpty(),
