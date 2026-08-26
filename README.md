@@ -30,7 +30,7 @@ Each drone connects to its RC via DJI OcuSync (2.4/5 GHz). The RC connects to th
 
 ## Key Features
 
-- **Real-time Telemetry**: TCP socket streaming (port 8081) — continuous JSON at up to 20 Hz with 25+ flight state fields
+- **Real-time Telemetry**: TCP socket streaming (port 8081) — continuous JSON with 25+ flight state fields, pushed on a configurable interval (default ~2 Hz)
 - **HTTP Command Interface**: RESTful API (port 8080) for full drone control
 - **Live Video Streaming**: WebRTC video publishing by WHIP to MediaMTX, with browser and dashboard playback through WHEP
 - **GroundStation Video Dashboard**: Docker Compose stack with MediaMTX and a browser UI for multi-drone video monitoring, health diagnostics, telemetry, and charts
@@ -601,14 +601,14 @@ This replaces the older direct RC-hosted WebSocket-signaling viewer. That sample
 
 ## ROS 2 Integration
 
-Full ROS 2 Humble package. The `dji_controller` node publishes all telemetry fields as individual topics at **20 Hz** and subscribes to command topics.
+Full ROS 2 Humble package. The `dji_controller` node publishes all telemetry fields as individual topics and subscribes to command topics. It checks for new telemetry at 20 Hz but publishes only when the drone has actually sent a new snapshot, so the topic rate follows the aircraft's telemetry interval (default ~2 Hz) rather than repeating each sample.
 
 ### Package Structure
 
 ```text
 GroundStation/ROS/
 ├── dji_controller/          # Main control + telemetry node
-│   ├── controller.py        # DjiNode: 45+ topics, 20 Hz timer
+│   ├── controller.py        # DjiNode: 45+ topics, publishes on new telemetry
 │   └── submodules/dji_interface.py
 └── wildview_bringup/
     ├── auto_discovery_native.launch.py  # one namespaced dji_node per discovered drone, re-scans periodically
@@ -663,7 +663,7 @@ GroundStation/ROS/
 
 Camera, media, and LRF commands block for as long as the aircraft takes to answer (up to 120 s for
 a download), so they run on a single-worker thread pool and answer asynchronously on their own
-`camera/*` and `lrf/*` result topics rather than stalling the 20 Hz telemetry loop.
+`camera/*` and `lrf/*` result topics rather than stalling the telemetry loop.
 
 
 | Topic | Type | Body |
