@@ -20,6 +20,12 @@ from wildbridge_groundstation.dji_helpers import (
     parse_discovery_response,
     parse_telemetry_chunk,
 )
+from wildbridge_groundstation.transport import (
+    MavlinkCommandChannel,
+    MavlinkTelemetrySource,
+    Transport,
+    mavlink_port_from_env,
+)
 
 DISCOVERY_PORT = 30000
 DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
@@ -175,6 +181,8 @@ class DJIInterface:
         config_loader: Callable[[str], dict[str, Any] | None] | None = None,
         query_config_name: bool = False,
         timestamp_factory: Callable[[], str] = telemetry_timestamp,
+        transport: Transport | None = None,
+        mavlink_port: int | None = None,
     ):
         self.drone_name = "UNKNOWN"
         self._timestamp_factory = timestamp_factory
@@ -212,6 +220,22 @@ class DJIInterface:
         self._telemetry_thread = None
         self._running = False
 
+        self._configure_transport(transport, mavlink_port)
+
+    def _configure_transport(self, transport, mavlink_port):
+        """Choose the wire this client talks over.
+
+        Defaults to the environment so a whole stack -- scripts, the ROS node, the safety wrapper
+        -- can be switched with one variable rather than each caller growing an argument.
+        """
+        self.transport = transport if transport is not None else Transport.from_env()
+        self.mavlink_port = mavlink_port if mavlink_port is not None else mavlink_port_from_env()
+        self._mavlink_telemetry: MavlinkTelemetrySource | None = None
+        self._mavlink_commands: MavlinkCommandChannel | None = None
+        if self.transport.uses_mavlink:
+            self._mavlink_commands = MavlinkCommandChannel(self.IP_RC, port=self.mavlink_port)
+            print(f"Transport: {self.transport.value} (MAVLink on udp/{self.mavlink_port})")
+
     def getVideoSource(self):
         if self.IP_RC == "":
             return ""
@@ -223,12 +247,25 @@ class DJIInterface:
             return
 
         self._running = True
-        self._telemetry_thread = threading.Thread(target=self._telemetry_receiver, daemon=True)
-        self._telemetry_thread.start()
+        if self.transport.uses_mavlink:
+            self._mavlink_telemetry = MavlinkTelemetrySource(
+                port=self.mavlink_port,
+                on_update=self._apply_mavlink_telemetry,
+                # Only this aircraft's stream. In a fleet each aircraft needs its own UDP port
+                # as well, since one socket per port is all the OS will hand packets to.
+                peer_host=self.IP_RC,
+            )
+            self._mavlink_telemetry.start()
+        if self.transport is not Transport.MAVLINK:
+            self._telemetry_thread = threading.Thread(target=self._telemetry_receiver, daemon=True)
+            self._telemetry_thread.start()
 
     def stopTelemetryStream(self):
         """Stop the telemetry stream and close the socket."""
         self._running = False
+        if self._mavlink_telemetry is not None:
+            self._mavlink_telemetry.stop()
+            self._mavlink_telemetry = None
         if self._telemetry_socket:
             self._close_telemetry_socket()
         if self._telemetry_thread:
@@ -278,6 +315,17 @@ class DJIInterface:
             finally:
                 if self._telemetry_socket:
                     self._close_telemetry_socket()
+
+    def _apply_mavlink_telemetry(self, telemetry):
+        """Merge a MAVLink-derived snapshot into the same state the HTTP reader fills.
+
+        Merged rather than replaced: in ``both`` mode the two wires carry different subsets --
+        MAVLink has no zoom ratio or thermal state, HTTP has no mission progress -- and a consumer
+        should see the union rather than whichever arrived last.
+        """
+        with self._telemetry_lock:
+            self._telemetry.update(telemetry)
+            self._telemetry_seq += 1
 
     def getTelemetry(self):
         """Get the latest telemetry data."""
@@ -422,6 +470,18 @@ class DJIInterface:
         if self.IP_RC == "":
             print(f"No IP_RC provided, returning empty string for request at {endPoint}")
             return ""
+        if self._mavlink_commands is not None and self._mavlink_commands.supports(endPoint):
+            response = self._mavlink_commands.send(endPoint, str(data))
+            if verbose:
+                print("EP : " + endPoint + "\t" + response)
+            return response
+        if not self.transport.allows_http_fallback:
+            # Deliberately not falling back. In mavlink-only mode a gap must be visible.
+            message = f"REJECTED: no MAVLink equivalent for {endPoint}"
+            if verbose:
+                print("EP : " + endPoint + "\t" + message)
+            return message
+
         try:
             response = self._post(endPoint, str(data))
             if verbose:
