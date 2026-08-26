@@ -1,5 +1,7 @@
+import threading
 from typing import ClassVar
 
+from wildbridge_groundstation import dji_client
 from wildbridge_groundstation.dji_client import DJIInterface
 
 
@@ -218,3 +220,55 @@ def test_safety_client_tokens_capture_and_media_paths(monkeypatch):
     assert len(seen) == 4
     for url, headers in seen:
         assert headers.get(SAFETY_TOKEN_HEADER.rstrip(":")) == "98", f"no token on {url}"
+
+
+def _bare_client():
+    """A client with just enough state to exercise the telemetry cache, and no sockets."""
+    client = dji_client.DJIInterface.__new__(dji_client.DJIInterface)
+    client._telemetry = {}
+    client._telemetry_seq = 0
+    client._telemetry_lock = threading.Lock()
+    client._timestamp_factory = lambda: "2026-08-26_00-00-00.000000"
+    return client
+
+
+def test_telemetry_update_reports_each_snapshot_once():
+    """A consumer polling faster than the drone sends should publish once per snapshot.
+
+    The ROS node polls at 20 Hz while the aircraft's TCP telemetry runs nearer 2 Hz, so without
+    this the same sample was republished about ten times across 45-plus topics.
+    """
+    client = _bare_client()
+
+    # Nothing received yet: a first-time caller gets nothing rather than an empty dict.
+    sequence, telemetry = client.getTelemetryUpdate(0)
+    assert telemetry is None
+
+    client._process_telemetry_data("", b'{"batteryLevel": 91}\n')
+    sequence, telemetry = client.getTelemetryUpdate(0)
+    assert telemetry["batteryLevel"] == 91
+    assert sequence == 1
+
+    # Polling again without a new snapshot yields nothing, and does not move the sequence.
+    for _ in range(5):
+        again_seq, again = client.getTelemetryUpdate(sequence)
+        assert again is None
+        assert again_seq == sequence
+
+    # A new snapshot is reported exactly once.
+    client._process_telemetry_data("", b'{"batteryLevel": 90}\n')
+    sequence, telemetry = client.getTelemetryUpdate(sequence)
+    assert telemetry["batteryLevel"] == 90
+    assert sequence == 2
+    assert client.getTelemetryUpdate(sequence)[1] is None
+
+
+def test_telemetry_update_returns_a_copy():
+    """Mutating what a caller got back must not corrupt the cache the next caller reads."""
+    client = _bare_client()
+
+    client._process_telemetry_data("", b'{"batteryLevel": 50}\n')
+    _, telemetry = client.getTelemetryUpdate(0)
+    telemetry["batteryLevel"] = 0
+
+    assert client.getTelemetry()["batteryLevel"] == 50

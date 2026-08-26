@@ -203,6 +203,10 @@ class DJIInterface:
         self.videoSource = f"rtsp://aaa:aaa@{self.IP_RC}:8554/streaming/live/1"
 
         self._telemetry: dict[str, Any] = {}
+        # Incremented once per snapshot received. Lets a consumer tell a fresh sample from the
+        # same one read again, so it can publish at the rate the drone actually sends rather than
+        # at whatever rate its own timer happens to fire.
+        self._telemetry_seq = 0
         self._telemetry_lock = threading.Lock()
         self._telemetry_socket = None
         self._telemetry_thread = None
@@ -244,6 +248,7 @@ class DJIInterface:
         for telemetry in telemetry_items:
             with self._telemetry_lock:
                 self._telemetry = telemetry
+                self._telemetry_seq += 1
         return buffer
 
     def _read_telemetry_stream(self, buffer):
@@ -278,6 +283,27 @@ class DJIInterface:
         """Get the latest telemetry data."""
         with self._telemetry_lock:
             return self._telemetry.copy()
+
+    def getTelemetrySequence(self):
+        """How many telemetry snapshots have arrived since this client started."""
+        with self._telemetry_lock:
+            return self._telemetry_seq
+
+    def getTelemetryUpdate(self, last_sequence):
+        """Latest telemetry, but only when it is newer than ``last_sequence``.
+
+        Returns ``(sequence, telemetry)``, with ``telemetry`` None when nothing new has arrived.
+        Reading the sequence and the snapshot under one lock matters: taking them separately
+        could pair a sequence with a snapshot from the next sample.
+
+        This exists so a consumer's publish rate follows the drone rather than its own timer. The
+        aircraft's TCP telemetry interval is configurable and currently ~2 Hz, so a 20 Hz poller
+        that published unconditionally sent every sample about ten times over.
+        """
+        with self._telemetry_lock:
+            if self._telemetry_seq == last_sequence:
+                return last_sequence, None
+            return self._telemetry_seq, self._telemetry.copy()
 
     def requestAllStates(self, verbose=False):
         """Get all aircraft states from telemetry."""

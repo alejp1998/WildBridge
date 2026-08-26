@@ -23,6 +23,11 @@ from std_msgs.msg import Bool, Empty, Float64, Float64MultiArray, Int32, String
 
 from dji_controller.submodules.dji_interface import DJIInterface, get_config
 
+# How often to check for a new telemetry snapshot. This is the poll rate, not the publish rate:
+# publishing happens only when the drone has sent something new, so a short period buys low
+# latency rather than duplicate messages.
+TELEMETRY_POLL_PERIOD_S = 0.05
+
 # Command ack responses from the app have drifted across builds: newer ones embed
 # the seq ('WAYPOINT_ACCEPTED seq=5 ...'), older ones return bare text
 # ('Received: Altitude: 40.0'). Parse defensively — a malformed ack must never
@@ -244,7 +249,7 @@ class DjiNode(Node):
         self.takeoff_block_reason_pub = self.create_publisher(String, "takeoff_block_reason", 10)
 
         # Capture / listMedia / download block for up to 2 minutes on the HTTP call, so they run
-        # off the executor thread — otherwise they stall the 20 Hz telemetry timer.
+        # off the executor thread — otherwise they stall the telemetry timer.
         # ponytail: single worker serializes them, which is what the camera wants anyway.
         self.blocking_calls = ThreadPoolExecutor(max_workers=1)
 
@@ -252,11 +257,15 @@ class DjiNode(Node):
         self.declare_parameter("media_dir", "media")
         self.media_dir = self.get_parameter("media_dir").get_parameter_value().string_value
 
-        # Timer to publish telemetry at regular intervals
-        # Publish every 1/20 second (50ms)
-        self.create_timer(0.05, self.publish_states)
+        # Poll for telemetry at 20 Hz but publish only when a new snapshot has actually arrived.
+        # The drone's TCP telemetry interval is configurable and currently ~2 Hz, so publishing on
+        # every tick republished each sample about ten times across 45-plus topics. The poll stays
+        # fast so a fresh sample reaches subscribers within 50 ms; the publish rate now follows
+        # the aircraft, and rises on its own if the drone's interval is shortened.
+        self._last_telemetry_seq = -1
+        self.create_timer(TELEMETRY_POLL_PERIOD_S, self.publish_states)
 
-        # Settings snapshot at 1 Hz (settings change rarely; telemetry stays at 20 Hz)
+        # Settings snapshot at 1 Hz (settings change rarely)
         self.settings_pub = self.create_publisher(String, "state/settings", 10)
         self.create_timer(1.0, self.publish_settings)
 
@@ -553,11 +562,13 @@ class DjiNode(Node):
 
     def publish_states(self):
         try:
-            # Get telemetry from TCP socket stream
-            telemetry = self.dji_interface.getTelemetry()
+            # Only republish when the drone has actually sent something new — see the timer
+            # comment in __init__.
+            sequence, telemetry = self.dji_interface.getTelemetryUpdate(self._last_telemetry_seq)
 
             if not telemetry:
-                return  # No telemetry data available yet
+                return  # Nothing new since the last publish
+            self._last_telemetry_seq = sequence
 
             # Speed (scalar and vector)
             speed_data = telemetry.get("speed", {})
