@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+  WildBridge's own MAVLink dialect.
+
+  Deliberately one message. Everything WildBridge does that MAVLink already describes is sent as
+  the standard message or command, and this dialect carries only what genuinely has no portable
+  equivalent: DJI's smart-return budgets, the payload focal lengths, the laser rangefinder's
+  geo-referenced target, and WildBridge's own authority latch. Keeping the residue in a single
+  streamed message rather than scattering it across the MAV_CMD user range means a ground station
+  that does not know WildBridge ignores exactly one message id and loses nothing it understood.
+-->
+<mavlink>
+  <include>common.xml</include>
+  <enums>
+    <enum name="WILDBRIDGE_STATUS_FLAGS" bitmask="true">
+      <description>Boolean state reported in WILDBRIDGE_STATUS.</description>
+      <entry value="1" name="WILDBRIDGE_STATUS_FLAG_MANUAL_OVERRIDE">
+        <description>
+          The pilot has taken the sticks and autonomous commands are being refused. Distinct from
+          simply not being in a guided mode: it means a command was interrupted, which the
+          heartbeat's mode flags cannot express.
+        </description>
+      </entry>
+      <entry value="2" name="WILDBRIDGE_STATUS_FLAG_READY_TO_TAKEOFF">
+        <description>Pre-flight checks pass and a takeoff command would be accepted.</description>
+      </entry>
+      <entry value="4" name="WILDBRIDGE_STATUS_FLAG_HOME_SET">
+        <description>The aircraft has recorded a home point.</description>
+      </entry>
+      <entry value="8" name="WILDBRIDGE_STATUS_FLAG_LRF_TARGET_VALID">
+        <description>The rangefinder target fields hold a real geo-referenced point.</description>
+      </entry>
+    </enum>
+  </enums>
+  <messages>
+    <message id="42100" name="WILDBRIDGE_STATUS">
+      <description>
+        WildBridge-specific aircraft state with no standard MAVLink equivalent. Streamed at a low
+        rate alongside the standard telemetry.
+      </description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Timestamp since system boot.</field>
+      <field type="int32_t" name="lrf_target_lat" units="degE7">Rangefinder target latitude. Valid only with LRF_TARGET_VALID.</field>
+      <field type="int32_t" name="lrf_target_lon" units="degE7">Rangefinder target longitude. Valid only with LRF_TARGET_VALID.</field>
+      <field type="float" name="lrf_target_alt" units="m">Rangefinder target altitude. Valid only with LRF_TARGET_VALID.</field>
+      <field type="float" name="max_radius_can_fly_and_go_home" units="m">Furthest the aircraft may fly and still return on the remaining charge.</field>
+      <field type="uint16_t" name="time_needed_to_go_home" units="s">DJI's estimate of the time a return would take.</field>
+      <field type="uint16_t" name="time_needed_to_land" units="s">DJI's estimate of the time a landing would take.</field>
+      <field type="uint16_t" name="total_flight_time" units="s">Flight time on this battery.</field>
+      <field type="uint16_t" name="zoom_focal_length" units="mm">Digital-zoom focal length, or 0 when unknown.</field>
+      <field type="uint16_t" name="optical_focal_length" units="mm">Optical focal length, or 0 when unknown.</field>
+      <field type="uint16_t" name="hybrid_focal_length" units="mm">Hybrid-zoom focal length, or 0 when unknown.</field>
+      <field type="uint8_t" name="battery_needed_to_go_home" units="%">Charge a return is predicted to consume.</field>
+      <field type="uint8_t" name="battery_needed_to_land" units="%">Charge a landing is predicted to consume.</field>
+      <field type="uint8_t" name="flags" enum="WILDBRIDGE_STATUS_FLAGS">Boolean state.</field>
+      <field type="char[24]" name="takeoff_block_reason">Why a takeoff would be refused, or empty when it would not.</field>
+    </message>
+  </messages>
+</mavlink>

@@ -233,7 +233,14 @@ class DJIInterface:
         self._mavlink_telemetry: MavlinkTelemetrySource | None = None
         self._mavlink_commands: MavlinkCommandChannel | None = None
         if self.transport.uses_mavlink:
-            self._mavlink_commands = MavlinkCommandChannel(self.IP_RC, port=self.mavlink_port)
+            self._mavlink_commands = MavlinkCommandChannel(
+                self.IP_RC,
+                port=self.mavlink_port,
+                # A completed goto raises the same reach latch the HTTP surface exposes, so
+                # isWaypointReached(seq) and friends keep working without the caller knowing
+                # which wire the answer came from.
+                on_latch=self._apply_mavlink_telemetry,
+            )
             print(f"Transport: {self.transport.value} (MAVLink on udp/{self.mavlink_port})")
 
     def getVideoSource(self):

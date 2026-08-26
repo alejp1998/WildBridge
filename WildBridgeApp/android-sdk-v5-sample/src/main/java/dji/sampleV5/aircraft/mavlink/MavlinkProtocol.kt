@@ -11,6 +11,15 @@ internal object MavlinkMsgId {
 
     /** Inbound parameter write. */
     const val PARAM_SET = 23
+
+    /** Gimbal attitude, from the gimbal v2 microservice we already advertise. */
+    const val GIMBAL_DEVICE_ATTITUDE_STATUS = 285
+
+    /** The laser rangefinder's range, as a standard ranging sensor. */
+    const val DISTANCE_SENSOR = 132
+
+    /** WildBridge's own residue; see GroundStation/mavlink/wildbridge.xml. */
+    const val WILDBRIDGE_STATUS = 42100
     const val HEARTBEAT = 0
     const val SYS_STATUS = 1
     const val SET_MODE = 11
@@ -129,6 +138,9 @@ internal object Mav {
     const val TYPE_CAMERA = 30
 
     const val RESULT_ACCEPTED = 0
+
+    /** Accepted and still running; a further ack follows when it completes. */
+    const val RESULT_IN_PROGRESS = 5
     const val RESULT_DENIED = 2
     const val RESULT_UNSUPPORTED = 3
 
@@ -181,6 +193,12 @@ internal object Mav {
      * USER_1 is payload aiming (relative gimbal, releasing the manual-override latch).
      * USER_2 is payload sensing (laser rangefinder, spot temperature).
      */
+    /** MAV_DISTANCE_SENSOR_LASER. */
+    const val DISTANCE_SENSOR_TYPE_LASER = 0
+
+    /** MAV_SENSOR_ROTATION_PITCH_270: pointing down, where a gimballed rangefinder looks. */
+    const val SENSOR_ROTATION_PITCH_270 = 25
+
     const val CMD_USER_1 = 31010
     const val CMD_USER_2 = 31011
 

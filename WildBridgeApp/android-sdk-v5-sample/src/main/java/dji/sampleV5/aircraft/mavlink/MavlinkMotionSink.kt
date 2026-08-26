@@ -84,6 +84,15 @@ internal interface MavlinkMotionSink {
     /** Clear the manual-override latch, re-enabling autonomous commands. */
     fun releaseManualOverride(): CommandResult
 
+    /**
+     * Whether a pending command has finished, or null while it is still running.
+     *
+     * Polled rather than pushed because the underlying controller signals arrival by setting a
+     * latch, not by calling back. False means it stopped without arriving — overridden, aborted,
+     * or superseded.
+     */
+    fun pollCompletion(pending: PendingCommand): Boolean?
+
     fun arm(): CommandResult
 
     /** A disarming request, likewise acknowledged as a no-op behind the gate. */

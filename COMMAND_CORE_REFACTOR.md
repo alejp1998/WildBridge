@@ -530,3 +530,80 @@ drone teleporting between positions rather than like an error. Filtering is not 
 own: only one socket receives a given UDP port's packets, so **each aircraft must be configured
 with its own ground-station port** (`WB_MAVLINK_PORT` on the ground side, `wb_mav_0_port` on the
 aircraft).
+
+---
+
+## Closing the telemetry and completion gaps
+
+Counting what the ROS node publishes rather than what the client exposes changed the picture:
+36 keys published, 15 carried. The 21 missing were not one problem but two.
+
+### Completion is a command-protocol matter, not a telemetry one
+
+`waypointReached`, `yawReached` and `altitudeReached` are not state — they answer "did the command
+I sent finish?". MAVLink answers that in the command protocol: a long-running command is
+acknowledged with `MAV_RESULT_IN_PROGRESS`, and acknowledged **again** when it completes.
+
+That is a better fit than the reach latches, because the protocol correlates the completion to the
+request: the stale-latch race that the seq numbers exist to work around cannot arise when the
+answer is addressed to the question. `DO_REPOSITION`, `CONDITION_YAW` and `CONDITION_CHANGE_ALT`
+now report this way, which is what makes a plain goto reportable at all — `MISSION_ITEM_REACHED`
+is emitted only by the mission sequencer, so before this a single goto had no arrival report and a
+caller waiting on one waited forever.
+
+**The completion must not block the caller.** The first implementation waited for the final ack
+inside `send()`, which is correct-looking and wrong: the HTTP contract is that a goto returns a seq
+immediately and the caller polls the latch, so blocking until arrival stalls a ROS callback for the
+whole flight. Testing it against the aircraft hung for the full timeout, which is how it was found.
+The completion is now picked up on a background thread and raises the same `waypointReached` /
+`waypointSeq` keys the HTTP surface exposes, so consumers are unchanged. The seq is captured when
+the command is sent rather than read when the latch rises — another command may have been issued in
+between, and reporting this arrival under that command's number is exactly the confusion the seq
+prevents.
+
+Replies are read by one reader thread and handed to waiters, because several coexist: a command
+waiting for its first ack, and any number of completion watchers waiting for the second. Two
+threads calling `recvfrom` on one socket would each swallow what the other was waiting for.
+
+### The rest, sorted by what MAVLink actually offers
+
+- **Standard messages that already existed.** Gimbal attitude as `GIMBAL_DEVICE_ATTITUDE_STATUS`
+  (285, from the gimbal v2 capability the camera component already advertises), and the laser
+  rangefinder's range as `DISTANCE_SENSOR` (132) — gated on a lock, because a rangefinder
+  reporting a stale range is worse than one reporting nothing.
+- **Computed on the ground.** `distanceToHome` is a function of two positions already on the wire.
+  Defining a message to save a square root would have been the wrong trade. It is also now *more*
+  correct than the HTTP surface, which computes a distance to a home point of (0, 0) before one is
+  set and reports 2,559 km.
+- **A single dialect message.** `wildbridge.xml` defines one `WILDBRIDGE_STATUS` (42100) carrying
+  the genuine residue: the authority latch, takeoff readiness and block reason, DJI's four
+  smart-return budgets, the three focal lengths, and the rangefinder's geo-referenced target. One
+  message rather than eight `MAV_CMD_USER` slots means a ground station that does not know
+  WildBridge ignores exactly one id and loses nothing it understood.
+
+The ground station decodes that one message by hand rather than shipping a generated dialect,
+which would put a build step and a second copy of the definition into every consumer. A test
+regenerates the definition from the XML with mavgen and asserts the layout still matches, so the
+XML is the source of truth in practice and not only in principle.
+
+### Two bugs the comparison caught
+
+**Gimbal field order.** MAVLink packs fields largest-first, so `failure_flags` (u32) precedes
+`flags` (u16) despite being declared after it. Getting that backwards produced a frame with a valid
+checksum that decoded into a denormal float — the same failure mode as the `EXTENDED_SYS_STATE`
+message-id bug earlier in this work: valid MAVLink, silently meaningless.
+
+**Joint gimbal attitude is a rotation, not a subtraction.** DJI reports the gimbal's attitude in
+the world frame and its angle relative to the aircraft; MAVLink's message carries only the first.
+The second is recovered by composing quaternions (`q_body⁻¹ ⊗ q_world`) rather than subtracting
+euler angles, which is only correct while the aircraft is close to level — precisely when it does
+not matter. **The sign is calibrated against a single static sample** and is the one field here
+that still needs confirming in flight against the HTTP stream.
+
+### Where this leaves the count
+
+MAVLink now carries **27 of the 47** telemetry keys, and 25 of the 27 agree exactly with HTTP
+against a live aircraft. Of the two that differ, `distanceToHome` is HTTP being wrong, and
+`gimbalJointAttitude` is the sign above. What remains uncarried is the HTTP-only surface —
+detections, WebRTC and streaming state, phone location, the battery thresholds — none of which the
+flight stack needs.

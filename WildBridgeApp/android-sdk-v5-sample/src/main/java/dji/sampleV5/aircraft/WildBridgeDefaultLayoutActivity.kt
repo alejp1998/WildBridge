@@ -89,6 +89,8 @@ import dji.sampleV5.aircraft.mavlink.MavlinkMissionSink
 import dji.sampleV5.aircraft.mavlink.MissionExecutor
 import dji.sampleV5.aircraft.mavlink.MissionItem
 import dji.sampleV5.aircraft.mavlink.MissionProgressListener
+import dji.sampleV5.aircraft.mavlink.PendingCommand
+import dji.sampleV5.aircraft.mavlink.PendingKind
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -525,6 +527,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
 
     @Volatile override var lrfTargetLocation: LocationCoordinate3D? = null
+
+    /**
+     * Range from the last laser lock, in metres, or null when it has not locked.
+     *
+     * Kept beside the target point because DISTANCE_SENSOR reports the range and
+     * WILDBRIDGE_STATUS reports where that range landed; both come from the same reading, and
+     * publishing one without the other would let them drift apart.
+     */
+    @Volatile
+    private var lrfDistanceMeters: Double? = null
 
     private val productTypeKey: DJIKey<ProductType> = ProductKey.KeyProductType.create()
     private val flightControllerConnectionKey: DJIKey<Boolean> = FlightControllerKey.KeyConnection.create()
@@ -3962,6 +3974,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         val speed = getSpeed()
         val attitude = getAttitude()
         val altitudeAgl = getAltitude()
+        val gimbalAttitude = getGimbalAttitude()
+        val goHomeInfo = goHomeAssessmentProcessor.value
+        val lrfTarget = lrfTargetLocation
 
         return MavlinkSnapshot(
             droneName = droneName,
@@ -3988,7 +4003,30 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             flightMode = getFlightMode().name,
             motorsRunning = isFlyingKey.get(false),
             manualOverrideActive = DroneController.isManualOverrideActive,
-            isRecording = isRecordingKey.get() ?: false
+            isRecording = isRecordingKey.get() ?: false,
+
+            gimbalRollDeg = gimbalAttitude.roll,
+            gimbalPitchDeg = gimbalAttitude.pitch,
+            gimbalYawDeg = gimbalAttitude.yaw,
+            gimbalJointYawDeg = getGimbalJointAttitude().yaw,
+            zoomFocalLengthMm = getCameraZoomFocalLength(),
+            opticalFocalLengthMm = getCameraOpticalFocalLength(),
+            hybridFocalLengthMm = getCameraHybridFocalLength(),
+
+            lrfDistanceM = lrfDistanceMeters,
+            lrfTargetLatitudeDeg = lrfTarget?.latitude,
+            lrfTargetLongitudeDeg = lrfTarget?.longitude,
+            lrfTargetAltitudeM = lrfTarget?.altitude,
+
+            readyToTakeoff = isReadyToTakeoff(),
+            takeoffBlockReason = getTakeoffBlockReason(),
+
+            timeNeededToGoHomeS = getTimeNeededToGoHome(),
+            timeNeededToLandS = getTimeNeededToLand(),
+            totalFlightTimeS = getTimeNeededToGoHome() + getTimeNeededToLand(),
+            maxRadiusCanFlyAndGoHomeM = goHomeInfo.maxRadiusCanFlyAndGoHome.toDouble(),
+            batteryNeededToGoHomePercent = goHomeInfo.batteryPercentNeededToGoHome,
+            batteryNeededToLandPercent = goHomeInfo.batteryPercentNeededToLand
         )
     }
 
@@ -4170,6 +4208,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     MavlinkCommandOutcome.FAILED, "Laser state ${info.laserMeasureState}"
                 )
             }
+            lrfDistanceMeters = info.distance
             info.location3D
                 ?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 || it.altitude != 0.0 }
                 // Surfaced on the telemetry stream as lrfTarget, exactly as the HTTP route does.
@@ -4365,7 +4404,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             // param4 NaN means "use the vehicle's heading mode", exactly as it does in a mission
             // item. Honouring it here too is what lets a single reposition express nose-forward,
             // which is otherwise only reachable by uploading a one-item plan.
-            if (yawDeg.isNaN()) {
+            val seq = if (yawDeg.isNaN()) {
                 DroneController.flyToWaypointNoseForward(
                     latitudeDeg, longitudeDeg, altitudeMeters, 0.0, groundSpeedMps
                 )
@@ -4374,7 +4413,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, groundSpeedMps
                 )
             }
-            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            return CommandResult(
+                MavlinkCommandOutcome.ACCEPTED,
+                pending = PendingCommand(PendingKind.WAYPOINT, seq)
+            )
         }
 
         override fun setYaw(yawDeg: Double): CommandResult {
@@ -4383,8 +4425,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 return CommandResult(MavlinkCommandOutcome.DENIED)
             }
             supersedeMission("yaw")
-            DroneController.gotoYaw(yawDeg)
-            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            val seq = DroneController.gotoYaw(yawDeg)
+            return CommandResult(
+                MavlinkCommandOutcome.ACCEPTED,
+                pending = PendingCommand(PendingKind.YAW, seq)
+            )
         }
 
         override fun abortToPositionHold(): CommandResult {
@@ -4432,8 +4477,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 return CommandResult(MavlinkCommandOutcome.DENIED)
             }
             supersedeMission("altitude change")
-            DroneController.gotoAltitude(altitudeMeters)
-            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            val seq = DroneController.gotoAltitude(altitudeMeters)
+            return CommandResult(
+                MavlinkCommandOutcome.ACCEPTED,
+                pending = PendingCommand(PendingKind.ALTITUDE, seq)
+            )
         }
 
         override fun releaseManualOverride(): CommandResult {
@@ -4441,6 +4489,31 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             // it, and the commands it re-enables are each gated in their own right.
             DroneController.deactivateManualOverride()
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        /**
+         * Whether the movement with this seq has arrived.
+         *
+         * The seq comparison is what makes the answer trustworthy: the latch is a single shared
+         * flag, so without it a leftover `true` from the previous movement reads as this one
+         * arriving instantly. A manual override is reported as a failure rather than as a wait,
+         * because the command is not going to complete once the pilot has the sticks.
+         */
+        override fun pollCompletion(pending: PendingCommand): Boolean? {
+            if (DroneController.isManualOverrideActive) return false
+            val (currentSeq, reached) = when (pending.kind) {
+                PendingKind.WAYPOINT ->
+                    DroneController.getWaypointSeq() to DroneController.isWaypointReached()
+                PendingKind.YAW ->
+                    DroneController.getYawSeq() to DroneController.isYawReached()
+                PendingKind.ALTITUDE ->
+                    DroneController.getAltitudeSeq() to DroneController.isAltitudeReached()
+            }
+            if (currentSeq > pending.seq) {
+                // Something newer took over; this command will never report arrival.
+                return false
+            }
+            return if (currentSeq == pending.seq && reached) true else null
         }
 
         override fun arm(): CommandResult {

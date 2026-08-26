@@ -348,6 +348,23 @@ internal class MavlinkTelemetryEndpoint(
                     planId = missions.currentPlanId()
                 )
             },
+            // The gimbal's pointing direction, from the component that owns the gimbal.
+            Stream(MavlinkMsgId.GIMBAL_DEVICE_ATTITUDE_STATUS, GIMBAL_INTERVAL_MS, camera = true) {
+                MavlinkMessages.gimbalDeviceAttitudeStatus(it, timeBootMs())
+            },
+            // Only while the laser holds a lock: a rangefinder that reports a stale range is
+            // worse than one that reports nothing, because a consumer cannot tell the difference.
+            Stream(
+                MavlinkMsgId.DISTANCE_SENSOR,
+                DISTANCE_SENSOR_INTERVAL_MS,
+                sendIf = { snapshotProvider().lrfDistanceM != null }
+            ) {
+                MavlinkMessages.distanceSensor(it.lrfDistanceM ?: 0.0, timeBootMs())
+            },
+            // Everything WildBridge knows that MAVLink has no message for.
+            Stream(MavlinkMsgId.WILDBRIDGE_STATUS, WILDBRIDGE_STATUS_INTERVAL_MS) {
+                MavlinkMessages.wildbridgeStatus(it, timeBootMs())
+            },
             Stream(MavlinkMsgId.CURRENT_MODE, CURRENT_MODE_INTERVAL_MS) {
                 MavlinkMessages.currentMode(
                     MavlinkFlightMode.fromDjiMode(it.flightMode, it.manualOverrideActive)
@@ -399,9 +416,12 @@ internal class MavlinkTelemetryEndpoint(
             else -> executeCommand(command)
         }
 
+        val pending = result.pending
         val ack = MavlinkMessages.commandAck(
+            // A command that has been accepted but has not arrived yet is acknowledged as
+            // IN_PROGRESS; the final ack follows from watchCompletion when it does.
             command = command.command,
-            result = result.mavResult,
+            result = if (pending != null) Mav.RESULT_IN_PROGRESS else result.mavResult,
             targetSystem = command.senderSystem,
             targetComponent = command.senderComponent,
             resultValue = result.resultValue
@@ -409,6 +429,47 @@ internal class MavlinkTelemetryEndpoint(
         // The ack must come from the component that was addressed, or the requester will not
         // match it to its request.
         sendOnce(MavlinkMsgId.COMMAND_ACK, ack, fromCamera = forCamera)
+        if (pending != null) watchCompletion(command, pending)
+    }
+
+    /**
+     * Watch a running command and send the final ack when it finishes.
+     *
+     * On its own thread because the wait is unbounded in principle — a long leg takes as long as
+     * it takes — and the receive thread must stay free to accept the abort that stops it. The
+     * bound is [COMMAND_COMPLETION_TIMEOUT_MS], after which the command is reported failed rather
+     * than left unanswered: a ground station waiting on an ack that never comes is the failure
+     * this whole mechanism exists to remove.
+     */
+    private fun watchCompletion(command: MavlinkCommand, pending: PendingCommand) {
+        val motion = motionSink ?: return
+        thread(name = "MavlinkCommandWatch", isDaemon = true) {
+            val deadline = System.currentTimeMillis() + COMMAND_COMPLETION_TIMEOUT_MS
+            var completed: Boolean? = null
+            while (running && System.currentTimeMillis() < deadline) {
+                completed = runCatching { motion.pollCompletion(pending) }.getOrNull()
+                if (completed != null) break
+                runCatching { Thread.sleep(COMMAND_COMPLETION_POLL_MS) }.onFailure {
+                    Thread.currentThread().interrupt()
+                    return@thread
+                }
+            }
+            val outcome = when (completed) {
+                true -> Mav.RESULT_ACCEPTED
+                false -> Mav.RESULT_FAILED
+                null -> Mav.RESULT_FAILED
+            }
+            Log.i(TAG, "Command ${command.command} seq ${pending.seq} finished: $completed")
+            sendOnce(
+                MavlinkMsgId.COMMAND_ACK,
+                MavlinkMessages.commandAck(
+                    command = command.command,
+                    result = outcome,
+                    targetSystem = command.senderSystem,
+                    targetComponent = command.senderComponent
+                )
+            )
+        }
     }
 
     /**
@@ -1101,6 +1162,23 @@ internal class MavlinkTelemetryEndpoint(
         private const val VERSION_INTERVAL_MS = 5_000L
         private const val CURRENT_MODE_INTERVAL_MS = 2_000L
         private const val MISSION_CURRENT_INTERVAL_MS = 1_000L
+
+        /** Longest a guided command may run before it is reported failed. */
+        private const val COMMAND_COMPLETION_TIMEOUT_MS = 300_000L
+        private const val COMMAND_COMPLETION_POLL_MS = 200L
+
+        /** Gimbal pointing changes as fast as the operator moves it. */
+        private const val GIMBAL_INTERVAL_MS = 200L
+
+        /** The rangefinder is fired on demand, so its range only needs restating slowly. */
+        private const val DISTANCE_SENSOR_INTERVAL_MS = 500L
+
+        /**
+         * The residue changes slowly — budgets, readiness, focal lengths — so 2 Hz is generous.
+         * It is not gated on anything: a ground station relying on the authority latch needs to
+         * hear that it changed, not to be told only while something else is true.
+         */
+        private const val WILDBRIDGE_STATUS_INTERVAL_MS = 500L
         private const val CAPTURE_STATUS_INTERVAL_MS = 1_000L
 
         private const val CAMERA_VENDOR = "WildBridge"

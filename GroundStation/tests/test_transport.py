@@ -1,6 +1,8 @@
 """Transport selection, and the MAVLink translation that stands in for the HTTP wire."""
 
 import math
+import struct
+import time
 
 import pytest
 from wildbridge_groundstation.transport import (
@@ -14,6 +16,7 @@ from wildbridge_groundstation.transport import (
     CMD_USER_2,
     COMP_ID_AUTOPILOT1,
     GRIPPER_ACTION_RELEASE,
+    MAV_RESULT_IN_PROGRESS,
     PX4_MODE_OFFBOARD,
     PX4_MODE_POSCTL,
     UNSUPPORTED_PREFIX,
@@ -21,10 +24,18 @@ from wildbridge_groundstation.transport import (
     USER1_RELEASE_MANUAL_OVERRIDE,
     USER2_CAPTURE_TEMPERATURE,
     USER2_LRF_MEASURE,
+    WB_FLAG_LRF_TARGET_VALID,
+    WB_FLAG_MANUAL_OVERRIDE,
+    WB_FLAG_READY_TO_TAKEOFF,
+    WILDBRIDGE_STATUS_ID,
+    WILDBRIDGE_STATUS_SIZE,
+    WILDBRIDGE_STATUS_STRUCT,
     MavlinkCommandChannel,
     Transport,
+    _derive,
     _dji_heading,
     apply_mavlink_message,
+    decode_wildbridge_status,
     flight_mode_name,
 )
 
@@ -328,3 +339,286 @@ def test_manual_control_axes_are_clamped():
 
     decoded = _decode(sent["frame"])
     assert decoded.y == 1000 and decoded.x == -1000
+
+
+# -- the WildBridge dialect ---------------------------------------------------------------------
+
+
+def test_the_hand_decoder_matches_the_dialect_definition():
+    """Regenerate WILDBRIDGE_STATUS from wildbridge.xml and check our layout still matches.
+
+    transport.py unpacks this message by hand rather than shipping a generated dialect, which is
+    cheap for one message but silently wrong the moment the XML changes. This test regenerates the
+    definition and compares, so the XML stays the source of truth in practice and not just in
+    principle.
+    """
+    import pathlib
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+
+    xml = pathlib.Path(__file__).resolve().parents[1] / "mavlink" / "wildbridge.xml"
+    assert xml.exists(), xml
+
+    pymavlink = pytest.importorskip("pymavlink")
+    definitions = pathlib.Path(pymavlink.__file__).parent / "message_definitions" / "v1.0"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = pathlib.Path(tmp)
+        for source in definitions.glob("*.xml"):
+            shutil.copy(source, work / source.name)
+        shutil.copy(xml, work / "wildbridge.xml")
+
+        generate = (
+            "from pymavlink.generator import mavgen; import argparse; "
+            "mavgen.mavgen(argparse.Namespace(language='Python', wire_protocol='2.0', "
+            "output='dialect', error_limit=200, validate=False, strict_units=False), "
+            "['wildbridge.xml'])"
+        )
+        subprocess.run([sys.executable, "-c", generate], cwd=work, check=True, capture_output=True)
+
+        sys.path.insert(0, str(work))
+        try:
+            import dialect  # type: ignore[import-not-found]
+
+            message = dialect.MAVLink_wildbridge_status_message
+            assert message.id == WILDBRIDGE_STATUS_ID
+            assert message.unpacker.format == WILDBRIDGE_STATUS_STRUCT
+            assert message.unpacker.size == WILDBRIDGE_STATUS_SIZE
+        finally:
+            sys.path.remove(str(work))
+            sys.modules.pop("dialect", None)
+
+
+def test_wildbridge_status_decodes_into_the_http_telemetry_keys():
+    payload = struct.pack(
+        WILDBRIDGE_STATUS_STRUCT,
+        1234,
+        465180000,
+        65660000,
+        12.5,
+        900.0,
+        45,
+        18,
+        63,
+        24,
+        25,
+        26,
+        18,
+        12,
+        WB_FLAG_MANUAL_OVERRIDE | WB_FLAG_READY_TO_TAKEOFF | WB_FLAG_LRF_TARGET_VALID,
+        b"NONE",
+    )
+    status = decode_wildbridge_status(payload)
+
+    assert status["isManualOverrideActive"] is True
+    assert status["readyToTakeoff"] is True
+    assert status["homeSet"] is False
+    assert status["takeoffBlockReason"] == "NONE"
+    assert status["timeNeededToGoHome"] == 45
+    assert status["batteryNeededToLand"] == 12
+    assert (status["zoomFl"], status["opticalFl"], status["hybridFl"]) == (24, 25, 26)
+    assert status["lrfTarget"] == [pytest.approx(46.518), pytest.approx(6.566), pytest.approx(12.5)]
+
+
+def test_an_unlocked_rangefinder_reports_no_target_rather_than_null_island():
+    payload = struct.pack(
+        WILDBRIDGE_STATUS_STRUCT,
+        0,
+        0,
+        0,
+        0.0,
+        0.0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        b"",
+    )
+    # 0,0 is a real place off West Africa; reporting it as a target would be worse than reporting
+    # nothing, because a consumer cannot tell it apart from a genuine fix.
+    assert decode_wildbridge_status(payload)["lrfTarget"] is None
+
+
+def test_a_truncated_payload_still_decodes():
+    """MAVLink 2 drops trailing zeros, so a mostly-empty status arrives short."""
+    full = struct.pack(WILDBRIDGE_STATUS_STRUCT, 7, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"")
+    assert decode_wildbridge_status(full.rstrip(b"\x00"))["takeoffBlockReason"] == "UNKNOWN"
+
+
+# -- derived and gimbal telemetry ---------------------------------------------------------------
+
+
+def test_distance_to_home_is_computed_rather_than_transmitted():
+    telemetry = {
+        "location": {"latitude": 46.5180, "longitude": 6.5660},
+        "homeLocation": {"latitude": 46.5190, "longitude": 6.5670},
+        "homeSet": True,
+    }
+    _derive(telemetry)
+    # ~135 m north-east; checked against the great-circle distance rather than a magic number.
+    assert telemetry["distanceToHome"] == pytest.approx(135.0, abs=5.0)
+
+
+def test_distance_to_home_is_zero_until_home_is_known():
+    telemetry = {"location": {"latitude": 46.5, "longitude": 6.5}, "homeSet": False}
+    _derive(telemetry)
+    assert telemetry["distanceToHome"] == 0.0
+
+
+def test_gimbal_attitude_reports_the_world_frame_angles():
+    telemetry = {}
+    q = _euler_to_quat(0.0, math.radians(-45.0), math.radians(90.0))
+    apply_mavlink_message(telemetry, FakeMessage("GIMBAL_DEVICE_ATTITUDE_STATUS", q=q))
+    assert telemetry["gimbalAttitude"]["pitch"] == pytest.approx(-45.0, abs=0.01)
+    assert telemetry["gimbalAttitude"]["yaw"] == pytest.approx(90.0, abs=0.01)
+
+
+def test_the_joint_attitude_is_the_gimbal_relative_to_a_tilted_aircraft():
+    """A gimbal holding level on a rolled aircraft is not level in the body frame.
+
+    Subtracting euler angles happens to work here, but the code composes quaternions because the
+    subtraction stops being correct exactly when the aircraft stops being close to level.
+    """
+    telemetry = {
+        "attitude": {"roll": 1.3, "pitch": 0.1, "yaw": 0.0},
+        "_gimbalQuaternion": _euler_to_quat(0.0, 0.0, 0.0),
+        "gimbalAttitude": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+    }
+    _derive(telemetry)
+    joint = telemetry["gimbalJointAttitude"]
+    assert joint["roll"] == pytest.approx(1.3, abs=0.01)
+    assert joint["pitch"] == pytest.approx(0.1, abs=0.01)
+
+
+def test_the_joint_attitude_falls_back_before_any_attitude_arrives():
+    telemetry = {
+        "_gimbalQuaternion": _euler_to_quat(0.0, math.radians(-30.0), 0.0),
+        "gimbalAttitude": {"roll": 0.0, "pitch": -30.0, "yaw": 0.0},
+    }
+    _derive(telemetry)
+    assert telemetry["gimbalJointAttitude"]["pitch"] == pytest.approx(-30.0)
+
+
+def test_unreported_focal_lengths_read_as_minus_one_not_zero():
+    payload = struct.pack(
+        WILDBRIDGE_STATUS_STRUCT, 0, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b""
+    )
+    status = decode_wildbridge_status(payload)
+    # 0 mm is not a lens. The HTTP stream says -1 for "not reported" and so must this.
+    assert (status["zoomFl"], status["opticalFl"], status["hybridFl"]) == (-1, -1, -1)
+
+
+def test_the_rangefinder_range_arrives_as_a_standard_distance_sensor():
+    telemetry = {}
+    apply_mavlink_message(telemetry, FakeMessage("DISTANCE_SENSOR", current_distance=4250))
+    assert telemetry["lrfDistance"] == pytest.approx(42.5)
+
+
+def _euler_to_quat(roll: float, pitch: float, yaw: float):
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    return [
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ]
+
+
+# -- completion reporting -----------------------------------------------------------------------
+
+
+def test_a_goto_returns_at_once_and_raises_its_latch_when_it_arrives():
+    """Accepted is not arrived, but the caller must not be made to wait for arrival either.
+
+    The HTTP contract is that a goto returns a seq immediately and the caller polls the reach
+    latch. Blocking here until the aircraft arrived would stall a ROS callback for the whole
+    flight, so the completion is picked up in the background and raises the latch there.
+    """
+    channel = MavlinkCommandChannel("127.0.0.1")
+    latched = {}
+    channel._on_latch = latched.update
+    channel._socket = _FakeSocket(
+        [
+            _ack_frame(CMD_DO_REPOSITION, MAV_RESULT_IN_PROGRESS),
+            _ack_frame(CMD_DO_REPOSITION, 0),
+        ]
+    )
+
+    started = time.time()
+    reply = channel.send("/send/gotoWaypointHoldHeading", "46.518,6.566,30,90,5", timeout=2.0)
+    elapsed = time.time() - started
+
+    assert reply.startswith("ACCEPTED")
+    assert elapsed < 1.0, "the caller must not wait for the flight"
+
+    seq = int(reply.split("seq=")[1].split()[0])
+    deadline = time.time() + 3.0
+    while time.time() < deadline and "waypointReached" not in latched:
+        time.sleep(0.02)
+
+    assert latched.get("waypointReached") is True
+    assert latched.get("waypointSeq") == seq, "the arrival must be reported under its own seq"
+
+
+def test_a_command_that_never_completes_leaves_its_latch_down():
+    """An accepted command that never arrives must not look like an arrival."""
+    channel = MavlinkCommandChannel("127.0.0.1")
+    latched = {}
+    channel._on_latch = latched.update
+    channel._socket = _FakeSocket([_ack_frame(CMD_DO_REPOSITION, MAV_RESULT_IN_PROGRESS)])
+
+    reply = channel.send("/send/gotoWaypointHoldHeading", "46.518,6.566,30,90,5", timeout=1.0)
+
+    assert reply.startswith("ACCEPTED"), "it was accepted; it just has not finished"
+    time.sleep(0.3)
+    assert "waypointReached" not in latched
+
+
+def test_a_refused_command_is_reported_as_refused():
+    channel = MavlinkCommandChannel("127.0.0.1")
+    channel._socket = _FakeSocket([_ack_frame(CMD_DO_REPOSITION, 3)])  # MAV_RESULT_DENIED
+    reply = channel.send("/send/gotoWaypointHoldHeading", "46.518,6.566,30,90,5", timeout=1.0)
+    assert reply.startswith("REJECTED")
+
+
+def _ack_frame(command: int, result: int) -> bytes:
+    from pymavlink.dialects.v20 import common as mavlink_common
+
+    class Sink:
+        buf = b""
+
+        def write(self, data):
+            self.buf += data
+
+    sink = Sink()
+    mavlink_common.MAVLink(sink, srcSystem=1, srcComponent=1).command_ack_send(command, result)
+    return sink.buf
+
+
+class _FakeSocket:
+    """Hands back queued frames, then behaves like a socket with nothing to read."""
+
+    def __init__(self, frames):
+        self._frames = frames
+
+    def sendto(self, data, address):
+        return len(data)
+
+    def settimeout(self, timeout):
+        return None
+
+    def recvfrom(self, size):
+        if not self._frames:
+            # A real socket blocks until its timeout; raising instantly would spin the reader.
+            time.sleep(0.02)
+            raise TimeoutError
+        return self._frames.pop(0), ("127.0.0.1", 14550)

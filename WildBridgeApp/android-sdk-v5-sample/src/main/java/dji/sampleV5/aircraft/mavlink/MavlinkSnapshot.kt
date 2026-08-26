@@ -62,7 +62,45 @@ internal data class MavlinkSnapshot(
      * reflects what the aircraft is actually doing, including when recording was started from the
      * WildBridge UI or the RC rather than over MAVLink.
      */
-    val isRecording: Boolean = false
+    val isRecording: Boolean = false,
+
+    // -- Payload and gimbal ------------------------------------------------------------------
+
+    /** Gimbal attitude in the world frame, degrees. */
+    val gimbalRollDeg: Double = 0.0,
+    val gimbalPitchDeg: Double = 0.0,
+    val gimbalYawDeg: Double = 0.0,
+
+    /** Gimbal yaw relative to the aircraft body, degrees. DJI calls this the joint angle. */
+    val gimbalJointYawDeg: Double = 0.0,
+
+    /** Focal lengths in millimetres, or 0 when the payload does not report them. */
+    val zoomFocalLengthMm: Int = 0,
+    val opticalFocalLengthMm: Int = 0,
+    val hybridFocalLengthMm: Int = 0,
+
+    /** Last rangefinder reading in metres, or null when the laser has not locked. */
+    val lrfDistanceM: Double? = null,
+    val lrfTargetLatitudeDeg: Double? = null,
+    val lrfTargetLongitudeDeg: Double? = null,
+    val lrfTargetAltitudeM: Double? = null,
+
+    // -- Authority and readiness -------------------------------------------------------------
+
+    /** Pre-flight checks pass and a takeoff would be accepted. */
+    val readyToTakeoff: Boolean = false,
+
+    /** Why a takeoff would be refused, or "NONE". */
+    val takeoffBlockReason: String = "",
+
+    // -- DJI's smart-return budgets ----------------------------------------------------------
+
+    val timeNeededToGoHomeS: Int = 0,
+    val timeNeededToLandS: Int = 0,
+    val totalFlightTimeS: Int = 0,
+    val maxRadiusCanFlyAndGoHomeM: Double = 0.0,
+    val batteryNeededToGoHomePercent: Int = 0,
+    val batteryNeededToLandPercent: Int = 0
 ) {
     companion object {
         const val INVALID_BATTERY = -1

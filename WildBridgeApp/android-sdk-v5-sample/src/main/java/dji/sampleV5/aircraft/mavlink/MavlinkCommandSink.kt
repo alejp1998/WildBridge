@@ -54,6 +54,18 @@ internal interface MavlinkCommandSink {
 }
 
 /**
+ * A command that was accepted and is still running.
+ *
+ * [seq] is the id WildBridge's controller assigned to the movement, and is what distinguishes
+ * this leg's arrival from the previous one's — the same guard the HTTP surface exposes, kept
+ * because the underlying controller still works that way.
+ */
+internal data class PendingCommand(val kind: PendingKind, val seq: Long)
+
+/** Which reach latch a [PendingCommand] is waiting on. */
+internal enum class PendingKind { WAYPOINT, YAW, ALTITUDE }
+
+/**
  * What happened, in a shape that maps straight onto `MAV_RESULT`.
  *
  * The point of a typed outcome rather than a string is that both the HTTP surface and the MAVLink
@@ -85,6 +97,16 @@ internal enum class MavlinkCommandOutcome(val mavResult: Int) {
 internal data class CommandResult(
     val outcome: MavlinkCommandOutcome,
     val detail: String? = null,
+    /**
+     * Set when the command has been accepted but has not finished yet.
+     *
+     * MAVLink's command protocol says a long-running command should be acknowledged with
+     * MAV_RESULT_IN_PROGRESS and acknowledged again when it completes. That is a better fit than
+     * WildBridge's reach latches, because the protocol correlates the completion to the request
+     * itself: the stale-latch race the seq numbers exist to work around cannot arise when the
+     * answer is addressed to the question.
+     */
+    val pending: PendingCommand? = null,
     /**
      * A scalar the command read back, carried in COMMAND_ACK's result_param2.
      *

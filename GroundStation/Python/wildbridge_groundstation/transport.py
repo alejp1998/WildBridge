@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 import os
 import socket
+import struct
 import threading
 import time
 from collections.abc import Callable
@@ -41,6 +42,9 @@ ENV_VAR = "WB_TRANSPORT"
 
 #: MAV_COMP_ID_AUTOPILOT1. Vehicle state is only believed from this component.
 COMP_ID_AUTOPILOT1 = 1
+
+#: MAVLink 2 frame marker.
+MAVLINK2_MAGIC = 0xFD
 DEFAULT_MAVLINK_PORT = 14550
 
 #: Returned by the MAVLink command channel when an endpoint has no MAVLink equivalent. Callers
@@ -103,7 +107,7 @@ class Transport(Enum):
 # --------------------------------------------------------------------------------------------
 
 
-def _quat_to_euler_deg(q: tuple[float, float, float, float]) -> tuple[float, float, float]:
+def _quat_to_euler_deg(q: tuple[float, ...]) -> tuple[float, float, float]:
     """Convert a MAVLink attitude quaternion to DJI's degrees. Unused today, kept for gimbals."""
     w, x, y, z = q
     roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
@@ -235,6 +239,25 @@ def _from_mission_current(telemetry: dict[str, Any], msg: Any) -> bool:
     return True
 
 
+def _from_gimbal_attitude(telemetry: dict[str, Any], msg: Any) -> bool:
+    """Gimbal pointing, from the standard gimbal v2 report.
+
+    The quaternion is kept as well as the euler angles, because the joint attitude DJI reports
+    separately is the gimbal's rotation *relative to the aircraft*, and recovering it needs the
+    rotation rather than the angles. See _derive.
+    """
+    quaternion = tuple(float(v) for v in msg.q)
+    roll, pitch, yaw = _quat_to_euler_deg(quaternion)
+    telemetry["gimbalAttitude"] = {"roll": roll, "pitch": pitch, "yaw": yaw}
+    telemetry["_gimbalQuaternion"] = quaternion
+    return True
+
+
+def _from_distance_sensor(telemetry: dict[str, Any], msg: Any) -> bool:
+    telemetry["lrfDistance"] = msg.current_distance / 100.0
+    return True
+
+
 def _from_mission_item_reached(telemetry: dict[str, Any], msg: Any) -> bool:
     # The mission protocol's arrival report is the MAVLink-side equivalent of the reach latch the
     # HTTP surface exposes as waypointReached/waypointSeq.
@@ -257,7 +280,162 @@ _TELEMETRY_HANDLERS: dict[str, Callable[[dict[str, Any], Any], bool]] = {
     "CAMERA_CAPTURE_STATUS": _from_capture_status,
     "MISSION_CURRENT": _from_mission_current,
     "MISSION_ITEM_REACHED": _from_mission_item_reached,
+    "GIMBAL_DEVICE_ATTITUDE_STATUS": _from_gimbal_attitude,
+    "DISTANCE_SENSOR": _from_distance_sensor,
 }
+
+#: WILDBRIDGE_STATUS, from GroundStation/mavlink/wildbridge.xml. Decoded by hand rather than by
+#: shipping a generated dialect: it is one message, and a generated module would have to be kept
+#: in step in two repositories. The offsets below are mavgen's field order for that definition.
+WILDBRIDGE_STATUS_ID = 42100
+#: mavgen's unpacker format for WILDBRIDGE_STATUS, copied from the generated dialect rather than
+#: worked out by hand, and pinned by a test that regenerates it from the XML.
+WILDBRIDGE_STATUS_STRUCT = "<IiiffHHHHHHBBB24s"
+WILDBRIDGE_STATUS_SIZE = 59
+
+WB_FLAG_MANUAL_OVERRIDE = 1
+WB_FLAG_READY_TO_TAKEOFF = 2
+WB_FLAG_HOME_SET = 4
+WB_FLAG_LRF_TARGET_VALID = 8
+
+
+def decode_wildbridge_status(payload: bytes) -> dict[str, Any]:
+    """Turn a WILDBRIDGE_STATUS payload into the telemetry keys the HTTP stream uses."""
+    # MAVLink 2 truncates trailing zeros, so pad before unpacking fixed offsets.
+    padded = payload.ljust(WILDBRIDGE_STATUS_SIZE, b"\x00")
+    (
+        _time_boot_ms,
+        lrf_lat,
+        lrf_lon,
+        lrf_alt,
+        max_radius,
+        time_to_home,
+        time_to_land,
+        total_time,
+        zoom_fl,
+        optical_fl,
+        hybrid_fl,
+        battery_to_home,
+        battery_to_land,
+        flags,
+        reason_bytes,
+    ) = struct.unpack(WILDBRIDGE_STATUS_STRUCT, padded)
+    reason = reason_bytes.split(b"\x00")[0].decode("ascii", "replace")
+
+    status: dict[str, Any] = {
+        "isManualOverrideActive": bool(flags & WB_FLAG_MANUAL_OVERRIDE),
+        "readyToTakeoff": bool(flags & WB_FLAG_READY_TO_TAKEOFF),
+        "homeSet": bool(flags & WB_FLAG_HOME_SET),
+        "takeoffBlockReason": reason or "UNKNOWN",
+        "maxRadiusCanFlyAndGoHome": max_radius,
+        "timeNeededToGoHome": time_to_home,
+        "timeNeededToLand": time_to_land,
+        "totalTime": total_time,
+        # The wire uses 0 for "the payload does not report this"; the HTTP stream uses -1, and
+        # a consumer switching wires should not see a focal length appear out of nowhere.
+        "zoomFl": zoom_fl or -1,
+        "opticalFl": optical_fl or -1,
+        "hybridFl": hybrid_fl or -1,
+        "batteryNeededToGoHome": battery_to_home,
+        "batteryNeededToLand": battery_to_land,
+    }
+    # Only a locked reading has a target; reporting 0,0 would put it off West Africa.
+    status["lrfTarget"] = (
+        [lrf_lat / 1e7, lrf_lon / 1e7, lrf_alt] if flags & WB_FLAG_LRF_TARGET_VALID else None
+    )
+    return status
+
+
+def _derive(telemetry: dict[str, Any]) -> None:
+    """Fill the keys that are a function of others rather than of a message.
+
+    ``distanceToHome`` is the clear case: both endpoints are already on the wire, so asking the
+    aircraft to send a third number that is computable from the first two would be a message
+    defined to save a square root.
+    """
+    _derive_gimbal_joint(telemetry)
+
+    location = telemetry.get("location") or {}
+    home = telemetry.get("homeLocation") or {}
+    if telemetry.get("homeSet") and location and home:
+        telemetry["distanceToHome"] = _haversine_m(
+            float(location.get("latitude", 0.0)),
+            float(location.get("longitude", 0.0)),
+            float(home.get("latitude", 0.0)),
+            float(home.get("longitude", 0.0)),
+        )
+    else:
+        telemetry.setdefault("distanceToHome", 0.0)
+
+
+def _derive_gimbal_joint(telemetry: dict[str, Any]) -> None:
+    """Recover the gimbal's angle relative to the aircraft from two world-frame attitudes.
+
+    DJI reports both, MAVLink's gimbal message carries only the world-frame one, and the
+    difference is a rotation rather than a subtraction: q_joint = q_body^-1 * q_world. Composing
+    them is exact, where subtracting the euler angles is only correct while the aircraft is
+    close to level -- which is precisely when it does not matter.
+    """
+    quaternion = telemetry.get("_gimbalQuaternion")
+    attitude = telemetry.get("attitude")
+    if quaternion is None:
+        return
+    if not attitude:
+        # No aircraft attitude yet; the gimbal's own attitude is the best available answer.
+        telemetry["gimbalJointAttitude"] = dict(telemetry.get("gimbalAttitude", {}))
+        return
+
+    body = _euler_deg_to_quat(
+        float(attitude.get("roll", 0.0)),
+        float(attitude.get("pitch", 0.0)),
+        float(attitude.get("yaw", 0.0)),
+    )
+    roll, pitch, yaw = _quat_to_euler_deg(_quat_mul(_quat_conjugate(body), quaternion))
+    # Negated to match DJI's sign. The composition above gives the gimbal's rotation expressed in
+    # the body frame; DJI reports the joint angle with the opposite sign, so a gimbal holding
+    # level on an aircraft rolled +1.3 degrees reads +1.3 rather than -1.3.
+    #
+    # This was calibrated against one static sample from a stationary aircraft, which fixes the
+    # sign but not the behaviour through large attitudes. Worth confirming in flight against the
+    # HTTP stream before anything depends on it for pointing.
+    telemetry["gimbalJointAttitude"] = {"roll": -roll, "pitch": -pitch, "yaw": -yaw}
+
+
+def _euler_deg_to_quat(roll: float, pitch: float, yaw: float) -> tuple[float, ...]:
+    cr, sr = math.cos(math.radians(roll) / 2), math.sin(math.radians(roll) / 2)
+    cp, sp = math.cos(math.radians(pitch) / 2), math.sin(math.radians(pitch) / 2)
+    cy, sy = math.cos(math.radians(yaw) / 2), math.sin(math.radians(yaw) / 2)
+    return (
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    )
+
+
+def _quat_conjugate(q: tuple[float, ...]) -> tuple[float, ...]:
+    return (q[0], -q[1], -q[2], -q[3])
+
+
+def _quat_mul(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, ...]:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return (
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    )
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in metres, matching the aircraft's own calculation."""
+    radius = 6_371_000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * radius * math.asin(min(1.0, math.sqrt(a)))
 
 
 def apply_mavlink_message(telemetry: dict[str, Any], msg: Any) -> bool:
@@ -340,9 +518,33 @@ class MavlinkTelemetrySource:
             if self.peer_host and addr[0] != self.peer_host:
                 continue
             self.peer = addr
+
+            changed = self._apply_wildbridge_status(data)
             for msg in parser.parse_buffer(data) or []:
-                if apply_mavlink_message(self._telemetry, msg) and self._on_update is not None:
+                changed |= apply_mavlink_message(self._telemetry, msg)
+            if changed:
+                _derive(self._telemetry)
+                if self._on_update is not None:
                     self._on_update(dict(self._telemetry))
+
+    def _apply_wildbridge_status(self, data: bytes) -> bool:
+        """Decode WILDBRIDGE_STATUS straight off the wire.
+
+        pymavlink only parses ids it has definitions for, and generating a dialect module would
+        put a build step and a second copy of the definition into every consumer. One message is
+        cheaper to unpack by hand -- and wildbridge.xml stays the single source of truth, checked
+        against this code by a test.
+        """
+        if len(data) < 12 or data[0] != MAVLINK2_MAGIC:
+            return False
+        if int.from_bytes(data[7:10], "little") != WILDBRIDGE_STATUS_ID:
+            return False
+        payload = data[10 : 10 + data[1]]
+        try:
+            self._telemetry.update(decode_wildbridge_status(payload))
+        except struct.error:
+            return False
+        return True
 
 
 # --------------------------------------------------------------------------------------------
@@ -383,6 +585,27 @@ USER2_CAPTURE_TEMPERATURE = 2.0
 GRIPPER_ACTION_RELEASE = 0
 
 MAV_RESULT_ACCEPTED = 0
+MAV_RESULT_IN_PROGRESS = 5
+
+#: Replies this channel waits on. Everything else in the stream belongs to the telemetry source.
+_INTERESTING_REPLIES = frozenset(
+    {"COMMAND_ACK", "PARAM_VALUE", "MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"}
+)
+
+#: Most recent replies kept while nothing is waiting for them.
+_INBOX_LIMIT = 64
+
+
+def _ack_matcher(command: int) -> Callable[[Any], bool]:
+    def matches(msg: Any) -> bool:
+        return msg.get_type() == "COMMAND_ACK" and msg.command == command
+
+    return matches
+
+
+#: How long to wait for a moving command to report arrival. A leg takes as long as the distance
+#: and the speed say it does, so this is generous; the aircraft applies its own bound too.
+COMPLETION_TIMEOUT_S = 300.0
 
 #: MAV_FRAME_GLOBAL_RELATIVE_ALT_INT: altitudes are metres above the home point, which is what
 #: DJI reports and what every WildBridge altitude already means.
@@ -621,6 +844,15 @@ PARAM_RTH_ALTITUDE = "WB_RTH_ALT"
 
 #: What a WildBridge parameter reads when the aircraft has never reported it.
 PARAM_UNKNOWN = -1.0
+
+#: Endpoints whose completion raises one of WildBridge's reach latches, so that callers polling
+#: isWaypointReached / isYawReached / isAltitudeReached keep working unchanged over MAVLink.
+REACH_LATCHES = {
+    "/send/gotoWaypointNoseForward": ("waypointReached", "waypointSeq"),
+    "/send/gotoWaypointHoldHeading": ("waypointReached", "waypointSeq"),
+    "/send/gotoYaw": ("yawReached", "yawSeq"),
+    "/send/gotoAltitude": ("altitudeReached", "altitudeSeq"),
+}
 SETTING_PARAMETERS = {"rthAltitude": PARAM_RTH_ALTITUDE}
 
 
@@ -643,7 +875,16 @@ class MavlinkCommandChannel:
     unique per client and monotonic, which is all the stale-latch guard needs.
     """
 
-    def __init__(self, host: str, port: int = DEFAULT_MAVLINK_PORT, target_system: int = 1):
+    def __init__(
+        self,
+        host: str,
+        port: int = DEFAULT_MAVLINK_PORT,
+        target_system: int = 1,
+        on_latch: Callable[[dict[str, Any]], None] | None = None,
+    ):
+        #: Called when a moving command completes, with the reach-latch keys to merge into
+        #: telemetry. The client wires this to its own telemetry state.
+        self._on_latch = on_latch
         self.host = host
         self.port = port
         self.target_system = target_system
@@ -654,6 +895,9 @@ class MavlinkCommandChannel:
         # actually sent -- the telemetry-only paths do not need it at import time.
         self._mav: Any | None = None
         self._parser: Any | None = None
+        self._reader: threading.Thread | None = None
+        self._inbox: list[Any] = []
+        self._inbox_ready = threading.Condition()
         self._sink = _FrameSink()
 
     def supports(self, endpoint: str) -> bool:
@@ -676,7 +920,22 @@ class MavlinkCommandChannel:
 
         command, params = builder(payload)
         result, value = self._send_command(command, params, timeout)
+        if result == MAV_RESULT_IN_PROGRESS:
+            seq = self._next_seq()
+            if endpoint in REACH_LATCHES:
+                self._watch_completion(command, endpoint, seq)
+            return f"ACCEPTED seq={seq} via MAVLink cmd={command}"
         return self._render(endpoint, command, result, value)
+
+    def _next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
+
+    def _raise_latch(self, endpoint: str, seq: int) -> None:
+        reached_key, seq_key = REACH_LATCHES[endpoint]
+        if self._on_latch is not None:
+            self._on_latch({reached_key: True, seq_key: seq})
 
     def _render(self, endpoint: str, command: int, result: int | None, value: int) -> str:
         """Turn a COMMAND_ACK into the text this endpoint returns over HTTP."""
@@ -696,40 +955,98 @@ class MavlinkCommandChannel:
             # No ack arrived. Reported rather than assumed: a caller that waits on a reach latch
             # would otherwise sit there believing a command it never confirmed.
             return f"REJECTED: no COMMAND_ACK for {endpoint}"
+
         if result != MAV_RESULT_ACCEPTED:
             return f"REJECTED: {endpoint} returned MAV_RESULT {result}"
 
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-        return f"ACCEPTED seq={seq} via MAVLink cmd={command}"
+        return f"ACCEPTED seq={self._next_seq()} via MAVLink cmd={command}"
 
     def _send_command(
         self, command: int, params: list[float], timeout: float
     ) -> tuple[int | None, int]:
-        """Send a command and wait for its ack. Returns (MAV_RESULT or None, result_param2)."""
+        """Send a command and wait for its first ack.
+
+        A command that moves the aircraft is acknowledged twice: MAV_RESULT_IN_PROGRESS when it is
+        accepted, and again when it finishes. Only the first is waited for here, because the
+        caller's contract is the HTTP one -- ``requestSendGoToWaypointNoseForward`` returns a seq
+        immediately and the caller polls the reach latch. Blocking until arrival would stall a ROS
+        callback for the whole flight, so the completion is picked up on a background thread and
+        raises the latch there.
+        """
         frame = self._frame_command(command, params)
         with self._lock:
             self._socket.sendto(frame, (self.host, self.port))
-        ack = self._await(lambda m: m.get_type() == "COMMAND_ACK" and m.command == command, timeout)
+
+        ack = self._await(_ack_matcher(command), timeout)
         if ack is None:
             return None, 0
         return ack.result, getattr(ack, "result_param2", 0) or 0
 
-    def _await(self, matches, timeout: float):
-        """Wait for a message this channel cares about, ignoring the telemetry flowing past."""
-        parser = self._ensure_parser()
+    def _watch_completion(self, command: int, endpoint: str, seq: int) -> None:
+        """Raise this endpoint's reach latch when the aircraft reports the command finished.
+
+        [seq] is captured at send time rather than read when the latch rises: another command may
+        have been issued in between, and reporting this arrival under that command's number is
+        exactly the stale-latch confusion the seq exists to prevent.
+        """
+
+        def wait() -> None:
+            ack = self._await(_ack_matcher(command), COMPLETION_TIMEOUT_S)
+            if ack is not None and ack.result == MAV_RESULT_ACCEPTED:
+                self._raise_latch(endpoint, seq)
+
+        threading.Thread(target=wait, name=f"mavlink-complete-{command}", daemon=True).start()
+
+    def _await(self, matches: Callable[[Any], bool], timeout: float) -> Any:
+        """Wait for a message this channel cares about, ignoring the telemetry flowing past.
+
+        Reads are funnelled through one reader thread rather than taken directly, because several
+        waiters coexist: a command waiting for its first ack, and any number of completion
+        watchers waiting for the second. Two threads calling recvfrom on one socket would each
+        swallow messages the other was waiting for.
+        """
+        self._start_reader()
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            self._socket.settimeout(max(0.05, deadline - time.time()))
+        with self._inbox_ready:
+            while True:
+                for index, msg in enumerate(self._inbox):
+                    if matches(msg):
+                        del self._inbox[index]
+                        return msg
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return None
+                self._inbox_ready.wait(remaining)
+
+    def _start_reader(self) -> None:
+        if self._reader is not None:
+            return
+        with self._lock:
+            if self._reader is not None:
+                return
+            self._reader = threading.Thread(
+                target=self._read_loop, name="mavlink-command-reader", daemon=True
+            )
+            self._reader.start()
+
+    def _read_loop(self) -> None:
+        parser = self._ensure_parser()
+        self._socket.settimeout(1.0)
+        while True:
             try:
                 data, _ = self._socket.recvfrom(2048)
-            except (TimeoutError, OSError):
-                return None
+            except TimeoutError:
+                continue
+            except OSError:
+                return
             for msg in parser.parse_buffer(data) or []:
-                if matches(msg):
-                    return msg
-        return None
+                if msg.get_type() not in _INTERESTING_REPLIES:
+                    continue
+                with self._inbox_ready:
+                    self._inbox.append(msg)
+                    # Bounded: a reply nobody is waiting for must not accumulate forever.
+                    del self._inbox[:-_INBOX_LIMIT]
+                    self._inbox_ready.notify_all()
 
     def _ensure_parser(self):
         from pymavlink.dialects.v20 import common as mavlink_common
