@@ -174,7 +174,7 @@ internal class MavlinkTelemetryEndpoint(
             }
 
             for (stream in streams) {
-                if (stream.due(elapsedMs)) {
+                if (stream.due(elapsedMs) && stream.shouldSend(snapshot)) {
                     runCatching { sendOnce(stream.messageId, stream.build(snapshot), stream.camera) }
                         .onFailure { error -> Log.w(TAG, "Send failed: ${error.message}") }
                 }
@@ -197,7 +197,12 @@ internal class MavlinkTelemetryEndpoint(
             Stream(MavlinkMsgId.HEARTBEAT, HEARTBEAT_INTERVAL_MS) { MavlinkMessages.heartbeat(it) },
             Stream(MavlinkMsgId.SYS_STATUS, SLOW_INTERVAL_MS) { MavlinkMessages.sysStatus(it) },
             Stream(MavlinkMsgId.BATTERY_STATUS, SLOW_INTERVAL_MS) { MavlinkMessages.batteryStatus(it) },
-            Stream(MavlinkMsgId.HOME_POSITION, HOME_INTERVAL_MS) { MavlinkMessages.homePosition(it) },
+            // Only once DJI actually has a home point. Before then the SDK reports an
+            // uninitialised location, and a HOME_POSITION carrying it would put a home marker at a
+            // fictional place on the ground station's map — worse than showing no home at all.
+            Stream(MavlinkMsgId.HOME_POSITION, HOME_INTERVAL_MS, sendIf = { it.homeSet }) {
+                MavlinkMessages.homePosition(it)
+            },
             Stream(MavlinkMsgId.GPS_RAW_INT, POSITION_INTERVAL_MS) {
                 MavlinkMessages.gpsRawInt(it, unixTimeUsec())
             },
@@ -322,8 +327,13 @@ internal class MavlinkTelemetryEndpoint(
 
         messageId == MavlinkMsgId.HOME_POSITION -> {
             val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
-            sendOnce(MavlinkMsgId.HOME_POSITION, MavlinkMessages.homePosition(snapshot))
-            Mav.RESULT_ACCEPTED
+            if (snapshot.homeSet) {
+                sendOnce(MavlinkMsgId.HOME_POSITION, MavlinkMessages.homePosition(snapshot))
+                Mav.RESULT_ACCEPTED
+            } else {
+                // Honest refusal beats a fabricated home point.
+                Mav.RESULT_DENIED
+            }
         }
 
         messageId == MavlinkMsgId.CAMERA_INFORMATION && forCamera -> sendCameraInformation()
@@ -425,8 +435,12 @@ internal class MavlinkTelemetryEndpoint(
         private val intervalMs: Long,
         /** Send from the camera component rather than the autopilot component. */
         val camera: Boolean = false,
+        /** Skip this tick entirely when the snapshot has nothing truthful to report. */
+        private val sendIf: (MavlinkSnapshot) -> Boolean = { true },
         private val builder: (MavlinkSnapshot) -> ByteArray
     ) {
+        fun shouldSend(snapshot: MavlinkSnapshot): Boolean = sendIf(snapshot)
+
         private var accumulatedMs = Long.MAX_VALUE / 2
 
         fun due(elapsedMs: Long): Boolean {

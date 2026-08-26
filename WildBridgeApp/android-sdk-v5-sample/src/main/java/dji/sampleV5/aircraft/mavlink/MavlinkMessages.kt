@@ -349,7 +349,20 @@ internal object MavlinkMessages {
         else -> GPS_FIX_TYPE_NO_FIX
     }
 
-    private fun degToE7(degrees: Double): Int = (degrees * DEG_TO_E7).roundToLong().toInt()
+    /**
+     * Degrees to the 1e-7 degree integers MAVLink uses, clamped to the valid coordinate range.
+     *
+     * The clamp is not defensive padding. Before a home point is set, the DJI SDK returns an
+     * uninitialised latitude around 45836623 degrees; scaled by 1e7 that is 4.6e14, and a bare
+     * `.toInt()` wraps it to -1263659053 — which a ground station would plot as latitude
+     * -126.4, a value that is not even a latitude. Clamping keeps a bad input visibly bad instead
+     * of turning it into a plausible-looking position somewhere else on the planet.
+     */
+    private fun degToE7(degrees: Double): Int {
+        if (degrees.isNaN()) return 0
+        val scaled = (degrees * DEG_TO_E7).roundToLong()
+        return scaled.coerceIn(MIN_COORD_E7, MAX_COORD_E7).toInt()
+    }
 
     private fun metresToMm(metres: Double): Int = (metres * M_TO_MM).roundToLong().toInt()
 
@@ -391,5 +404,9 @@ internal object MavlinkMessages {
     private const val FULL_CIRCLE_DEG = 360.0
     private const val HALF_CIRCLE_DEG = 180.0
     private const val MAX_CDEG = 35999
+
+    /** +/-180 degrees in 1e-7 degree units; the widest a latitude or longitude can legally be. */
+    private const val MAX_COORD_E7 = 1_800_000_000L
+    private const val MIN_COORD_E7 = -1_800_000_000L
     private val IDENTITY_QUATERNION = floatArrayOf(1f, 0f, 0f, 0f)
 }
