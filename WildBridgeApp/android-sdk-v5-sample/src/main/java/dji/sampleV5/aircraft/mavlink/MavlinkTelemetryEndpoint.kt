@@ -7,6 +7,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 /**
@@ -65,9 +66,11 @@ internal class MavlinkTelemetryEndpoint(
     @Volatile
     private var configuredTarget: InetSocketAddress? = null
 
-    /** Address of a peer that contacted us, used when no destination was configured. */
-    @Volatile
-    private var discoveredTarget: InetSocketAddress? = null
+    /**
+     * Addresses of peers that have contacted us, so responses reach every interested ground
+     * station rather than only the last one that spoke.
+     */
+    private val discoveredTargets: MutableSet<InetSocketAddress> = ConcurrentHashMap.newKeySet()
 
     /** Set once a peer has been seen, so the UI can show whether a GCS is actually attached. */
     @Volatile
@@ -190,8 +193,7 @@ internal class MavlinkTelemetryEndpoint(
     }
 
     private fun notePeer(address: InetSocketAddress) {
-        if (discoveredTarget == address) return
-        discoveredTarget = address
+        if (!discoveredTargets.add(address)) return
         val label = "${address.address.hostAddress}:${address.port}"
         peerAddress = label
         Log.i(TAG, "Ground station discovered at $label")
@@ -631,7 +633,12 @@ internal class MavlinkTelemetryEndpoint(
         } else {
             framer.frame(messageId, payload)
         }
-        for (destination in destinations()) {
+        val targets = if (messageId == MavlinkMsgId.HEARTBEAT) {
+            heartbeatDestinations()
+        } else {
+            dataDestinations()
+        }
+        for (destination in targets) {
             runCatching {
                 bound.send(DatagramPacket(frame, frame.size, destination))
             }.onFailure { error ->
@@ -641,23 +648,32 @@ internal class MavlinkTelemetryEndpoint(
     }
 
     /**
-     * Where a frame goes. A configured host always receives; a discovered peer also receives, so
-     * that a ground station on an unknown address still works. With neither, fall back to subnet
-     * broadcast, which is how a GCS finds the aircraft without any configuration at all.
+     * Where a data frame goes: the configured GCS plus every peer that has contacted us. With
+     * neither, fall back to subnet broadcast, which is how a GCS finds the aircraft without any
+     * configuration at all.
      */
-    private fun destinations(): List<InetSocketAddress> {
+    private fun dataDestinations(): List<InetSocketAddress> {
         val targets = LinkedHashSet<InetSocketAddress>()
         configuredTarget?.let { targets.add(it) }
-        discoveredTarget?.let { targets.add(it) }
-        if (targets.isEmpty()) {
-            runCatching {
-                targets.add(
-                    InetSocketAddress(InetAddress.getByName(BROADCAST_ADDRESS), config.targetPort)
-                )
-            }
-        }
+        targets.addAll(discoveredTargets)
+        if (targets.isEmpty()) targets.add(broadcastTarget())
         return targets.toList()
     }
+
+    /**
+     * Heartbeats always broadcast, so a ground station that has never spoken to us can still find
+     * the drone even after other peers are known.
+     */
+    private fun heartbeatDestinations(): List<InetSocketAddress> {
+        val targets = LinkedHashSet<InetSocketAddress>()
+        targets.add(broadcastTarget())
+        configuredTarget?.let { targets.add(it) }
+        targets.addAll(discoveredTargets)
+        return targets.toList()
+    }
+
+    private fun broadcastTarget(): InetSocketAddress =
+        InetSocketAddress(InetAddress.getByName(BROADCAST_ADDRESS), config.targetPort)
 
     private fun timeBootMs(): Long = (System.nanoTime() - bootNanos) / NANOS_PER_MILLI
 
