@@ -102,6 +102,22 @@ internal data class MavlinkSnapshot(
     val batteryNeededToGoHomePercent: Int = 0,
     val batteryNeededToLandPercent: Int = 0
 ) {
+    /**
+     * Whether the home coordinates are a real place rather than the SDK's uninitialised value.
+     *
+     * Deliberately separate from [homeSet], which is a latch meaning "the aircraft recorded its
+     * home point on this flight". DJI reports usable home coordinates well before that latch
+     * closes, and the HTTP surface has always published them; gating the MAVLink message on the
+     * latch instead meant a ground station saw no home at all, and computed distances from
+     * nothing. The check that actually matters is whether the numbers are a place: (0, 0) is the
+     * SDK's unset value, and out-of-range values are the uninitialised garbage that once
+     * overflowed the degE7 encoding.
+     */
+    val homeCoordinatesValid: Boolean
+        get() = (homeLatitudeDeg != 0.0 || homeLongitudeDeg != 0.0) &&
+            homeLatitudeDeg in -90.0..90.0 &&
+            homeLongitudeDeg in -180.0..180.0
+
     companion object {
         const val INVALID_BATTERY = -1
         const val INVALID_SATELLITES = -1

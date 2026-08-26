@@ -286,10 +286,18 @@ internal class MavlinkTelemetryEndpoint(
                 MavlinkMessages.extendedSysState(it)
             },
             Stream(MavlinkMsgId.BATTERY_STATUS, SLOW_INTERVAL_MS) { MavlinkMessages.batteryStatus(it) },
-            // Only once DJI actually has a home point. Before then the SDK reports an
-            // uninitialised location, and a HOME_POSITION carrying it would put a home marker at a
-            // fictional place on the ground station's map — worse than showing no home at all.
-            Stream(MavlinkMsgId.HOME_POSITION, HOME_INTERVAL_MS, sendIf = { it.homeSet }) {
+            // Sent as soon as the coordinates are a real place, not once the homeSet latch
+            // closes. The latch means "home was recorded on this flight" and stays false for a
+            // long time after DJI already knows where home is; gating on it left a ground station
+            // with no home marker and no distance-to-home at all, while the HTTP surface showed
+            // both. What must still be excluded is the SDK's uninitialised location, which is
+            // what homeCoordinatesValid tests — an out-of-range latitude once overflowed the
+            // degE7 encoding and put home at -126 degrees.
+            Stream(
+                MavlinkMsgId.HOME_POSITION,
+                HOME_INTERVAL_MS,
+                sendIf = { it.homeCoordinatesValid }
+            ) {
                 MavlinkMessages.homePosition(it)
             },
             Stream(MavlinkMsgId.GPS_RAW_INT, POSITION_INTERVAL_MS) {
@@ -901,7 +909,7 @@ internal class MavlinkTelemetryEndpoint(
 
         messageId == MavlinkMsgId.HOME_POSITION -> {
             val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
-            if (snapshot.homeSet) {
+            if (snapshot.homeCoordinatesValid) {
                 sendOnce(MavlinkMsgId.HOME_POSITION, MavlinkMessages.homePosition(snapshot))
                 Mav.RESULT_ACCEPTED
             } else {

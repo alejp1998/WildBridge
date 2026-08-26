@@ -215,8 +215,10 @@ def _from_home_position(telemetry: dict[str, Any], msg: Any) -> bool:
         "longitude": msg.longitude / 1e7,
         "altitude": msg.altitude / 1000.0,
     }
-    # HOME_POSITION is only emitted once the aircraft actually has a home point.
-    telemetry["homeSet"] = True
+    # Deliberately does not set homeSet. The aircraft sends HOME_POSITION as soon as it knows
+    # where home is, which is well before its "home recorded on this flight" latch closes;
+    # inferring the latch from the message's arrival would report it set when HTTP reports it
+    # clear. WILDBRIDGE_STATUS carries the latch itself.
     return True
 
 
@@ -357,7 +359,11 @@ def _derive(telemetry: dict[str, Any]) -> None:
 
     location = telemetry.get("location") or {}
     home = telemetry.get("homeLocation") or {}
-    if telemetry.get("homeSet") and location and home:
+    # Gated on the coordinates being a real place rather than on the homeSet latch: the aircraft
+    # knows where home is before the latch closes, and a distance is useful from that moment. The
+    # (0, 0) exclusion is what keeps an unset home from reporting 2,559 km to null island.
+    home_is_real = bool(home) and (home.get("latitude") or home.get("longitude"))
+    if location and home_is_real:
         telemetry["distanceToHome"] = _haversine_m(
             float(location.get("latitude", 0.0)),
             float(location.get("longitude", 0.0)),

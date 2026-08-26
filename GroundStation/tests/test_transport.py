@@ -150,14 +150,20 @@ def test_attitude_is_reported_in_degrees_like_the_http_stream():
     assert telemetry["attitude"]["yaw"] == pytest.approx(180.0)
 
 
-def test_home_position_is_what_marks_home_as_set():
+def test_home_position_carries_the_location_but_not_the_latch():
+    """The aircraft knows where home is before its "home recorded" latch closes.
+
+    Inferring the latch from this message arriving would report homeSet true while the HTTP
+    surface reported it false, which is exactly the kind of disagreement between the two wires
+    this work exists to prevent.
+    """
     telemetry = {}
     apply_mavlink_message(
         telemetry,
         FakeMessage("HOME_POSITION", latitude=465180000, longitude=65660000, altitude=400000),
     )
-    assert telemetry["homeSet"] is True
     assert telemetry["homeLocation"]["latitude"] == pytest.approx(46.518)
+    assert "homeSet" not in telemetry, "the latch comes from WILDBRIDGE_STATUS, not from here"
 
 
 def test_mission_item_reached_feeds_the_same_latch_the_http_surface_exposes():
@@ -459,15 +465,22 @@ def test_distance_to_home_is_computed_rather_than_transmitted():
     telemetry = {
         "location": {"latitude": 46.5180, "longitude": 6.5660},
         "homeLocation": {"latitude": 46.5190, "longitude": 6.5670},
-        "homeSet": True,
+        # Deliberately without homeSet: a distance is useful as soon as home has coordinates.
+        "homeSet": False,
     }
     _derive(telemetry)
     # ~135 m north-east; checked against the great-circle distance rather than a magic number.
     assert telemetry["distanceToHome"] == pytest.approx(135.0, abs=5.0)
 
 
-def test_distance_to_home_is_zero_until_home_is_known():
+def test_distance_to_home_is_zero_until_home_has_coordinates():
     telemetry = {"location": {"latitude": 46.5, "longitude": 6.5}, "homeSet": False}
+    _derive(telemetry)
+    assert telemetry["distanceToHome"] == 0.0
+
+    # (0, 0) is the SDK's unset value and a real place off West Africa; reporting the 2,559 km to
+    # it, as the HTTP surface does, is worse than reporting nothing.
+    telemetry["homeLocation"] = {"latitude": 0.0, "longitude": 0.0}
     _derive(telemetry)
     assert telemetry["distanceToHome"] == 0.0
 
