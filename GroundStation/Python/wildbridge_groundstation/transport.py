@@ -47,6 +47,9 @@ COMP_ID_AUTOPILOT1 = 1
 MAVLINK2_MAGIC = 0xFD
 DEFAULT_MAVLINK_PORT = 14550
 
+#: How often this ground station announces itself. 1 Hz is the usual MAVLink heartbeat rate.
+GCS_HEARTBEAT_PERIOD_S = 1.0
+
 #: Returned by the MAVLink command channel when an endpoint has no MAVLink equivalent. Callers
 #: parse command replies as strings, so this is a string rather than an exception: it flows
 #: through the same path a rejection from the aircraft would.
@@ -487,6 +490,7 @@ class MavlinkTelemetrySource:
         #: Address the last packet came from, so commands can be sent back to the aircraft even
         #: when its address was never configured.
         self.peer: tuple[str, int] | None = None
+        self._heartbeat_frame: bytes | None = None
 
     def start(self) -> None:
         if self._running:
@@ -504,6 +508,15 @@ class MavlinkTelemetrySource:
             self._thread.join(timeout=2)
 
     def _receive_loop(self) -> None:
+        parser = self._open_socket()
+        next_heartbeat = 0.0
+        while self._running:
+            if self.peer_host and time.time() >= next_heartbeat:
+                self._send_heartbeat()
+                next_heartbeat = time.time() + GCS_HEARTBEAT_PERIOD_S
+            self._receive_once(parser)
+
+    def _open_socket(self) -> Any:
         from pymavlink.dialects.v20 import common as mavlink_common
 
         parser = mavlink_common.MAVLink(None)
@@ -513,25 +526,60 @@ class MavlinkTelemetrySource:
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind((self.bind_host, self.port))
         self._socket.settimeout(1.0)
+        return parser
 
-        while self._running:
-            try:
-                data, addr = self._socket.recvfrom(2048)
-            except TimeoutError:
-                continue
-            except OSError:
-                break
-            if self.peer_host and addr[0] != self.peer_host:
-                continue
-            self.peer = addr
+    def _receive_once(self, parser: Any) -> None:
+        """Take one datagram and fold it into the telemetry state."""
+        sock = self._socket
+        if sock is None:
+            self._running = False
+            return
+        try:
+            data, addr = sock.recvfrom(2048)
+        except TimeoutError:
+            return
+        except OSError:
+            self._running = False
+            return
 
-            changed = self._apply_wildbridge_status(data)
-            for msg in parser.parse_buffer(data) or []:
-                changed |= apply_mavlink_message(self._telemetry, msg)
-            if changed:
-                _derive(self._telemetry)
-                if self._on_update is not None:
-                    self._on_update(dict(self._telemetry))
+        if self.peer_host and addr[0] != self.peer_host:
+            return
+        self.peer = addr
+
+        changed = self._apply_wildbridge_status(data)
+        for msg in parser.parse_buffer(data) or []:
+            changed |= apply_mavlink_message(self._telemetry, msg)
+        if changed:
+            _derive(self._telemetry)
+            if self._on_update is not None:
+                self._on_update(dict(self._telemetry))
+
+    def _send_heartbeat(self) -> None:
+        """Announce this ground station to the aircraft.
+
+        Standard MAVLink practice -- a ground station heartbeats like anything else on the link --
+        and load-bearing here for a reason that is not obvious: the aircraft starts publishing
+        video to whichever ground station it has heard from, and a transport that only ever
+        listens is never heard from. Telemetry arrived fine without this; video did not.
+        """
+        from pymavlink.dialects.v20 import common as mavlink_common
+
+        if self._heartbeat_frame is None:
+            sink = _FrameSink()
+            mav = mavlink_common.MAVLink(sink, srcSystem=255, srcComponent=190)
+            mav.heartbeat_send(
+                mavlink_common.MAV_TYPE_GCS,
+                mavlink_common.MAV_AUTOPILOT_INVALID,
+                0,
+                0,
+                mavlink_common.MAV_STATE_ACTIVE,
+            )
+            self._heartbeat_frame = sink.buf
+        sock = self._socket
+        if sock is None:
+            return
+        with suppress(OSError):
+            sock.sendto(self._heartbeat_frame, (self.peer_host, self.port))
 
     def _apply_wildbridge_status(self, data: bytes) -> bool:
         """Decode WILDBRIDGE_STATUS straight off the wire.

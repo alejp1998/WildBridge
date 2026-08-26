@@ -2094,6 +2094,22 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         }
     }
 
+    /**
+     * Begin publishing video for a ground station at [clientIp], once.
+     *
+     * Shared by the TCP telemetry server and the MAVLink endpoint so the two announce a ground
+     * station the same way. Repeat calls for a client already streaming are ignored: peer
+     * discovery can fire again after a ground station restarts, and tearing the encoder down to
+     * rebuild the identical publish would drop the picture for everyone watching it.
+     */
+    private fun startStreamingForClient(clientIp: String) {
+        if (lastClientIp == clientIp && lastWhipUrl != null) return
+        Log.i(TAG, "Starting active streaming for $clientIp")
+        lastClientIp = clientIp
+        rebuildTelemetryCache()
+        startActiveStreaming(clientIp)
+    }
+
     override fun restartActiveStreaming() {
         val lastIp = lastClientIp ?: lastWhipUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() } ?: NetworkUtils
             .getDeviceIpAddress() ?: "127.0.0.1"
@@ -4740,6 +4756,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")
+                // A MAVLink ground station appearing is the same event as the first TCP
+                // telemetry client connecting, and it has to start the video the same way.
+                // Without this the WHIP publish only ever begins when something connects to the
+                // telemetry port, so a purely MAVLink ground station gets full telemetry and no
+                // picture — which is what a field test found.
+                val peerIp = peer.substringBefore(':')
+                if (peerIp.isNotBlank()) {
+                    mainHandler.post { startStreamingForClient(peerIp) }
+                }
             }
             endpoint.start()
             mavlinkEndpoint = endpoint

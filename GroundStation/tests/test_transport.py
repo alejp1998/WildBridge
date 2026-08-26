@@ -15,6 +15,7 @@ from wildbridge_groundstation.transport import (
     CMD_USER_1,
     CMD_USER_2,
     COMP_ID_AUTOPILOT1,
+    DEFAULT_MAVLINK_PORT,
     GRIPPER_ACTION_RELEASE,
     MAV_RESULT_IN_PROGRESS,
     PX4_MODE_OFFBOARD,
@@ -31,6 +32,7 @@ from wildbridge_groundstation.transport import (
     WILDBRIDGE_STATUS_SIZE,
     WILDBRIDGE_STATUS_STRUCT,
     MavlinkCommandChannel,
+    MavlinkTelemetrySource,
     Transport,
     _derive,
     _dji_heading,
@@ -177,6 +179,39 @@ def test_an_unmapped_message_changes_nothing():
     telemetry = {"heading": 12.0}
     assert not apply_mavlink_message(telemetry, FakeMessage("PING"))
     assert telemetry == {"heading": 12.0}
+
+
+def test_the_ground_station_announces_itself_with_a_gcs_heartbeat():
+    """Not decoration: the aircraft publishes video to a ground station it has heard from.
+
+    A transport that only listens is never heard from, so telemetry arrived and video never
+    started. The heartbeat is what makes a listening ground station visible.
+    """
+    from pymavlink.dialects.v20 import common as mavlink_common
+
+    source = MavlinkTelemetrySource(peer_host="10.0.0.5")
+    sent = []
+    source._socket = type("S", (), {"sendto": lambda self, b, a: sent.append((b, a))})()
+    source._send_heartbeat()
+
+    assert sent, "a heartbeat must actually be transmitted"
+    frame, address = sent[0]
+    assert address == ("10.0.0.5", DEFAULT_MAVLINK_PORT)
+
+    parser = mavlink_common.MAVLink(None)
+    parser.robust_parsing = True
+    msg = (parser.parse_buffer(frame) or [None])[0]
+    assert msg.get_type() == "HEARTBEAT"
+    assert msg.type == mavlink_common.MAV_TYPE_GCS, "we are a ground station, not a vehicle"
+
+
+def test_the_heartbeat_frame_is_built_once_and_reused():
+    source = MavlinkTelemetrySource(peer_host="10.0.0.5")
+    sent = []
+    source._socket = type("S", (), {"sendto": lambda self, b, a: sent.append(b)})()
+    source._send_heartbeat()
+    source._send_heartbeat()
+    assert sent[0] == sent[1]
 
 
 # -- command translation ----------------------------------------------------------------------
