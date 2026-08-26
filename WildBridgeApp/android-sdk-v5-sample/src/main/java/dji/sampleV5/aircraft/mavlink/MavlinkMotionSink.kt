@@ -17,7 +17,19 @@ package dji.sampleV5.aircraft.mavlink
 internal interface MavlinkMotionSink {
 
     /** Begin a takeoff. */
-    fun takeoff(): CommandResult
+    /**
+     * Take off, and climb to [altitudeM] when one was asked for.
+     *
+     * DJI exposes no takeoff-altitude concept — `startTakeOff()` climbs to the aircraft's own
+     * default and takes no argument — so an altitude is honoured by climbing after the takeoff
+     * completes, not as part of it. That is a close but not identical reading of
+     * `MAV_CMD_NAV_TAKEOFF`, and the difference is visible: the aircraft levels off at DJI's
+     * default first, then continues.
+     *
+     * @param altitudeM metres above the take-off point, or null to leave the aircraft at DJI's
+     *   default height. QGroundControl sends this in param7.
+     */
+    fun takeoff(altitudeM: Float?): CommandResult
 
     /** Begin an auto-land at the current position. */
     fun land(): CommandResult

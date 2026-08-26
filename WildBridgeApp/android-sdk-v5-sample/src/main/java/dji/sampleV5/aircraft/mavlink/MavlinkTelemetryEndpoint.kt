@@ -424,7 +424,11 @@ internal class MavlinkTelemetryEndpoint(
                 // Flight motion, executed through the host's gated MavlinkMotionSink. A null sink
                 // (motion disabled) is refused, and the gate itself returns DENIED when
                 // wb_mav_0_allow_flight is off or the Safety Computer holds authority.
-                Mav.CMD_NAV_TAKEOFF -> motionSink?.takeoff() ?: unsupported
+                Mav.CMD_NAV_TAKEOFF -> motionSink?.takeoff(
+                    // param7 is the requested altitude; NaN or non-positive means "use the
+                    // aircraft's default", which is what a bare takeoff does.
+                    command.param7.takeIf { it.isFinite() && it > 0f }
+                ) ?: unsupported
                 Mav.CMD_NAV_LAND -> motionSink?.land() ?: unsupported
                 Mav.CMD_NAV_RETURN_TO_LAUNCH -> motionSink?.returnToHome() ?: unsupported
                 Mav.CMD_DO_REPOSITION -> motionSink?.reposition(
@@ -490,7 +494,8 @@ internal class MavlinkTelemetryEndpoint(
             return CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
         }
         val result = when (requested) {
-            MavlinkFlightMode.TAKEOFF -> motion.takeoff()
+            // A mode request carries no height, unlike MAV_CMD_NAV_TAKEOFF's param7.
+            MavlinkFlightMode.TAKEOFF -> motion.takeoff(altitudeM = null)
             MavlinkFlightMode.LAND -> motion.land()
             MavlinkFlightMode.SAFE_RECOVERY -> motion.returnToHome()
             else -> {

@@ -205,6 +205,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
         /** How long to wait for a DJI action callback before reporting the command failed. */
         private const val ACTION_TIMEOUT_MS = 2_000L
+
+        /** How long to wait for a take-off to finish before abandoning a requested climb. */
+        private const val TAKEOFF_CLIMB_TIMEOUT_MS = 30_000L
+        private const val TAKEOFF_POLL_MS = 500L
         private const val TAG_THERMAL = "WildBridgeThermal"
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
@@ -4166,9 +4170,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             return null
         }
 
-        override fun takeoff(): CommandResult {
+        override fun takeoff(altitudeM: Float?): CommandResult {
             gate()?.let { return it }
             DroneController.startTakeOff()
+            if (altitudeM != null) climbAfterTakeoff(altitudeM.toDouble())
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
@@ -4221,6 +4226,39 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         override fun disarm(): CommandResult {
             gate()?.let { return it }
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+    }
+
+    /**
+     * Climb to a requested altitude once the take-off has finished.
+     *
+     * DJI's take-off takes no height, so an altitude asked for in `MAV_CMD_NAV_TAKEOFF` has to be
+     * reached by a second movement afterwards. Waiting matters: issuing the climb while the
+     * aircraft is still in its take-off sequence would have the altitude loop fight DJI for the
+     * sticks, so this waits for the aircraft to report itself flying and out of the TAKING_OFF
+     * state before starting.
+     *
+     * Runs on the capture worker rather than the endpoint's receive thread, and gives up rather
+     * than climbing late if the take-off never completes — a climb that begins minutes afterwards
+     * would be a surprise, not a service.
+     */
+    private fun climbAfterTakeoff(altitudeMeters: Double) {
+        captureExecutor.execute {
+            val deadline = System.currentTimeMillis() + TAKEOFF_CLIMB_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                val airborne = isFlyingKey.get(false) &&
+                    DroneController.droneStatus != DroneController.DroneStatus.TAKING_OFF
+                if (airborne) {
+                    Log.i(TAG, "Take-off complete; climbing to ${altitudeMeters}m")
+                    mainHandler.post { DroneController.gotoAltitude(altitudeMeters) }
+                    return@execute
+                }
+                runCatching { Thread.sleep(TAKEOFF_POLL_MS) }.onFailure {
+                    Thread.currentThread().interrupt()
+                    return@execute
+                }
+            }
+            Log.w(TAG, "Take-off did not complete in time; not climbing to ${altitudeMeters}m")
         }
     }
 
