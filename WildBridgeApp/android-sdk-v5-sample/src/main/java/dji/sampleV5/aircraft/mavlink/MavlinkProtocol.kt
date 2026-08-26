@@ -27,6 +27,8 @@ internal object MavlinkMsgId {
     // Camera component (see MavlinkCameraComponent).
     const val CAMERA_INFORMATION = 259
     const val VIDEO_STREAM_INFORMATION = 269
+    const val CAMERA_SETTINGS = 260
+    const val STORAGE_INFORMATION = 261
 
     // Command protocol. COMMAND_LONG and COMMAND_INT are received only; the endpoint answers
     // requests for messages and refuses everything else.
@@ -81,6 +83,8 @@ internal object Mav {
     const val CMD_REQUEST_CAMERA_INFORMATION = 521
     const val CMD_REQUEST_VIDEO_STREAM_INFORMATION = 2504
     const val CMD_REQUEST_VIDEO_STREAM_STATUS = 2505
+    const val CMD_REQUEST_CAMERA_SETTINGS = 522
+    const val CMD_REQUEST_STORAGE_INFORMATION = 525
 
     const val CAMERA_CAP_HAS_VIDEO_STREAM = 256L
 
@@ -93,6 +97,12 @@ internal object Mav {
     const val VIDEO_STREAM_TYPE_RTSP = 0
     const val VIDEO_STREAM_ENCODING_H264 = 1
     const val VIDEO_STREAM_STATUS_RUNNING = 1
+
+    /** CAMERA_MODE_VIDEO: WildBridge streams, it does not run a stills workflow. */
+    const val CAMERA_MODE_VIDEO = 1
+
+    /** STORAGE_STATUS_NOT_SUPPORTED: the DJI card is not exposed over MAVLink yet. */
+    const val STORAGE_STATUS_NOT_SUPPORTED = 3
 
     const val SEVERITY_INFO = 6
     const val SEVERITY_WARNING = 4

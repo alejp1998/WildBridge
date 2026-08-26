@@ -222,6 +222,41 @@ internal object MavlinkMessages {
             .build()
 
     /**
+     * time_boot_ms(u32), mode_id(u8), [ext] zoomLevel(f), focusLevel(f)
+     *
+     * QGroundControl requests this as part of bringing a camera up, and its PhotoVideoControl QML
+     * reads `cameraMode` straight off the resulting object. Leaving the request unanswered is not
+     * neutral: the camera object stays null and the QML throws, which breaks the surrounding
+     * controls — including the button that swaps the map and video views.
+     */
+    fun cameraSettings(timeBootMs: Long, zoomLevel: Float): ByteArray =
+        PayloadWriter()
+            .u32(timeBootMs)
+            .u8(Mav.CAMERA_MODE_VIDEO)
+            .f32(zoomLevel)
+            .f32(0f) // focusLevel: not exposed
+            .build()
+
+    /**
+     * time_boot_ms(u32), total_capacity(f), used_capacity(f), available_capacity(f),
+     * read_speed(f), write_speed(f), storage_id(u8), storage_count(u8), status(u8)
+     *
+     * Reported as NOT_SUPPORTED with zero capacities. The DJI card is real, but it is reachable
+     * over the HTTP media endpoints rather than MAVLink, and claiming a storage volume we cannot
+     * actually enumerate would put figures in the ground station that mean nothing. Answering
+     * honestly still completes QGC's camera model, which is what the QML needs.
+     */
+    fun storageInformation(timeBootMs: Long): ByteArray =
+        PayloadWriter()
+            .u32(timeBootMs)
+            .f32(0f).f32(0f).f32(0f)
+            .f32(0f).f32(0f)
+            .u8(STORAGE_ID)
+            .u8(1) // storage_count
+            .u8(Mav.STORAGE_STATUS_NOT_SUPPORTED)
+            .build()
+
+    /**
      * param_value(f), param_count(u16), param_index(u16), param_id(char[16]), param_type(u8)
      */
     fun paramValue(name: String, value: Float, count: Int, index: Int): ByteArray =
@@ -401,6 +436,9 @@ internal object MavlinkMessages {
 
     /** MAVLink numbers video streams from 1. */
     const val STREAM_ID = 1
+
+    /** MAVLink numbers storage volumes from 1. */
+    private const val STORAGE_ID = 1
     private const val FULL_CIRCLE_DEG = 360.0
     private const val HALF_CIRCLE_DEG = 180.0
     private const val MAX_CDEG = 35999

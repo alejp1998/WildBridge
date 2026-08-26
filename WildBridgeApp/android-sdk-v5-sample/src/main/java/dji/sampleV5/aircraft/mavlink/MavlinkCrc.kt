@@ -30,6 +30,8 @@ internal object MavlinkCrc {
         MavlinkMsgId.MISSION_COUNT to 221,
         MavlinkMsgId.CAMERA_INFORMATION to 92,
         MavlinkMsgId.VIDEO_STREAM_INFORMATION to 109,
+        MavlinkMsgId.CAMERA_SETTINGS to 146,
+        MavlinkMsgId.STORAGE_INFORMATION to 179,
         MavlinkMsgId.COMMAND_ACK to 143,
         // Received, not sent — needed to validate the checksum of inbound commands.
         MavlinkMsgId.COMMAND_INT to 158,

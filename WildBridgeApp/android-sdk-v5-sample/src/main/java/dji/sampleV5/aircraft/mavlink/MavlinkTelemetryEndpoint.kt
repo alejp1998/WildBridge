@@ -250,6 +250,10 @@ internal class MavlinkTelemetryEndpoint(
                 if (forCamera) sendCameraInformation() else Mav.RESULT_UNSUPPORTED
             Mav.CMD_REQUEST_VIDEO_STREAM_INFORMATION ->
                 if (forCamera) sendVideoStreamInformation() else Mav.RESULT_UNSUPPORTED
+            Mav.CMD_REQUEST_CAMERA_SETTINGS ->
+                if (forCamera) sendCameraSettings() else Mav.RESULT_UNSUPPORTED
+            Mav.CMD_REQUEST_STORAGE_INFORMATION ->
+                if (forCamera) sendStorageInformation() else Mav.RESULT_UNSUPPORTED
             else -> {
                 Log.d(TAG, "Refusing unsupported command ${command.command}")
                 Mav.RESULT_UNSUPPORTED
@@ -341,6 +345,10 @@ internal class MavlinkTelemetryEndpoint(
         messageId == MavlinkMsgId.VIDEO_STREAM_INFORMATION && forCamera ->
             sendVideoStreamInformation()
 
+        messageId == MavlinkMsgId.CAMERA_SETTINGS && forCamera -> sendCameraSettings()
+
+        messageId == MavlinkMsgId.STORAGE_INFORMATION && forCamera -> sendStorageInformation()
+
         else -> {
             Log.d(TAG, "Refusing request for message $messageId")
             Mav.RESULT_UNSUPPORTED
@@ -356,6 +364,34 @@ internal class MavlinkTelemetryEndpoint(
                 vendorName = CAMERA_VENDOR,
                 modelName = snapshot.droneName.ifBlank { CAMERA_MODEL_FALLBACK }
             ),
+            fromCamera = true
+        )
+        return Mav.RESULT_ACCEPTED
+    }
+
+    /**
+     * Complete QGroundControl's camera model.
+     *
+     * These two are not optional extras. QGC requests both while bringing a camera up, retries six
+     * times, and gives up — leaving its camera object null. Its PhotoVideoControl QML then reads
+     * `capturesVideo`, `cameraMode`, `storageFreeStr` and `storageStatus` off that null and throws,
+     * which breaks the controls around it including the map/video swap button. Advertising a
+     * camera therefore commits us to answering these, even when the honest answer is "nothing to
+     * report".
+     */
+    private fun sendCameraSettings(): Int {
+        sendOnce(
+            MavlinkMsgId.CAMERA_SETTINGS,
+            MavlinkMessages.cameraSettings(timeBootMs(), zoomLevel = 1f),
+            fromCamera = true
+        )
+        return Mav.RESULT_ACCEPTED
+    }
+
+    private fun sendStorageInformation(): Int {
+        sendOnce(
+            MavlinkMsgId.STORAGE_INFORMATION,
+            MavlinkMessages.storageInformation(timeBootMs()),
             fromCamera = true
         )
         return Mav.RESULT_ACCEPTED
