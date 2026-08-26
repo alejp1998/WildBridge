@@ -205,6 +205,19 @@ def test_the_ground_station_announces_itself_with_a_gcs_heartbeat():
     assert msg.type == mavlink_common.MAV_TYPE_GCS, "we are a ground station, not a vehicle"
 
 
+def test_the_heartbeat_goes_to_the_aircrafts_port_not_our_own():
+    """Listening on 14551 beside QGroundControl must not send commands to 14551.
+
+    The aircraft still listens on 14550; conflating the two ports sends every announcement to a
+    port nothing is bound to, and fails silently.
+    """
+    source = MavlinkTelemetrySource(port=14551, peer_host="10.0.0.5", peer_port=14550)
+    sent = []
+    source._socket = type("S", (), {"sendto": lambda self, b, a: sent.append(a)})()
+    source._send_heartbeat()
+    assert sent == [("10.0.0.5", 14550)]
+
+
 def test_the_heartbeat_frame_is_built_once_and_reused():
     source = MavlinkTelemetrySource(peer_host="10.0.0.5")
     sent = []

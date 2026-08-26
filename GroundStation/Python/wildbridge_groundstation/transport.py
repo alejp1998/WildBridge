@@ -59,16 +59,36 @@ UNSUPPORTED_PREFIX = "REJECTED: no MAVLink equivalent for"
 def mavlink_port_from_env(environ: dict[str, str] | None = None) -> int:
     """UDP port this ground station listens on, from ``WB_MAVLINK_PORT``.
 
-    Configurable because a fleet needs one port per aircraft: only one socket receives a given
-    UDP port's packets, so two aircraft sharing a port would leave one of them unread.
+    Configurable for two reasons, and both bite in practice. A fleet needs one port per aircraft,
+    because only one socket receives a given UDP port's packets. And a second ground station on
+    the same machine -- QGroundControl beside this one -- needs its own port for the same reason:
+    sharing 14550 means the two compete for datagrams and each sees roughly half the telemetry,
+    which looks like one of them being frozen rather than like a conflict.
+
+    The aircraft fans its telemetry out to every ground station it has heard from, so running on
+    a different port is all it takes for both to be fed.
     """
-    raw = (environ if environ is not None else os.environ).get("WB_MAVLINK_PORT", "").strip()
+    return _port_from_env("WB_MAVLINK_PORT", DEFAULT_MAVLINK_PORT, environ)
+
+
+def mavlink_peer_port_from_env(environ: dict[str, str] | None = None) -> int:
+    """UDP port the *aircraft* listens on, from ``WB_MAVLINK_PEER_PORT``.
+
+    Separate from the listen port: this ground station may listen on 14551 while the aircraft
+    still accepts commands on 14550. Conflating the two sends every command to a port nothing is
+    bound to, which fails silently.
+    """
+    return _port_from_env("WB_MAVLINK_PEER_PORT", DEFAULT_MAVLINK_PORT, environ)
+
+
+def _port_from_env(name: str, default: int, environ: dict[str, str] | None) -> int:
+    raw = (environ if environ is not None else os.environ).get(name, "").strip()
     if not raw:
-        return DEFAULT_MAVLINK_PORT
+        return default
     try:
         return int(raw)
     except ValueError:
-        raise ValueError(f"WB_MAVLINK_PORT={raw!r} is not a port number") from None
+        raise ValueError(f"{name}={raw!r} is not a port number") from None
 
 
 class Transport(Enum):
@@ -474,8 +494,11 @@ class MavlinkTelemetrySource:
         bind_host: str = "",
         on_update: Callable[[dict[str, Any]], None] | None = None,
         peer_host: str = "",
+        peer_port: int = DEFAULT_MAVLINK_PORT,
     ):
         self.port = port
+        #: Where the aircraft listens. Distinct from [port], which is where we listen.
+        self.peer_port = peer_port
         self.bind_host = bind_host
         #: Only accept packets from this aircraft. A fleet is the reason: several aircraft
         #: streaming to one port would be folded into a single telemetry dictionary, and the
@@ -579,7 +602,7 @@ class MavlinkTelemetrySource:
         if sock is None:
             return
         with suppress(OSError):
-            sock.sendto(self._heartbeat_frame, (self.peer_host, self.port))
+            sock.sendto(self._heartbeat_frame, (self.peer_host, self.peer_port))
 
     def _apply_wildbridge_status(self, data: bytes) -> bool:
         """Decode WILDBRIDGE_STATUS straight off the wire.

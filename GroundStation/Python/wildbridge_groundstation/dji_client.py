@@ -24,6 +24,7 @@ from wildbridge_groundstation.transport import (
     MavlinkCommandChannel,
     MavlinkTelemetrySource,
     Transport,
+    mavlink_peer_port_from_env,
     mavlink_port_from_env,
 )
 
@@ -183,6 +184,7 @@ class DJIInterface:
         timestamp_factory: Callable[[], str] = telemetry_timestamp,
         transport: Transport | None = None,
         mavlink_port: int | None = None,
+        mavlink_peer_port: int | None = None,
     ):
         self.drone_name = "UNKNOWN"
         self._timestamp_factory = timestamp_factory
@@ -220,9 +222,9 @@ class DJIInterface:
         self._telemetry_thread = None
         self._running = False
 
-        self._configure_transport(transport, mavlink_port)
+        self._configure_transport(transport, mavlink_port, mavlink_peer_port)
 
-    def _configure_transport(self, transport, mavlink_port):
+    def _configure_transport(self, transport, mavlink_port, mavlink_peer_port=None):
         """Choose the wire this client talks over.
 
         Defaults to the environment so a whole stack -- scripts, the ROS node, the safety wrapper
@@ -230,18 +232,24 @@ class DJIInterface:
         """
         self.transport = transport if transport is not None else Transport.from_env()
         self.mavlink_port = mavlink_port if mavlink_port is not None else mavlink_port_from_env()
+        self.mavlink_peer_port = (
+            mavlink_peer_port if mavlink_peer_port is not None else mavlink_peer_port_from_env()
+        )
         self._mavlink_telemetry: MavlinkTelemetrySource | None = None
         self._mavlink_commands: MavlinkCommandChannel | None = None
         if self.transport.uses_mavlink:
             self._mavlink_commands = MavlinkCommandChannel(
                 self.IP_RC,
-                port=self.mavlink_port,
+                port=self.mavlink_peer_port,
                 # A completed goto raises the same reach latch the HTTP surface exposes, so
                 # isWaypointReached(seq) and friends keep working without the caller knowing
                 # which wire the answer came from.
                 on_latch=self._apply_mavlink_telemetry,
             )
-            print(f"Transport: {self.transport.value} (MAVLink on udp/{self.mavlink_port})")
+            print(
+                f"Transport: {self.transport.value} "
+                f"(listening on udp/{self.mavlink_port}, aircraft on udp/{self.mavlink_peer_port})"
+            )
 
     def getVideoSource(self):
         if self.IP_RC == "":
@@ -256,11 +264,14 @@ class DJIInterface:
         self._running = True
         if self.transport.uses_mavlink:
             self._mavlink_telemetry = MavlinkTelemetrySource(
+                # Where we listen, which need not be where the aircraft listens: another ground
+                # station on this machine may already hold 14550.
                 port=self.mavlink_port,
                 on_update=self._apply_mavlink_telemetry,
                 # Only this aircraft's stream. In a fleet each aircraft needs its own UDP port
                 # as well, since one socket per port is all the OS will hand packets to.
                 peer_host=self.IP_RC,
+                peer_port=self.mavlink_peer_port,
             )
             self._mavlink_telemetry.start()
         if self.transport is not Transport.MAVLINK:
