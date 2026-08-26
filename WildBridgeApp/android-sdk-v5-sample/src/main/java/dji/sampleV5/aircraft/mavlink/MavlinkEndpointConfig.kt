@@ -20,7 +20,7 @@ internal data class MavlinkEndpointConfig(
     /** Local port to bind, so the endpoint also learns peers that talk to it first. */
     val listenPort: Int = DEFAULT_GCS_PORT,
     val mode: Profile = Profile.NORMAL,
-    /** MAVLink system id. One per aircraft, the way a GCS distinguishes vehicles. */
+    /** Resolved MAVLink system id (1..254). One per aircraft, the way a GCS distinguishes vehicles. */
     val systemId: Int = DEFAULT_SYSTEM_ID
 ) {
     /**
@@ -40,7 +40,8 @@ internal data class MavlinkEndpointConfig(
     companion object {
         /** The port QGroundControl listens on by default. */
         const val DEFAULT_GCS_PORT = 14550
-        const val DEFAULT_SYSTEM_ID = 1
+        /** 0 = auto-derive the id from the aircraft identity; resolved by [MavlinkSystemId]. */
+        const val DEFAULT_SYSTEM_ID = MavlinkSystemId.AUTO
 
         const val PREF_ENABLED = "wb_mav_0_enabled"
         const val PREF_HOST = "wb_mav_0_host"

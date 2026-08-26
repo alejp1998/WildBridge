@@ -78,8 +78,10 @@ import dji.sampleV5.aircraft.models.PayloadWidgetVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.mavlink.MavlinkEndpointConfig
 import dji.sampleV5.aircraft.mavlink.MavlinkSnapshot
+import dji.sampleV5.aircraft.mavlink.CommandResult
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
+import dji.sampleV5.aircraft.mavlink.MavlinkSystemId
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -3475,7 +3477,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         // Start HTTP Command Server
         if (!NetworkUtils.isPortInUse(HTTP_PORT)) {
             runCatching {
-                httpServer = SimpleHttpServer(HTTP_PORT, this)
+                httpServer = SimpleHttpServer(HTTP_PORT, this, mavlinkCommandSink)
                 httpServer?.start()
                 Log.i(TAG, "HTTP server started on $deviceIp:$HTTP_PORT")
             }.onFailure { error ->
@@ -3878,6 +3880,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         val port = prefIntOrDefault(
             MavlinkEndpointConfig.PREF_PORT, MavlinkEndpointConfig.DEFAULT_GCS_PORT
         )
+        // One system id per aircraft, so QGroundControl does not merge two drones into one vehicle.
+        // 0 (the default) derives the id from the drone name once renamed, and the serial before that.
+        val systemId = MavlinkSystemId.resolve(
+            prefIntOrDefault(
+                MavlinkEndpointConfig.PREF_SYSTEM_ID, MavlinkEndpointConfig.DEFAULT_SYSTEM_ID
+            ),
+            sysIdKey()
+        )
         return MavlinkEndpointConfig(
             enabled = runCatching {
                 sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ENABLED, false)
@@ -3892,10 +3902,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     sharedPreferences.getString(MavlinkEndpointConfig.PREF_MODE, null)
                 }.getOrNull()
             ),
-            systemId = prefIntOrDefault(
-                MavlinkEndpointConfig.PREF_SYSTEM_ID, MavlinkEndpointConfig.DEFAULT_SYSTEM_ID
-            )
+            systemId = systemId
         )
+    }
+
+    /**
+     * The stable identity the MAVLink system id is derived from: the drone name once the operator
+     * has renamed it, otherwise the aircraft serial number. Every device shares the default name,
+     * so keying off the name alone would give every un-renamed drone the same id.
+     */
+    private fun sysIdKey(): String {
+        val name = droneName.trim()
+        return if (name.isNotEmpty() && name != DEFAULT_DRONE_NAME) name else droneSerialNumber
     }
 
     /** Read an int preference that may have been stored as a string by a hand edit. */
@@ -4005,7 +4023,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      */
     private val mavlinkCommandSink = object : MavlinkCommandSink {
 
-        override fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): MavlinkCommandOutcome {
+        override fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): CommandResult {
             gimbalKey.action(
                 GimbalAngleRotation(
                     GimbalAngleRotationMode.ABSOLUTE_ANGLE,
@@ -4013,20 +4031,20 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     true, true, false, 0.1, false, 0
                 )
             )
-            return MavlinkCommandOutcome.ACCEPTED
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
-        override fun setCameraZoom(zoomRatio: Float): MavlinkCommandOutcome {
-            if (zoomRatio <= 0f) return MavlinkCommandOutcome.FAILED
+        override fun setCameraZoom(zoomRatio: Float): CommandResult {
+            if (zoomRatio <= 0f) return CommandResult(MavlinkCommandOutcome.FAILED)
             zoomKey.set(zoomRatio.toDouble())
             // set() is fire-and-forget; the ratio the aircraft settled on is reported in
             // telemetry, which is where a ground station should read it back from.
-            return MavlinkCommandOutcome.ACCEPTED
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
-        override fun startVideoRecording(): MavlinkCommandOutcome = awaitAction(startRecording)
+        override fun startVideoRecording(): CommandResult = awaitAction(startRecording)
 
-        override fun stopVideoRecording(): MavlinkCommandOutcome = awaitAction(stopRecording)
+        override fun stopVideoRecording(): CommandResult = awaitAction(stopRecording)
 
         /**
          * Trip one shutter.
@@ -4043,8 +4061,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
          * Uses the generic photo path, not the thermal one: a Mini 3 has a single lens and no
          * thermal file to find, so labelling the result thermal/wide/zoom would be meaningless.
          */
-        override fun captureImage(): MavlinkCommandOutcome {
-            val endpoint = mavlinkEndpoint ?: return MavlinkCommandOutcome.FAILED
+        override fun captureImage(): CommandResult {
+            val endpoint = mavlinkEndpoint ?: return CommandResult(MavlinkCommandOutcome.FAILED)
             endpoint.reportCaptureStarted()
             captureExecutor.execute {
                 val file = runCatching { Payload.capturePhoto(mediaVM) }
@@ -4052,7 +4070,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     .getOrNull()
                 endpoint.reportImageCaptured(file != null, file?.fileName.orEmpty())
             }
-            return MavlinkCommandOutcome.ACCEPTED
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
     }
 
@@ -4067,7 +4085,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * The wait is bounded: a command the aircraft never answers becomes FAILED rather than
      * blocking the endpoint's receive thread.
      */
-    private fun awaitAction(key: DJIKey.ActionKey<EmptyMsg, EmptyMsg>): MavlinkCommandOutcome {
+    private fun awaitAction(key: DJIKey.ActionKey<EmptyMsg, EmptyMsg>): CommandResult {
         val latch = java.util.concurrent.CountDownLatch(1)
         val succeeded = java.util.concurrent.atomic.AtomicBoolean(false)
         key.action(
@@ -4082,9 +4100,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         )
         val answered = latch.await(ACTION_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         return when {
-            !answered -> MavlinkCommandOutcome.FAILED
-            succeeded.get() -> MavlinkCommandOutcome.ACCEPTED
-            else -> MavlinkCommandOutcome.FAILED
+            !answered -> CommandResult(MavlinkCommandOutcome.FAILED)
+            succeeded.get() -> CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            else -> CommandResult(MavlinkCommandOutcome.FAILED)
         }
     }
 

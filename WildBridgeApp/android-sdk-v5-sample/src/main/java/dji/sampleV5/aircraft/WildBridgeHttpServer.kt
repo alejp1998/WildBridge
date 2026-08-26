@@ -12,6 +12,8 @@ import dji.sampleV5.aircraft.controller.ControlAuthority
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.controller.Payload
 import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
+import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
+import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
 import dji.sampleV5.aircraft.util.NetworkUtils
 import dji.sdk.keyvalue.value.camera.LaserMeasureState
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
@@ -89,7 +91,10 @@ internal interface WildBridgeCommandHost {
     fun setAutoSensingSwitchChecked(checked: Boolean)
 }
 
-internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandHost) {
+internal class WildBridgeHttpCommandHandler(
+    private val host: WildBridgeCommandHost,
+    private val commandSink: MavlinkCommandSink
+) {
         private val postRoutes: Map<String, (String) -> String> = mapOf(
             "/send/takeoff" to {
                 DroneController.startTakeOff()
@@ -269,8 +274,10 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
             },
             "/send/camera/zoom" to { postData ->
                 val targetZoom = postData.toDouble()
-                host.zoomKey.set(targetZoom)
-                "Received: zoom: $targetZoom"
+                when (commandSink.setCameraZoom(targetZoom.toFloat()).outcome) {
+                    MavlinkCommandOutcome.ACCEPTED -> "Received: zoom: $targetZoom"
+                    else -> "Invalid zoom value"
+                }
             },
             "/send/abortMission" to {
                 DroneController.setStick(0.0f, 0.0f, 0.0f, 0.0f)
@@ -290,12 +297,16 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
                 }
             },
             "/send/camera/startRecording" to {
-                host.startRecording.action()
-                "Received: camera start recording"
+                when (commandSink.startVideoRecording().outcome) {
+                    MavlinkCommandOutcome.ACCEPTED -> "Received: camera start recording"
+                    else -> "FAILED: camera start recording"
+                }
             },
             "/send/camera/stopRecording" to {
-                host.stopRecording.action()
-                "Received: camera stop recording"
+                when (commandSink.stopVideoRecording().outcome) {
+                    MavlinkCommandOutcome.ACCEPTED -> "Received: camera stop recording"
+                    else -> "FAILED: camera stop recording"
+                }
             },
             "/send/navigateTrajectoryDJINative" to { postData ->
                 if (DroneController.shouldRejectAutonomousCommand("navigateTrajectoryDJINative")) {
@@ -526,11 +537,12 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
 
 internal class SimpleHttpServer(
     private val port: Int,
-    private val host: WildBridgeCommandHost
+    private val host: WildBridgeCommandHost,
+    private val commandSink: MavlinkCommandSink
 ) {
         private var serverSocket: ServerSocket? = null
         private val executor = Executors.newFixedThreadPool(10)
-        private val commandHandler = WildBridgeHttpCommandHandler(host)
+        private val commandHandler = WildBridgeHttpCommandHandler(host, commandSink)
         @Volatile
         private var isRunning = false
 

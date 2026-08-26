@@ -264,6 +264,26 @@ internal class MavlinkTelemetryEndpoint(
                     timeBootMs(), it.isRecording, capturing, imageCount.get()
                 )
             },
+            // Streamed as well as served on request, for the same reason as CAMERA_CAPTURE_STATUS:
+            // the WHIP publish starts asynchronously (when a telemetry client attaches), so a
+            // ground station that asked before the stream was up gets DENIED and, without this,
+            // never learns the stream exists — which is why switching the active vehicle left the
+            // video stuck on the first drone.
+            Stream(
+                MavlinkMsgId.VIDEO_STREAM_INFORMATION,
+                SLOW_INTERVAL_MS,
+                camera = true,
+                sendIf = { videoStreamProvider()?.uri?.isNotBlank() == true }
+            ) {
+                val stream = videoStreamProvider()!!
+                MavlinkMessages.videoStreamInformation(
+                    uri = stream.uri,
+                    name = stream.name,
+                    framerate = stream.framerate,
+                    widthPx = stream.widthPx,
+                    heightPx = stream.heightPx
+                )
+            },
             Stream(MavlinkMsgId.CURRENT_MODE, CURRENT_MODE_INTERVAL_MS) {
                 MavlinkMessages.currentMode(
                     MavlinkFlightMode.fromDjiMode(it.flightMode, it.manualOverrideActive)
@@ -342,7 +362,7 @@ internal class MavlinkTelemetryEndpoint(
             Log.d(TAG, "Refusing command ${command.command}: no command sink configured")
             return Mav.RESULT_UNSUPPORTED
         }
-        val outcome = runCatching {
+        val result = runCatching {
             when (command.command) {
                 // param1 pitch, param2 yaw, both degrees.
                 Mav.CMD_DO_GIMBAL_MANAGER_PITCHYAW ->
@@ -357,17 +377,17 @@ internal class MavlinkTelemetryEndpoint(
 
                 else -> {
                     Log.d(TAG, "Refusing unsupported command ${command.command}")
-                    MavlinkCommandOutcome.UNSUPPORTED
+                    CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
                 }
             }
         }.getOrElse { error ->
             Log.w(TAG, "Command ${command.command} failed: ${error.message}", error)
-            MavlinkCommandOutcome.FAILED
+            CommandResult(MavlinkCommandOutcome.FAILED)
         }
-        if (outcome != MavlinkCommandOutcome.UNSUPPORTED) {
-            Log.i(TAG, "Command ${command.command} -> $outcome")
+        if (result.outcome != MavlinkCommandOutcome.UNSUPPORTED) {
+            Log.i(TAG, "Command ${command.command} -> ${result.outcome}")
         }
-        return outcome.mavResult
+        return result.mavResult
     }
 
     /**

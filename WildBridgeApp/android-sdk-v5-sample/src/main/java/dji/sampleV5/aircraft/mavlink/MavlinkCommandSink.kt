@@ -1,11 +1,11 @@
 package dji.sampleV5.aircraft.mavlink
 
 /**
- * The commands the MAVLink endpoint is allowed to execute, and the only route by which an inbound
- * message can reach the aircraft.
+ * The commands both the HTTP surface and the MAVLink endpoint are allowed to execute — the single
+ * command gate, so the two surfaces cannot drift in behaviour.
  *
- * Until now the endpoint had no such route at all: it answered requests for messages and refused
- * everything else, which is what made it reviewable without a flight-safety argument. This
+ * Until now the MAVLink endpoint had no such route at all: it answered requests for messages and
+ * refused everything else, which is what made it reviewable without a flight-safety argument. This
  * interface deliberately opens that door, so it is worth being explicit about how far.
  *
  * **Nothing here can move the aircraft.** The commands are payload and camera operations —
@@ -20,17 +20,17 @@ package dji.sampleV5.aircraft.mavlink
 internal interface MavlinkCommandSink {
 
     /** Absolute gimbal pitch and yaw in degrees. Moves the gimbal, never the aircraft. */
-    fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): MavlinkCommandOutcome
+    fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): CommandResult
 
     /** Absolute zoom ratio. */
-    fun setCameraZoom(zoomRatio: Float): MavlinkCommandOutcome
+    fun setCameraZoom(zoomRatio: Float): CommandResult
 
-    fun startVideoRecording(): MavlinkCommandOutcome
+    fun startVideoRecording(): CommandResult
 
-    fun stopVideoRecording(): MavlinkCommandOutcome
+    fun stopVideoRecording(): CommandResult
 
     /** Trip one shutter on the payload. Stores to the card; downloads nothing. */
-    fun captureImage(): MavlinkCommandOutcome
+    fun captureImage(): CommandResult
 }
 
 /**
@@ -52,4 +52,19 @@ internal enum class MavlinkCommandOutcome(val mavResult: Int) {
 
     /** Understood, but not implemented for this airframe. */
     UNSUPPORTED(Mav.RESULT_UNSUPPORTED)
+}
+
+/**
+ * A command outcome plus the text a surface may render.
+ *
+ * [outcome] is the MAV_RESULT-shaped result the two surfaces share; [mavResult] is that same value
+ * for callers that only need the wire value. [detail] is the human-readable text the HTTP surface
+ * returns today, produced once by the command layer so the route table stops composing prose.
+ * The MAVLink surface ignores [detail] and reads only [outcome].
+ */
+internal data class CommandResult(
+    val outcome: MavlinkCommandOutcome,
+    val detail: String? = null
+) {
+    val mavResult: Int get() = outcome.mavResult
 }
