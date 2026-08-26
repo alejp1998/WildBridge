@@ -71,8 +71,12 @@ EXPECTED_MESSAGES = (
     "HOME_POSITION",
     "AUTOPILOT_VERSION",
     "STATUSTEXT",
-    "CURRENT_MODE",
 )
+
+# Streamed by the aircraft but absent from this list on purpose: pymavlink's newest release
+# predates CURRENT_MODE (436), so it cannot decode the frame and would always be reported missing.
+# Use --modes to confirm the mode protocol instead.
+UNDECODABLE_MESSAGES = ("CURRENT_MODE", "AVAILABLE_MODES")
 
 
 def _mavlink_crc(buf: bytes, crc: int = 0xFFFF) -> int:
@@ -260,6 +264,8 @@ def print_summary(counts: collections.Counter, elapsed_s: float) -> None:
         mark = " " if count else "!"
         print(f" {mark} {name:22} {count:6}  {rate:6.2f} Hz")
     unexpected = sorted(set(counts) - set(EXPECTED_MESSAGES))
+    if unexpected:
+        print("   (also seen)")
     for name in unexpected:
         print(f"   {name:22} {counts[name]:6}  (not part of the telemetry phase)")
     print()

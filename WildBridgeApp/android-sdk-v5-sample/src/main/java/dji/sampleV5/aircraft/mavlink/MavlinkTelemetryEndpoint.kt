@@ -647,7 +647,17 @@ internal class MavlinkTelemetryEndpoint(
         fun due(elapsedMs: Long): Boolean {
             accumulatedMs += elapsedMs
             if (accumulatedMs < intervalMs) return false
-            accumulatedMs = 0
+
+            // Carry the overshoot rather than discarding it. The loop tick is not exact — a
+            // 20ms sleep plus the work in the loop lands nearer 24ms — so resetting to zero threw
+            // away a few milliseconds every cycle. Against a 100ms interval that compounded into
+            // firing every ~120ms, which measured as 8.45Hz on the aircraft against a 10Hz
+            // target. Subtracting keeps the long-run average on the interval.
+            accumulatedMs -= intervalMs
+
+            // If the loop stalled for longer than an interval, drop the missed slots instead of
+            // firing a burst to catch up: stale telemetry sent back-to-back is worse than a gap.
+            if (accumulatedMs > intervalMs) accumulatedMs = 0
             return true
         }
 
