@@ -366,7 +366,20 @@ internal class MavlinkTelemetryEndpoint(
             when (command.command) {
                 // param1 pitch, param2 yaw, both degrees.
                 Mav.CMD_DO_GIMBAL_MANAGER_PITCHYAW ->
-                    sink.setGimbalPitchYaw(command.param1, command.param2)
+                    sink.setGimbal(
+                        GimbalRotation(
+                            mode = GimbalRotationMode.ABSOLUTE,
+                            pitchDeg = command.param1.toDouble(),
+                            rollDeg = 0.0,
+                            yawDeg = command.param2.toDouble(),
+                            // DO_GIMBAL_MANAGER_PITCHYAW sets pitch and yaw; roll is not part of
+                            // the command. An axis the gimbal does not have is a no-op on the
+                            // aircraft, so there is no capability check to make.
+                            pitchIgnored = false,
+                            rollIgnored = true,
+                            yawIgnored = false
+                        )
+                    )
 
                 // param2 is the zoom value for MAV_ZOOM_TYPE_RANGE / _CONTINUOUS.
                 Mav.CMD_SET_CAMERA_ZOOM -> sink.setCameraZoom(command.param2)

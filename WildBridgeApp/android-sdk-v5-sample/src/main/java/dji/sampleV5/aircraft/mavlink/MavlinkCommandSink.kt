@@ -19,8 +19,8 @@ package dji.sampleV5.aircraft.mavlink
  */
 internal interface MavlinkCommandSink {
 
-    /** Absolute gimbal pitch and yaw in degrees. Moves the gimbal, never the aircraft. */
-    fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): CommandResult
+    /** Move the gimbal to the given rotation. Moves the gimbal, never the aircraft. */
+    fun setGimbal(rotation: GimbalRotation): CommandResult
 
     /** Absolute zoom ratio. */
     fun setCameraZoom(zoomRatio: Float): CommandResult

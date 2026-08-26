@@ -12,12 +12,13 @@ import dji.sampleV5.aircraft.controller.ControlAuthority
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.controller.Payload
 import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
+import dji.sampleV5.aircraft.mavlink.GimbalRotation
+import dji.sampleV5.aircraft.mavlink.GimbalRotationMode
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
 import dji.sampleV5.aircraft.util.NetworkUtils
 import dji.sdk.keyvalue.value.camera.LaserMeasureState
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
-import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotationMode
 import dji.v5.et.action
 import dji.v5.et.get
 import dji.v5.et.set
@@ -120,36 +121,32 @@ internal class WildBridgeHttpCommandHandler(
             },
             "/send/gimbal/pitch" to { postData ->
                 val command = WildBridgeHttpCommandParser.parseGimbal(postData)
-                val rotation = GimbalAngleRotation(
-                    GimbalAngleRotationMode.ABSOLUTE_ANGLE,
-                    command.pitch,
-                    command.roll,
-                    command.yaw,
-                    false,
-                    true,
-                    true,
-                    0.1,
-                    false,
-                    0
+                commandSink.setGimbal(
+                    GimbalRotation(
+                        mode = GimbalRotationMode.ABSOLUTE,
+                        pitchDeg = command.pitch,
+                        rollDeg = command.roll,
+                        yawDeg = command.yaw,
+                        pitchIgnored = false,
+                        rollIgnored = true,
+                        yawIgnored = true
+                    )
                 )
-                host.gimbalKey.action(rotation)
                 "Received: roll: ${command.roll}, pitch: ${command.pitch}, yaw: ${command.yaw}"
             },
             "/send/gimbal/yaw" to { postData ->
                 val command = WildBridgeHttpCommandParser.parseGimbal(postData)
-                val rotation = GimbalAngleRotation(
-                    GimbalAngleRotationMode.ABSOLUTE_ANGLE,
-                    command.pitch,
-                    command.roll,
-                    command.yaw,
-                    true,
-                    true,
-                    false,
-                    0.1,
-                    false,
-                    0
+                commandSink.setGimbal(
+                    GimbalRotation(
+                        mode = GimbalRotationMode.ABSOLUTE,
+                        pitchDeg = command.pitch,
+                        rollDeg = command.roll,
+                        yawDeg = command.yaw,
+                        pitchIgnored = true,
+                        rollIgnored = true,
+                        yawIgnored = false
+                    )
                 )
-                host.gimbalKey.action(rotation)
                 "Received: roll: ${command.roll}, pitch: ${command.pitch}, yaw: ${command.yaw}"
             },
             "/send/gotoWaypointHoldHeading" to { postData ->
@@ -193,20 +190,30 @@ internal class WildBridgeHttpCommandHandler(
             },
             "/send/gimbal/rel_pitch" to { postData ->
                 val gimbal = WildBridgeHttpCommandParser.parseGimbal(postData)
-                host.gimbalKey.action(
-                    GimbalAngleRotation(
-                        GimbalAngleRotationMode.RELATIVE_ANGLE,
-                        gimbal.pitch, 0.0, 0.0, false, true, false, 0.1, false, 0
+                commandSink.setGimbal(
+                    GimbalRotation(
+                        mode = GimbalRotationMode.RELATIVE,
+                        pitchDeg = gimbal.pitch,
+                        rollDeg = 0.0,
+                        yawDeg = 0.0,
+                        pitchIgnored = false,
+                        rollIgnored = true,
+                        yawIgnored = false
                     )
                 )
                 "Received: relative pitch: ${gimbal.pitch}"
             },
             "/send/gimbal/rel_yaw" to { postData ->
                 val gimbal = WildBridgeHttpCommandParser.parseGimbal(postData)
-                host.gimbalKey.action(
-                    GimbalAngleRotation(
-                        GimbalAngleRotationMode.RELATIVE_ANGLE,
-                        0.0, 0.0, gimbal.yaw, true, true, false, 0.1, false, 0
+                commandSink.setGimbal(
+                    GimbalRotation(
+                        mode = GimbalRotationMode.RELATIVE,
+                        pitchDeg = 0.0,
+                        rollDeg = 0.0,
+                        yawDeg = gimbal.yaw,
+                        pitchIgnored = true,
+                        rollIgnored = true,
+                        yawIgnored = false
                     )
                 )
                 "Received: relative yaw: ${gimbal.yaw}"

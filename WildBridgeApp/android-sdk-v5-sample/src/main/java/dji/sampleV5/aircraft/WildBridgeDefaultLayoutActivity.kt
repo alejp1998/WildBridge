@@ -79,6 +79,8 @@ import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.mavlink.MavlinkEndpointConfig
 import dji.sampleV5.aircraft.mavlink.MavlinkSnapshot
 import dji.sampleV5.aircraft.mavlink.CommandResult
+import dji.sampleV5.aircraft.mavlink.GimbalRotation
+import dji.sampleV5.aircraft.mavlink.GimbalRotationMode
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
 import dji.sampleV5.aircraft.mavlink.MavlinkSystemId
@@ -4023,12 +4025,23 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      */
     private val mavlinkCommandSink = object : MavlinkCommandSink {
 
-        override fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): CommandResult {
+        override fun setGimbal(rotation: GimbalRotation): CommandResult {
             gimbalKey.action(
                 GimbalAngleRotation(
-                    GimbalAngleRotationMode.ABSOLUTE_ANGLE,
-                    pitchDeg.toDouble(), 0.0, yawDeg.toDouble(),
-                    true, true, false, 0.1, false, 0
+                    if (rotation.mode == GimbalRotationMode.ABSOLUTE) {
+                        GimbalAngleRotationMode.ABSOLUTE_ANGLE
+                    } else {
+                        GimbalAngleRotationMode.RELATIVE_ANGLE
+                    },
+                    rotation.pitchDeg,
+                    rotation.rollDeg,
+                    rotation.yawDeg,
+                    rotation.pitchIgnored,
+                    rotation.rollIgnored,
+                    rotation.yawIgnored,
+                    0.1,
+                    false,
+                    0
                 )
             )
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)

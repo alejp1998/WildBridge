@@ -77,13 +77,16 @@ All changes compile cleanly (`:sample:compileCurrentDebugKotlin` → BUILD SUCCE
 - Behaviour changes introduced on purpose: zoom now rejects `<= 0` with `"Invalid zoom value"`;
   recording now blocks on `awaitAction` and can return `"FAILED: camera ..."`.
 
-## 4. What remains (Stage 2 onward, not started)
+## 4. What remains (Stage 2 onward)
 
-1. Extend `MavlinkCommandSink` to cover the **four** gimbal operations the HTTP routes actually
-   do — today the sink only has `setGimbalPitchYaw` (absolute). The HTTP routes are:
-   `/send/gimbal/pitch` (absolute), `/send/gimbal/yaw` (absolute),
-   `/send/gimbal/rel_pitch` (relative), `/send/gimbal/rel_yaw` (relative). Each builds a different
-   `GimbalAngleRotation` (mode + per-axis enable flags). Then re-route them through the sink.
+1. **Gimbal — DONE (uncommitted).** The four HTTP gimbal routes (`/send/gimbal/pitch`, `/yaw`,
+   `/rel_pitch`, `/rel_yaw`) and the MAVLink `MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW` now all go
+   through `MavlinkCommandSink.setGimbal(rotation: GimbalRotation)`. Added a new SDK-free
+   `mavlink/GimbalRotation.kt` (mode + roll/pitch/yaw + the three per-axis `*Ignored` flags,
+   mirroring DJI's `GimbalAngleRotation` minus the constant duration/joint/timeout fields). The
+   `*Ignored` flags per route were preserved byte-for-byte. Also fixed the MAVLink path, which had
+   `pitchIgnored = true` (so `DO_GIMBAL_MANAGER_PITCHYAW` never moved pitch): now `false`, since
+   the aircraft no-ops an axis the gimbal lacks.
 2. Unify the remaining payload route, capture: HTTP has `/send/captureTemperature` and
    `/send/captureThermalImage` (JSON, in `handleJsonEndpoint`) plus `Payload.capturePhoto` — the
    MAVLink side is `captureImage()`. Decide the shared shape before wiring.
