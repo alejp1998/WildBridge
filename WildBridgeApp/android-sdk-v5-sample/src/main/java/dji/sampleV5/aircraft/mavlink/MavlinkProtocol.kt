@@ -31,6 +31,7 @@ internal object MavlinkMsgId {
     const val STORAGE_INFORMATION = 261
     const val VIDEO_STREAM_STATUS = 270
     const val CAMERA_CAPTURE_STATUS = 262
+    const val CAMERA_IMAGE_CAPTURED = 263
 
     // Standard modes protocol. Without these a ground station can only show the raw custom_mode
     // integer, because MAV_AUTOPILOT_INVALID gives it no enum to look the number up in.

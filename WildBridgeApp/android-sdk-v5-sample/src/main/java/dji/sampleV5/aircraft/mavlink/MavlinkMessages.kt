@@ -397,14 +397,55 @@ internal object MavlinkMessages {
      * `recording_time_ms` is 0: MSDK 5.18 exposes no recording-duration key, and a fabricated
      * elapsed time would be worse than none.
      */
-    fun cameraCaptureStatus(timeBootMs: Long, recording: Boolean): ByteArray =
+    fun cameraCaptureStatus(
+        timeBootMs: Long,
+        recording: Boolean,
+        capturing: Boolean = false,
+        imageCount: Int = 0
+    ): ByteArray =
         PayloadWriter()
             .u32(timeBootMs)
             .f32(0f) // image_interval: no interval capture
             .u32(0) // recording_time_ms: not exposed by the SDK
             .f32(0f) // available_capacity: storage is not enumerated, see storageInformation
-            .u8(Mav.CAPTURE_STATUS_IDLE)
+            .u8(if (capturing) Mav.CAPTURE_STATUS_RUNNING else Mav.CAPTURE_STATUS_IDLE)
             .u8(if (recording) Mav.CAPTURE_STATUS_RUNNING else Mav.CAPTURE_STATUS_IDLE)
+            .i32(imageCount)
+            .build()
+
+    /**
+     * time_utc(u64), time_boot_ms(u32), lat(i32), lon(i32), alt(i32), relative_alt(i32),
+     * q(f[4]), image_index(i32), camera_id(u8), capture_result(i8), file_url(char[205])
+     *
+     * Sent after each shutter. Two things make it worth more than the command ack: it carries the
+     * position the photo was taken at, so a ground station can place the image on the map without
+     * correlating timestamps; and `image_index` increments, so a receiver can tell that a capture
+     * was missed rather than silently losing it.
+     *
+     * `capture_result` is where a failed shutter is reported honestly — the command is
+     * acknowledged as accepted immediately, because tripping a shutter and waiting for the file to
+     * appear takes seconds and must not block the endpoint's receive thread.
+     */
+    fun cameraImageCaptured(
+        snapshot: MavlinkSnapshot,
+        timeBootMs: Long,
+        imageIndex: Int,
+        success: Boolean,
+        fileName: String
+    ): ByteArray =
+        PayloadWriter()
+            .u64(0) // time_utc: unknown, receivers fall back to time_boot_ms
+            .u32(timeBootMs)
+            .i32(degToE7(snapshot.latitudeDeg))
+            .i32(degToE7(snapshot.longitudeDeg))
+            .i32(metresToMm(snapshot.altitudeAslM))
+            .i32(metresToMm(snapshot.altitudeAglM))
+            // Attitude quaternion is not computed; identity rather than a wrong rotation.
+            .f32Array(IDENTITY_QUATERNION, QUATERNION_LENGTH)
+            .i32(imageIndex)
+            .u8(0) // camera_id: the single camera this component represents
+            .i8(if (success) 1 else 0)
+            .chars(fileName, FILE_URL_LENGTH)
             .build()
 
     fun cameraInformation(
@@ -527,6 +568,7 @@ internal object MavlinkMessages {
     private const val MODE_NAME_LENGTH = 35
     private const val CAM_DEFINITION_URI_LENGTH = 140
     private const val STREAM_URI_LENGTH = 160
+    private const val FILE_URL_LENGTH = 205
 
     /** MAVLink numbers video streams from 1. */
     const val STREAM_ID = 1

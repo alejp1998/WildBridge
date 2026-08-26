@@ -282,6 +282,24 @@ object Payload {
 
     private fun jsonName(name: String?) = if (name == null) "null" else "\"$name\""
 
+    /**
+     * Trip one shutter and return the file it produced, whichever lens it came from.
+     *
+     * [captureThermal] is the thermal-payload framing of the same operation: it insists on
+     * labelling the result thermal/wide/zoom, which only means something on an H20T-class payload.
+     * This is the airframe-agnostic view for callers that just want "take a photo" — a Mini 3 has
+     * one lens and no thermal file to find.
+     *
+     * Blocking; call from a worker thread. Returns null when the shutter produced nothing.
+     */
+    fun capturePhoto(mediaVM: MediaVM): MediaFile? {
+        val files = captureNewMediaFiles(mediaVM)
+        if (files.isEmpty()) return null
+        // Prefer a real image over any sidecar the payload may also have written.
+        val imageTypes = setOf(MediaFileType.JPEG, MediaFileType.DNG, MediaFileType.TIFF)
+        return files.firstOrNull { it.fileType in imageTypes } ?: files.first()
+    }
+
     // Returns null if the shutter produced no thermal file. Blocking, call from a worker thread.
     fun captureThermal(mediaVM: MediaVM): String? {
         val capture = takeThermalAndVisual(mediaVM)

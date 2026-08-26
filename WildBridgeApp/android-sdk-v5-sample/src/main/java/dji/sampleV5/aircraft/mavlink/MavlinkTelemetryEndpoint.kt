@@ -77,6 +77,40 @@ internal class MavlinkTelemetryEndpoint(
     /** Fires the first time a ground station is heard from. */
     var onPeerDiscovered: ((String) -> Unit)? = null
 
+    /** Photos taken since boot, reported as CAMERA_CAPTURE_STATUS.image_count. */
+    private val imageCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** True while a shutter is in flight, so capture status reports it honestly. */
+    @Volatile
+    private var capturing = false
+
+    /**
+     * Announce the result of a shutter that was started earlier.
+     *
+     * Capture is asynchronous by necessity — tripping a shutter and waiting for the file to appear
+     * takes seconds, and the endpoint's receive thread cannot block for that long. The command is
+     * acknowledged immediately and the outcome arrives here, which is exactly the split
+     * CAMERA_IMAGE_CAPTURED exists for: `capture_result` reports whether the photo happened.
+     */
+    fun reportImageCaptured(success: Boolean, fileName: String) {
+        capturing = false
+        val index = if (success) imageCount.incrementAndGet() else imageCount.get()
+        val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
+        sendOnce(
+            MavlinkMsgId.CAMERA_IMAGE_CAPTURED,
+            MavlinkMessages.cameraImageCaptured(
+                snapshot, timeBootMs(), index, success, fileName
+            ),
+            fromCamera = true
+        )
+        Log.i(TAG, "Image captured: success=$success file=$fileName index=$index")
+    }
+
+    /** Called when a shutter is started, so capture status shows it in progress. */
+    fun reportCaptureStarted() {
+        capturing = true
+    }
+
     fun start() {
         if (running) return
         running = true
@@ -226,7 +260,9 @@ internal class MavlinkTelemetryEndpoint(
             // UI or the RC, and a ground station that only polled after its own commands would
             // never notice.
             Stream(MavlinkMsgId.CAMERA_CAPTURE_STATUS, CAPTURE_STATUS_INTERVAL_MS, camera = true) {
-                MavlinkMessages.cameraCaptureStatus(timeBootMs(), it.isRecording)
+                MavlinkMessages.cameraCaptureStatus(
+                    timeBootMs(), it.isRecording, capturing, imageCount.get()
+                )
             },
             Stream(MavlinkMsgId.CURRENT_MODE, CURRENT_MODE_INTERVAL_MS) {
                 MavlinkMessages.currentMode(
@@ -469,7 +505,9 @@ internal class MavlinkTelemetryEndpoint(
         val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
         sendOnce(
             MavlinkMsgId.CAMERA_CAPTURE_STATUS,
-            MavlinkMessages.cameraCaptureStatus(timeBootMs(), snapshot.isRecording),
+            MavlinkMessages.cameraCaptureStatus(
+                timeBootMs(), snapshot.isRecording, capturing, imageCount.get()
+            ),
             fromCamera = true
         )
         return Mav.RESULT_ACCEPTED

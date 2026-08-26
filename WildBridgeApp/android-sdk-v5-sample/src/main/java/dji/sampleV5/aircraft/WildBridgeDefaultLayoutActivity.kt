@@ -320,6 +320,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * pattern of switching MAVLink instances on by parameter rather than by build.
      */
     private var mavlinkEndpoint: MavlinkTelemetryEndpoint? = null
+
+    /**
+     * Single worker for shutter operations. One thread, so two rapid capture commands queue rather
+     * than tripping the shutter concurrently — the DJI media pipeline resolves new files by index
+     * and overlapping captures would confuse which file belongs to which command.
+     */
+    private val captureExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var webRTCStreamer: WebRTCStreamer? = null
     @Volatile private var lastWhipUrl: String? = null  // Remembered for FPS/Quality mode restarts
     @Volatile private var lastClientIp: String? = null
@@ -3592,6 +3599,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             telemetryServer?.stop()
             mavlinkEndpoint?.stop()
             mavlinkEndpoint = null
+            captureExecutor.shutdownNow()
             webRTCStreamer?.listener = null
             stopActiveStreaming()
             discoveryManager.stopDiscoveryServer()
@@ -4021,17 +4029,30 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         override fun stopVideoRecording(): MavlinkCommandOutcome = awaitAction(stopRecording)
 
         /**
-         * Trips one shutter. Returns FAILED rather than ACCEPTED when the payload reports no
-         * capture, so a ground station sees the difference between "done" and "nothing happened"
-         * instead of a cheerful ack for a photo that does not exist.
+         * Trip one shutter.
+         *
+         * Runs on a worker rather than inline: tripping a shutter and waiting for the file to
+         * appear takes seconds, and this is called from the endpoint's single receive thread —
+         * blocking it would stall every other inbound message, including the ground station's own
+         * heartbeat handling.
+         *
+         * So the command is acknowledged as accepted and the real outcome follows as
+         * CAMERA_IMAGE_CAPTURED, whose `capture_result` reports whether a photo actually
+         * happened. That split is what the message exists for.
+         *
+         * Uses the generic photo path, not the thermal one: a Mini 3 has a single lens and no
+         * thermal file to find, so labelling the result thermal/wide/zoom would be meaningless.
          */
         override fun captureImage(): MavlinkCommandOutcome {
-            val descriptor = Payload.captureThermal(mediaVM)
-            return if (descriptor != null) {
-                MavlinkCommandOutcome.ACCEPTED
-            } else {
-                MavlinkCommandOutcome.FAILED
+            val endpoint = mavlinkEndpoint ?: return MavlinkCommandOutcome.FAILED
+            endpoint.reportCaptureStarted()
+            captureExecutor.execute {
+                val file = runCatching { Payload.capturePhoto(mediaVM) }
+                    .onFailure { Log.e(TAG, "Capture failed: ${it.message}", it) }
+                    .getOrNull()
+                endpoint.reportImageCaptured(file != null, file?.fileName.orEmpty())
             }
+            return MavlinkCommandOutcome.ACCEPTED
         }
     }
 
