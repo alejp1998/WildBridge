@@ -346,6 +346,89 @@ internal object MavlinkMessages {
             .build()
 
     /**
+     * seq(u16), target_system(u8), target_component(u8), [ext] mission_type(u8)
+     *
+     * Asks the ground station for one item during an upload. The upload is a conversation: it
+     * announces a count, we request each index in turn, it answers. Requesting by index rather
+     * than streaming is what lets a lost item be retried without restarting the plan.
+     */
+    fun missionRequestInt(seq: Int, targetSystem: Int, targetComponent: Int): ByteArray =
+        PayloadWriter()
+            .u16(seq)
+            .u8(targetSystem)
+            .u8(targetComponent)
+            .u8(MavlinkMissionStore.MISSION_TYPE_MISSION)
+            .build()
+
+    /**
+     * target_system(u8), target_component(u8), type(u8), [ext] mission_type(u8)
+     *
+     * Ends an upload or download. `type` carries a MAV_MISSION_RESULT, so a refusal says which
+     * item was wrong rather than failing silently — §11's rule that a silently dropped mission
+     * item is a flight-safety bug.
+     */
+    fun missionAck(result: Int, targetSystem: Int, targetComponent: Int): ByteArray =
+        PayloadWriter()
+            .u8(targetSystem)
+            .u8(targetComponent)
+            .u8(result)
+            .u8(MavlinkMissionStore.MISSION_TYPE_MISSION)
+            .build()
+
+    /**
+     * param1(f), param2(f), param3(f), param4(f), x(i32), y(i32), z(f), seq(u16), command(u16),
+     * target_system(u8), target_component(u8), frame(u8), current(u8), autocontinue(u8)
+     *
+     * One item of a stored plan, sent during a download. Latitude and longitude are the scaled
+     * integers the INT variant exists for; altitude is a float in metres, relative to home.
+     */
+    fun missionItemInt(
+        item: MissionItem,
+        targetSystem: Int,
+        targetComponent: Int,
+        isCurrent: Boolean
+    ): ByteArray =
+        PayloadWriter()
+            .f32(item.param1)
+            .f32(item.param2)
+            .f32(item.param3)
+            .f32(item.param4)
+            .i32(degToE7(item.latitudeDeg))
+            .i32(degToE7(item.longitudeDeg))
+            .f32(item.altitudeM.toFloat())
+            .u16(item.seq)
+            .u16(item.command)
+            .u8(targetSystem)
+            .u8(targetComponent)
+            .u8(MAV_FRAME_GLOBAL_RELATIVE_ALT_INT)
+            .u8(if (isCurrent) 1 else 0)
+            .u8(if (item.autocontinue) 1 else 0)
+            .build()
+
+    /**
+     * seq(u16), [ext] total(u16), mission_state(u8), mission_mode(u8), mission_id(u32),
+     * fence_id(u32), rally_points_id(u32)
+     *
+     * Streamed so a ground station can show which item is being flown without asking. The
+     * `mission_id` changes whenever the stored plan changes, which is how a station notices its
+     * cached copy is stale.
+     */
+    fun missionCurrent(seq: Int, total: Int, state: Int, planId: Int): ByteArray =
+        PayloadWriter()
+            .u16(seq)
+            .u16(total)
+            .u8(state)
+            .u8(0) // mission_mode: not reported
+            .u32(planId.toLong())
+            .build()
+
+    /** seq(u16) — emitted as each waypoint is reached. */
+    fun missionItemReached(seq: Int): ByteArray =
+        PayloadWriter()
+            .u16(seq)
+            .build()
+
+    /**
      * param_value(f), param_count(u16), param_index(u16), param_id(char[16]), param_type(u8)
      */
     fun paramValue(name: String, value: Float, count: Int, index: Int): ByteArray =
@@ -360,13 +443,19 @@ internal object MavlinkMessages {
     /**
      * count(u16), target_system(u8), target_component(u8), [ext] mission_type(u8)
      *
-     * Always zero items. WildBridge stores no MAVLink plan — DJI owns the geofence, and native
-     * waypoint missions do not round-trip through MISSION_ITEM_INT. Answering "empty" is honest
-     * and lets a ground station finish its plan download instead of retrying.
+     * Opens a plan download, and also answers MISSION_REQUEST_LIST when the store is empty — a
+     * count of zero is how a ground station is told there is no plan, and lets it finish the
+     * download instead of retrying. [missionType] is echoed back so a station that asked about a
+     * geofence or rally points sees the answer belongs to its question.
      */
-    fun missionCount(targetSystem: Int, targetComponent: Int, missionType: Int): ByteArray =
+    fun missionCount(
+        count: Int,
+        targetSystem: Int,
+        targetComponent: Int,
+        missionType: Int
+    ): ByteArray =
         PayloadWriter()
-            .u16(0)
+            .u16(count)
             .u8(targetSystem)
             .u8(targetComponent)
             .u8(missionType)
@@ -383,13 +472,21 @@ internal object MavlinkMessages {
         command: Int,
         result: Int,
         targetSystem: Int,
-        targetComponent: Int
+        targetComponent: Int,
+        /**
+         * Command-specific return value, which MAVLink defines result_param2 to carry.
+         *
+         * WildBridge uses it for the commands whose whole point is to read something back — the
+         * rangefinder's distance, the thermal spot temperature — so a caller gets the reading in
+         * the ack rather than having to poll telemetry and hope it is looking at the right sample.
+         */
+        resultValue: Int = 0
     ): ByteArray =
         PayloadWriter()
             .u16(command)
             .u8(result)
             .u8(0) // progress
-            .i32(0) // result_param2
+            .i32(resultValue)
             .u8(targetSystem)
             .u8(targetComponent)
             .build()
@@ -596,6 +693,9 @@ internal object MavlinkMessages {
     private const val NAME_FIELD_LENGTH = 32
     private const val PARAM_ID_LENGTH = 16
     private const val MODE_NAME_LENGTH = 35
+
+    /** MAV_FRAME_GLOBAL_RELATIVE_ALT_INT: lat/lon scaled, altitude relative to the home point. */
+    private const val MAV_FRAME_GLOBAL_RELATIVE_ALT_INT = 6
     private const val CAM_DEFINITION_URI_LENGTH = 140
     private const val STREAM_URI_LENGTH = 160
     private const val FILE_URL_LENGTH = 205

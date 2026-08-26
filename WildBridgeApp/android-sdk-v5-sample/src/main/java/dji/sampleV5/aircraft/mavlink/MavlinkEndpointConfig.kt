@@ -22,7 +22,13 @@ internal data class MavlinkEndpointConfig(
     val listenPort: Int = DEFAULT_GCS_PORT,
     val mode: Profile = Profile.NORMAL,
     /** Resolved MAVLink system id (1..254). One per aircraft, the way a GCS distinguishes vehicles. */
-    val systemId: Int = DEFAULT_SYSTEM_ID
+    val systemId: Int = DEFAULT_SYSTEM_ID,
+    /**
+     * Which of WildBridge's two path followers flies an uploaded plan. A setting rather than a
+     * second mission protocol: MAVLink has one, and a ground station has no way to pick an
+     * executor, so the choice belongs in a parameter.
+     */
+    val missionExecutor: MissionExecutor = MissionExecutor.ONBOARD
 ) {
     /**
      * Stream profile, the equivalent of `MAV_n_MODE`. Each profile picks a different set of
@@ -49,6 +55,7 @@ internal data class MavlinkEndpointConfig(
         const val PREF_PORT = "wb_mav_0_port"
         const val PREF_MODE = "wb_mav_0_mode"
         const val PREF_SYSTEM_ID = "wb_mav_0_sysid"
+        const val PREF_MISSION_EXECUTOR = "wb_mission_exec"
 
         /** Master switch for flight motion; false means every motion command is refused. */
         const val PREF_ALLOW_FLIGHT = "wb_mav_0_allow_flight"

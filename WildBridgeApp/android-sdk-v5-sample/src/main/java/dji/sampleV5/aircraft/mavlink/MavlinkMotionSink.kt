@@ -38,6 +38,14 @@ internal interface MavlinkMotionSink {
     fun returnToHome(): CommandResult
 
     /** Fly to a position, holding the given heading on arrival. */
+    /**
+     * Fly to one point.
+     *
+     * [yawDeg] follows the same convention as a mission item's param4: NaN asks for the vehicle's
+     * own heading mode (nose along the path), a value asks for that heading to be held for the
+     * whole leg. Keeping the two identical means a ground station does not have to know whether
+     * its goto became a reposition or a one-item plan.
+     */
     fun reposition(
         latitudeDeg: Double,
         longitudeDeg: Double,
@@ -54,6 +62,28 @@ internal interface MavlinkMotionSink {
      * after touchdown. The request is acknowledged as a no-op (still behind the gate) so a ground
      * station's takeoff sequence does not abort on a refused arm.
      */
+    /**
+     * Stop everything and hold position.
+     *
+     * The HTTP surface has three aborts with different scopes — the PID mission, DJI's wayline
+     * engine, and everything. MAVLink expresses an abort as a mode change to position hold, which
+     * has one meaning, so all three arrive here and this does the union of the three. Widening an
+     * abort is the safe direction to be wrong in; narrowing it is not.
+     */
+    fun abortToPositionHold(): CommandResult
+
+    /** Enter the mode that accepts stick input, DJI's virtual stick. */
+    fun enableOffboard(): CommandResult
+
+    /** Stick input, each axis in -1..1. Requires offboard. */
+    fun manualControl(roll: Float, pitch: Float, throttle: Float, yaw: Float): CommandResult
+
+    /** Climb or descend to an altitude above home, holding position. */
+    fun setAltitude(altitudeMeters: Double): CommandResult
+
+    /** Clear the manual-override latch, re-enabling autonomous commands. */
+    fun releaseManualOverride(): CommandResult
+
     fun arm(): CommandResult
 
     /** A disarming request, likewise acknowledged as a no-op behind the gate. */

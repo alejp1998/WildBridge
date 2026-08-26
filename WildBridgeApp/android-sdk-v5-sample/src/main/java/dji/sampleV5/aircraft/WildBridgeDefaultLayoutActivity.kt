@@ -85,6 +85,10 @@ import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
 import dji.sampleV5.aircraft.mavlink.MavlinkMotionSink
 import dji.sampleV5.aircraft.mavlink.MavlinkSystemId
+import dji.sampleV5.aircraft.mavlink.MavlinkMissionSink
+import dji.sampleV5.aircraft.mavlink.MissionExecutor
+import dji.sampleV5.aircraft.mavlink.MissionItem
+import dji.sampleV5.aircraft.mavlink.MissionProgressListener
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -209,6 +213,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         /** How long to wait for a take-off to finish before abandoning a requested climb. */
         private const val TAKEOFF_CLIMB_TIMEOUT_MS = 30_000L
         private const val TAKEOFF_POLL_MS = 500L
+
+        /** Longest a single mission leg may take before the plan is abandoned. */
+        private const val MISSION_LEG_TIMEOUT_MS = 300_000L
+        private const val MISSION_POLL_MS = 200L
+
+        /** The one parameter a ground station may write. See applyMavlinkParameter. */
+        private const val PARAM_RTH_ALTITUDE = "WB_RTH_ALT"
         private const val TAG_THERMAL = "WildBridgeThermal"
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
@@ -3909,7 +3920,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     sharedPreferences.getString(MavlinkEndpointConfig.PREF_MODE, null)
                 }.getOrNull()
             ),
-            systemId = systemId
+            systemId = systemId,
+            missionExecutor = MissionExecutor.fromPref(
+                runCatching {
+                    sharedPreferences.getString(MavlinkEndpointConfig.PREF_MISSION_EXECUTOR, null)
+                }.getOrNull()
+            )
         )
     }
 
@@ -4000,6 +4016,56 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * Read-only for now: these are published, not settable. Making them writable is a change with
      * its own safety review, since they are the gains an autonomous control loop flies on.
      */
+    /**
+     * Apply one parameter write from a ground station.
+     *
+     * An allowlist, not a passthrough. Most of the published list is read-only by nature — PID
+     * gains belong to the control profile, and the PX4 compatibility parameters are constants
+     * that exist only to satisfy QGroundControl's setup checks. Writing those would either do
+     * nothing or quietly change flight behaviour from a settings dialog, so anything not named
+     * here is refused rather than accepted and dropped.
+     */
+    private fun applyMavlinkParameter(name: String, value: Float): CommandResult = when (name) {
+        PARAM_RTH_ALTITUDE -> {
+            val altitude = value.toInt()
+            if (altitude <= 0) {
+                CommandResult(MavlinkCommandOutcome.DENIED, "RTH altitude must be positive")
+            } else {
+                // Waited on rather than fired and forgotten, because the PARAM_VALUE sent back
+                // immediately afterwards is meant to report what the parameter now holds. Without
+                // the wait it reports the value from before the write, and a ground station
+                // correctly concludes the write did not take.
+                awaitParameterWrite { done -> DroneController.setRTHAltitude(altitude, done) }
+            }
+        }
+
+        else -> {
+            Log.d(TAG, "Refusing write to read-only parameter $name")
+            CommandResult(MavlinkCommandOutcome.DENIED, "$name is read-only")
+        }
+    }
+
+    /**
+     * Run an asynchronous parameter write and wait, briefly, for the aircraft to confirm it.
+     *
+     * Bounded so a key the aircraft never answers cannot wedge the endpoint's receive thread —
+     * a timeout is reported as a failure, which is what it is.
+     */
+    private fun awaitParameterWrite(write: ((Boolean) -> Unit) -> Unit): CommandResult {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val succeeded = java.util.concurrent.atomic.AtomicBoolean(false)
+        write { ok ->
+            succeeded.set(ok)
+            latch.countDown()
+        }
+        val answered = latch.await(ACTION_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return when {
+            !answered -> CommandResult(MavlinkCommandOutcome.FAILED, "Aircraft did not answer")
+            succeeded.get() -> CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            else -> CommandResult(MavlinkCommandOutcome.FAILED, "Aircraft refused the write")
+        }
+    }
+
     private fun mavlinkParameters(): List<Pair<String, Float>> {
         val profile = DroneControlProfiles.activeProfile()
         return listOf(
@@ -4014,6 +4080,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             "WB_WP_ACC_RAD" to DroneController.WP_ACCEPT_DISTANCE_M.toFloat(),
             "WB_WP_ACC_ALT" to DroneController.WP_ACCEPT_ALTITUDE_M.toFloat(),
             "WB_WP_ACC_YAW" to DroneController.WP_ACCEPT_YAW_DEG.toFloat(),
+            // The one writable parameter. Published so a ground station can read it back after a
+            // write and see what actually took, which is what makes PARAM_SET meaningful.
+            PARAM_RTH_ALTITUDE to DroneController.getRTHAltitude().toFloat(),
             // QGC's PX4 airframe component reads this one PX4 parameter and pops a "Parameters
             // are missing from firmware" dialog when it is absent. 4001 is PX4's "Generic
             // Quadcopter" airframe id; published read-only like the rest of the list.
@@ -4074,6 +4143,74 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             )
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
+
+        override fun setGimbalRelative(pitchDeg: Double, yawDeg: Double): CommandResult {
+            // A zero delta on an axis means "leave it alone", which is what the ignore flags say
+            // — sending zero as a relative angle would be the same thing, but saying it through
+            // the flag is what keeps a two-axis nudge from fighting itself.
+            return setGimbal(
+                GimbalRotation(
+                    mode = GimbalRotationMode.RELATIVE,
+                    pitchDeg = pitchDeg,
+                    rollDeg = 0.0,
+                    yawDeg = yawDeg,
+                    pitchIgnored = pitchDeg == 0.0,
+                    rollIgnored = true,
+                    yawIgnored = yawDeg == 0.0
+                )
+            )
+        }
+
+        override fun measureLrf(): CommandResult {
+            val info = Payload.takeFreshLrfReading()
+                ?: return CommandResult(MavlinkCommandOutcome.FAILED, "No rangefinder reading")
+            if (info.laserMeasureState != LaserMeasureState.NORMAL) {
+                // The laser did not lock — no distance, and no point to geo-reference.
+                return CommandResult(
+                    MavlinkCommandOutcome.FAILED, "Laser state ${info.laserMeasureState}"
+                )
+            }
+            info.location3D
+                ?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 || it.altitude != 0.0 }
+                // Surfaced on the telemetry stream as lrfTarget, exactly as the HTTP route does.
+                ?.let { lrfTargetLocation = it }
+            // Centimetres: the distance is metres with a useful fraction.
+            return CommandResult(
+                MavlinkCommandOutcome.ACCEPTED,
+                resultValue = ((info.distance ?: 0.0) * 100).toInt()
+            )
+        }
+
+        override fun captureTemperature(): CommandResult {
+            val maxTemp = readThermalMaxTempNow()
+                ?: return CommandResult(MavlinkCommandOutcome.FAILED, "No thermal reading")
+            // Hundredths of a degree, so a fractional reading survives an integer field.
+            return CommandResult(
+                MavlinkCommandOutcome.ACCEPTED,
+                resultValue = (maxTemp * 100).toInt()
+            )
+        }
+
+        override fun dropPayload(): CommandResult {
+            val profile = DroneControlProfiles.activeProfile()
+            val indexType = profile.payloadIndexType
+                ?: return CommandResult(
+                    MavlinkCommandOutcome.UNSUPPORTED,
+                    "${profile.displayName} has no payload drop port"
+                )
+            val dropped = Payload.dropPayload(
+                payloadWidgetVM, indexType,
+                profile.dropArmSwitchIndex, profile.dropReleaseButtonIndex
+            )
+            return if (dropped) {
+                CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            } else {
+                CommandResult(MavlinkCommandOutcome.FAILED, "Drop refused by the payload")
+            }
+        }
+
+        override fun setParameter(name: String, value: Float): CommandResult =
+            applyMavlinkParameter(name, value)
 
         override fun setCameraZoom(zoomRatio: Float): CommandResult {
             if (zoomRatio <= 0f) return CommandResult(MavlinkCommandOutcome.FAILED)
@@ -4157,34 +4294,58 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      *   3. the RC manual-override latch — closed-loop commands (reposition, yaw) are refused while
      *      the physical RC pilot has taken over.
      */
+    /**
+     * Returns a refusal when MAVLink-commanded motion is blocked, or null when it may proceed.
+     *
+     * Lives on the activity rather than inside one sink because both the motion sink and the
+     * mission sink fly the aircraft, and a gate that only one of them consulted would be a hole
+     * rather than a gate.
+     */
+    private fun mavlinkFlightGate(): CommandResult? {
+        if (!sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ALLOW_FLIGHT, false)) {
+            return CommandResult(MavlinkCommandOutcome.DENIED)
+        }
+        if (!ControlAuthority.authorizeControlCommand(ControlAuthority.Source.PILOT)) {
+            return CommandResult(MavlinkCommandOutcome.DENIED)
+        }
+        return null
+    }
+
+    /**
+     * Stop a running plan before taking the aircraft somewhere else.
+     *
+     * Without this the sequencer keeps its own state: an operator pressing Land or Return in a
+     * ground station would land the aircraft, and the sequencer -- which only watches the reach
+     * latch -- would then issue the next leg and fly it away again. A guided command supersedes a
+     * mission, which is what every other autopilot does and what an operator reaching for Land
+     * plainly means.
+     */
+    private fun supersedeMission(reason: String) {
+        if (mavlinkMissionSink.isRunning) {
+            Log.i(TAG, "Stopping the running mission: superseded by $reason")
+            mavlinkMissionSink.stopMission()
+        }
+    }
+
     private val mavlinkMotionSink = object : MavlinkMotionSink {
 
-        /** Returns a refusal when motion is blocked, or null when the command may proceed. */
-        private fun gate(): CommandResult? {
-            if (!sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ALLOW_FLIGHT, false)) {
-                return CommandResult(MavlinkCommandOutcome.DENIED)
-            }
-            if (!ControlAuthority.authorizeControlCommand(ControlAuthority.Source.PILOT)) {
-                return CommandResult(MavlinkCommandOutcome.DENIED)
-            }
-            return null
-        }
-
         override fun takeoff(altitudeM: Float?): CommandResult {
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
             DroneController.startTakeOff()
             if (altitudeM != null) climbAfterTakeoff(altitudeM.toDouble())
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun land(): CommandResult {
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
+            supersedeMission("land")
             DroneController.startLanding()
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun returnToHome(): CommandResult {
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
+            supersedeMission("return to home")
             DroneController.startReturnToHome()
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
@@ -4196,22 +4357,89 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             yawDeg: Double,
             groundSpeedMps: Double
         ): CommandResult {
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
             if (DroneController.shouldRejectAutonomousCommand("reposition")) {
                 return CommandResult(MavlinkCommandOutcome.DENIED)
             }
-            DroneController.flyToWaypointHoldHeading(
-                latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, groundSpeedMps
-            )
+            supersedeMission("reposition")
+            // param4 NaN means "use the vehicle's heading mode", exactly as it does in a mission
+            // item. Honouring it here too is what lets a single reposition express nose-forward,
+            // which is otherwise only reachable by uploading a one-item plan.
+            if (yawDeg.isNaN()) {
+                DroneController.flyToWaypointNoseForward(
+                    latitudeDeg, longitudeDeg, altitudeMeters, 0.0, groundSpeedMps
+                )
+            } else {
+                DroneController.flyToWaypointHoldHeading(
+                    latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, groundSpeedMps
+                )
+            }
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun setYaw(yawDeg: Double): CommandResult {
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
             if (DroneController.shouldRejectAutonomousCommand("yaw")) {
                 return CommandResult(MavlinkCommandOutcome.DENIED)
             }
+            supersedeMission("yaw")
             DroneController.gotoYaw(yawDeg)
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun abortToPositionHold(): CommandResult {
+            mavlinkFlightGate()?.let { return it }
+            supersedeMission("abort")
+            // The union of the three HTTP aborts: stop the PID loops, neutralise the sticks and
+            // leave virtual stick, and end any DJI wayline. Each is safe when nothing is running.
+            DroneController.abortAllMissions()
+            DroneController.setStick(0f, 0f, 0f, 0f)
+            DroneController.disableVirtualStick()
+            runCatching { DroneController.endMission() }
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun enableOffboard(): CommandResult {
+            mavlinkFlightGate()?.let { return it }
+            if (DroneController.shouldRejectAutonomousCommand("enableVirtualStick")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            DroneController.enableVirtualStick()
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun manualControl(
+            roll: Float,
+            pitch: Float,
+            throttle: Float,
+            yaw: Float
+        ): CommandResult {
+            mavlinkFlightGate()?.let { return it }
+            // DJI's sticks: left is yaw/throttle, right is roll/pitch. MAVLink's axes are named
+            // for what they do, so the mapping is by meaning rather than by position.
+            DroneController.setStick(
+                leftX = yaw,
+                leftY = throttle,
+                rightX = roll,
+                rightY = pitch
+            )
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun setAltitude(altitudeMeters: Double): CommandResult {
+            mavlinkFlightGate()?.let { return it }
+            if (DroneController.shouldRejectAutonomousCommand("altitude")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            supersedeMission("altitude change")
+            DroneController.gotoAltitude(altitudeMeters)
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun releaseManualOverride(): CommandResult {
+            // Deliberately not behind the flight gate: this grants authority rather than using
+            // it, and the commands it re-enables are each gated in their own right.
+            DroneController.deactivateManualOverride()
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
@@ -4219,12 +4447,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             // DJI has no arming: motors spin up when the takeoff command actually runs. QGC's
             // takeoff sequence arms right after NAV_TAKEOFF is accepted, so this is a gated no-op
             // that keeps the sequence moving rather than an honest refusal that aborts it.
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun disarm(): CommandResult {
-            gate()?.let { return it }
+            mavlinkFlightGate()?.let { return it }
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
     }
@@ -4262,6 +4490,152 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         }
     }
 
+    /**
+     * Flies an uploaded plan.
+     *
+     * The onboard executor is the interesting half. Until now the sequencing lived on the ground
+     * station: it sent one waypoint, watched the reach latch, and sent the next — which is why
+     * the seq-tracked reach flags exist at all. MAVLink expects the vehicle to own that state,
+     * because MISSION_CURRENT and MISSION_ITEM_REACHED come from the aircraft, so this moves the
+     * loop into the app.
+     *
+     * Each item picks its own controller through param4: NaN means fly nose-forward, a value
+     * means hold that heading. One plan can mix them, which the two separate HTTP endpoints
+     * cannot express.
+     */
+    private val mavlinkMissionSink = object : MavlinkMissionSink {
+
+        private var listener: MissionProgressListener? = null
+
+        @Volatile
+        private var missionThread: Thread? = null
+
+        @Volatile
+        private var running = false
+
+        override val isRunning: Boolean get() = running
+
+        override fun setProgressListener(listener: MissionProgressListener?) {
+            this.listener = listener
+        }
+
+        override fun startMission(
+            items: List<MissionItem>,
+            startIndex: Int,
+            executor: MissionExecutor
+        ): CommandResult {
+            mavlinkFlightGate()?.let { return it }
+            stopMission()
+            return when (executor) {
+                MissionExecutor.DJI_NATIVE -> startNative(items)
+                MissionExecutor.ONBOARD -> startOnboard(items, startIndex)
+            }
+        }
+
+        /**
+         * Hand the whole list to DJI's wayline engine.
+         *
+         * Only the navigation items carry over; DO_CHANGE_SPEED becomes the mission speed, which
+         * is the closest DJI's format gets to a per-leg speed. Per-item heading is lost here —
+         * that is the trade for DJI flying it.
+         */
+        private fun startNative(items: List<MissionItem>): CommandResult {
+            val waypoints = items
+                .filter { it.isWaypoint }
+                .map { Triple(it.latitudeDeg, it.longitudeDeg, it.altitudeM) }
+            if (waypoints.size < 2) {
+                // DJI's wayline engine needs a path, not a point.
+                return CommandResult(
+                    MavlinkCommandOutcome.DENIED,
+                    "DJI native missions need at least two waypoints"
+                )
+            }
+            val speed = items.firstNotNullOfOrNull { it.speedMps }
+                ?: DroneControlProfiles.activeProfile().defaultCruiseSpeedMps
+            DroneController.navigateTrajectoryNative(waypoints, speed)
+            listener?.onItemStarted(0)
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        /**
+         * Sequence the items ourselves, one waypoint at a time.
+         *
+         * Runs on its own thread because it waits: each leg is issued, then the reach latch is
+         * polled until the matching seq reports arrival. Comparing the seq rather than just the
+         * boolean is what stops a stale latch from a previous leg being read as this one's
+         * arrival — the same reason the seq mechanism exists on the HTTP surface.
+         */
+        private fun startOnboard(items: List<MissionItem>, startIndex: Int): CommandResult {
+            val legs = items.withIndex().filter { it.value.isWaypoint }
+            if (legs.isEmpty()) {
+                return CommandResult(MavlinkCommandOutcome.DENIED, "No waypoints in plan")
+            }
+            var speed = items.firstNotNullOfOrNull { it.speedMps }
+                ?: DroneControlProfiles.activeProfile().defaultCruiseSpeedMps
+
+            running = true
+            missionThread = thread(name = "MavlinkMission", start = true) {
+                for ((index, item) in legs) {
+                    if (!running) break
+                    if (index < startIndex) continue
+                    // A speed change earlier in the plan applies to the legs that follow it.
+                    items.take(index).lastOrNull { it.isSpeedChange }?.speedMps?.let { speed = it }
+
+                    listener?.onItemStarted(index)
+                    val seq = flyLeg(item, speed)
+                    if (!awaitLeg(seq)) {
+                        // Interrupted, overridden, or timed out — stop rather than skipping on.
+                        listener?.onMissionFinished(false)
+                        running = false
+                        return@thread
+                    }
+                    listener?.onItemReached(index)
+                }
+                listener?.onMissionFinished(running)
+                running = false
+            }
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        /** Issue one leg with the controller its param4 asks for, returning the command's seq. */
+        private fun flyLeg(item: MissionItem, speed: Double): Long {
+            val yaw = if (item.noseForward) 0.0 else item.param4.toDouble()
+            return if (item.noseForward) {
+                DroneController.flyToWaypointNoseForward(
+                    item.latitudeDeg, item.longitudeDeg, item.altitudeM, yaw, speed
+                )
+            } else {
+                DroneController.flyToWaypointHoldHeading(
+                    item.latitudeDeg, item.longitudeDeg, item.altitudeM, yaw, speed
+                )
+            }
+        }
+
+        /** Wait for the leg with this seq to report reached. False if it did not. */
+        private fun awaitLeg(seq: Long): Boolean {
+            val deadline = System.currentTimeMillis() + MISSION_LEG_TIMEOUT_MS
+            while (running && System.currentTimeMillis() < deadline) {
+                if (DroneController.isManualOverrideActive) return false
+                if (DroneController.getWaypointSeq() == seq && DroneController.isWaypointReached()) {
+                    return true
+                }
+                runCatching { Thread.sleep(MISSION_POLL_MS) }.onFailure {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+            return false
+        }
+
+        override fun stopMission(): CommandResult {
+            running = false
+            missionThread?.interrupt()
+            missionThread = null
+            mainHandler.post { DroneController.abortAllMissions() }
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+    }
+
     private fun startMavlinkEndpoint() {
         val config = readMavlinkConfig()
         if (!config.enabled) {
@@ -4275,7 +4649,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 ::currentMavlinkVideoStream,
                 ::mavlinkParameters,
                 mavlinkCommandSink,
-                mavlinkMotionSink
+                mavlinkMotionSink,
+                mavlinkMissionSink
             )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")

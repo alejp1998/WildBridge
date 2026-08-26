@@ -1464,6 +1464,13 @@ object DroneController {
     // stayed at their -1/false fallback forever even with the aircraft connected. Register
     // persistent listeners (idempotent, same pattern as Payload.kt's setupLaserMeasureListener)
     // so they reflect the aircraft's real configuration.
+    //
+    // A listener alone is not enough: it fires on *change*, and these are settings that rarely
+    // change, so an aircraft that has held the same RTH altitude since power-on never publishes
+    // one. That left the values reading -1 forever — visible over HTTP as
+    // `GET /config/settings` reporting rthAltitude -1, and over MAVLink as an unreadable
+    // WB_RTH_ALT. Each listener is therefore paired with one live fetch to seed the cache; the
+    // listener then keeps it current.
     private fun setupFlightLimitListeners() {
         if (flightLimitListenersRegistered) return
         goHomeHeightKey.listen(this) { newValue: Int? -> cachedRTHAltitude = newValue ?: -1 }
@@ -1471,6 +1478,33 @@ object DroneController {
         maxFlightDistanceKey.listen(this) { newValue: Int? -> cachedMaxFlightDistance = newValue ?: -1 }
         distanceLimitEnabledKey.listen(this) { newValue: Boolean? -> cachedDistanceLimitEnabled = newValue ?: false }
         flightLimitListenersRegistered = true
+        seedFlightLimits()
+    }
+
+    /**
+     * Fetch each flight limit once, so the caches hold a real value before anything changes.
+     *
+     * Failures are logged and left alone rather than written as a default: -1 already means "not
+     * known", and overwriting it on a failed read would turn "we have not been told" into a
+     * confident wrong answer.
+     */
+    private fun seedFlightLimits() {
+        goHomeHeightKey.get(
+            { value -> value?.let { cachedRTHAltitude = it } },
+            { error -> Log.w("DroneController", "Could not read RTH altitude: ${error.description()}") }
+        )
+        maxFlightHeightKey.get(
+            { value -> value?.let { cachedMaxFlightHeight = it } },
+            { error -> Log.w("DroneController", "Could not read max flight height: ${error.description()}") }
+        )
+        maxFlightDistanceKey.get(
+            { value -> value?.let { cachedMaxFlightDistance = it } },
+            { error -> Log.w("DroneController", "Could not read max flight distance: ${error.description()}") }
+        )
+        distanceLimitEnabledKey.get(
+            { value -> value?.let { cachedDistanceLimitEnabled = it } },
+            { error -> Log.w("DroneController", "Could not read distance limit: ${error.description()}") }
+        )
     }
 
     fun getRTHAltitude(): Int {
@@ -1478,9 +1512,28 @@ object DroneController {
         return cachedRTHAltitude
     }
 
-    fun setRTHAltitude(altitude: Int) {
-        goHomeHeightKey.set(altitude)
-        ToastUtils.showToast("RTH altitude set to $altitude m")
+    /**
+     * Set the return-to-home altitude.
+     *
+     * The cache is updated from the aircraft's confirmation rather than from the requested value,
+     * so a write DJI clamps or refuses does not leave us reporting a number the aircraft is not
+     * holding — which is the difference between a setting a ground station can verify and one it
+     * can only hope about.
+     */
+    fun setRTHAltitude(altitude: Int, onResult: ((Boolean) -> Unit)? = null) {
+        goHomeHeightKey.set(
+            altitude,
+            {
+                cachedRTHAltitude = altitude
+                ToastUtils.showToast("RTH altitude set to $altitude m")
+                onResult?.invoke(true)
+            },
+            { error ->
+                Log.w("DroneController", "RTH altitude set failed: ${error.description()}")
+                ToastUtils.showToast("RTH altitude change refused: ${error.description()}")
+                onResult?.invoke(false)
+            }
+        )
     }
 
     fun getMaxFlightHeight(): Int {

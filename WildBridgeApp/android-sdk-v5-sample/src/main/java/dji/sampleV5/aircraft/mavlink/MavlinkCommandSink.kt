@@ -31,6 +31,26 @@ internal interface MavlinkCommandSink {
 
     /** Trip one shutter on the payload. Stores to the card; downloads nothing. */
     fun captureImage(): CommandResult
+
+    /** Nudge the gimbal by a delta rather than to an absolute angle. */
+    fun setGimbalRelative(pitchDeg: Double, yawDeg: Double): CommandResult
+
+    /** Fire the laser rangefinder once. The reading surfaces on the telemetry stream. */
+    fun measureLrf(): CommandResult
+
+    /** Read the thermal spot temperature. No shutter, nothing stored. */
+    fun captureTemperature(): CommandResult
+
+    /** Release the payload. The one command here that moves something off the aircraft. */
+    fun dropPayload(): CommandResult
+
+    /**
+     * Write one named setting.
+     *
+     * Named rather than typed because the settings surface is a string map on the HTTP side too;
+     * the endpoint refuses names outside its allowlist before this is reached.
+     */
+    fun setParameter(name: String, value: Float): CommandResult
 }
 
 /**
@@ -64,7 +84,15 @@ internal enum class MavlinkCommandOutcome(val mavResult: Int) {
  */
 internal data class CommandResult(
     val outcome: MavlinkCommandOutcome,
-    val detail: String? = null
+    val detail: String? = null,
+    /**
+     * A scalar the command read back, carried in COMMAND_ACK's result_param2.
+     *
+     * Only meaningful for the read commands (rangefinder distance in centimetres, spot
+     * temperature in hundredths of a degree); zero everywhere else. Integer because
+     * result_param2 is an int32 — the scaling is what keeps a fractional reading intact.
+     */
+    val resultValue: Int = 0
 ) {
     val mavResult: Int get() = outcome.mavResult
 }

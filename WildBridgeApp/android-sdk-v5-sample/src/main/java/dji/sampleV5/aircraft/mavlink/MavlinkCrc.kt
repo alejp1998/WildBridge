@@ -28,6 +28,13 @@ internal object MavlinkCrc {
         MavlinkMsgId.STATUSTEXT to 83,
         MavlinkMsgId.PARAM_VALUE to 220,
         MavlinkMsgId.MISSION_COUNT to 221,
+        MavlinkMsgId.MISSION_CURRENT to 28,
+        MavlinkMsgId.MISSION_ITEM_REACHED to 11,
+        MavlinkMsgId.MISSION_ACK to 153,
+        MavlinkMsgId.MISSION_REQUEST_INT to 196,
+        // Received as well as sent — the checksum of an inbound item is validated with this too.
+        MavlinkMsgId.MISSION_ITEM_INT to 38,
+        MavlinkMsgId.MISSION_CLEAR_ALL to 232,
         MavlinkMsgId.CAMERA_INFORMATION to 92,
         MavlinkMsgId.VIDEO_STREAM_INFORMATION to 109,
         MavlinkMsgId.CAMERA_SETTINGS to 146,
@@ -43,6 +50,8 @@ internal object MavlinkCrc {
         // Received, not sent — needed to validate the checksum of inbound commands.
         MavlinkMsgId.COMMAND_INT to 158,
         MavlinkMsgId.COMMAND_LONG to 152,
+        MavlinkMsgId.MANUAL_CONTROL to 243,
+        MavlinkMsgId.PARAM_SET to 168,
         MavlinkMsgId.PARAM_REQUEST_LIST to 159,
         MavlinkMsgId.MISSION_REQUEST_LIST to 132
     )

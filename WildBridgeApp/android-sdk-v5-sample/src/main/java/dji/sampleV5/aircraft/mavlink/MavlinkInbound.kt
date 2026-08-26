@@ -3,6 +3,38 @@ package dji.sampleV5.aircraft.mavlink
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+/** A ground station announcing how many mission items it is about to upload. */
+internal data class MavlinkMissionCount(
+    val count: Int,
+    val missionType: Int,
+    val senderSystem: Int,
+    val senderComponent: Int
+)
+
+/** One uploaded mission item. */
+internal data class MavlinkMissionItem(
+    val item: MissionItem,
+    val missionType: Int,
+    val senderSystem: Int,
+    val senderComponent: Int
+)
+
+/** Stick input from a ground station, each axis normalised to -1..1. */
+internal data class MavlinkManualControl(
+    val roll: Float,
+    val pitch: Float,
+    val throttle: Float,
+    val yaw: Float
+)
+
+/** A ground station writing one parameter. */
+internal data class MavlinkParamSet(
+    val name: String,
+    val value: Float,
+    val senderSystem: Int,
+    val senderComponent: Int
+)
+
 /** A ground station asking for the whole parameter list, or for a plan. */
 internal data class MavlinkListRequest(
     val messageId: Int,
@@ -45,7 +77,18 @@ internal data class MavlinkCommand(
     /** Longitude for position commands, degrees. */
     val param6: Float,
     /** Altitude, metres. */
-    val param7: Float
+    val param7: Float,
+    /**
+     * Latitude and longitude in full precision, in degrees.
+     *
+     * [param5] and [param6] are floats because that is what COMMAND_LONG carries, and a float
+     * holds about seven significant digits — at 46 degrees that is a rounding error of roughly
+     * 0.6 m, which is the whole reason MAVLink defines COMMAND_INT with the position as int32
+     * degE7. Position commands read these instead, so a COMMAND_INT keeps the precision it was
+     * sent with rather than losing it on arrival.
+     */
+    val latitudeDeg: Double,
+    val longitudeDeg: Double
 )
 
 /**
@@ -74,6 +117,16 @@ internal object MavlinkInbound {
     private const val SIGNATURE_BYTES = 13
     private const val MAX_PAYLOAD = 255
     private const val MISSION_TYPE_OFFSET = 2
+    private const val MISSION_COUNT_TYPE_OFFSET = 4
+    private const val MISSION_ITEM_TYPE_OFFSET = 36
+    private const val COORD_SCALE = 1e7
+
+    /** MANUAL_CONTROL axes are -1000..1000 for full deflection. */
+    private const val MANUAL_CONTROL_SCALE = 1000f
+
+    /** param_id starts after param_value(4) + target_system(1) + target_component(1). */
+    private const val PARAM_SET_ID_OFFSET = 6
+    private const val PARAM_ID_LENGTH = 16
 
     /**
      * Parse a PARAM_REQUEST_LIST or MISSION_REQUEST_LIST, or null for anything else.
@@ -101,6 +154,135 @@ internal object MavlinkInbound {
             senderComponent = data[6].toInt() and 0xFF,
             missionType = missionType
         )
+    }
+
+    /**
+     * Parse a MISSION_COUNT — the opening move of an upload.
+     *
+     * count(u16), target_system(u8), target_component(u8), [ext] mission_type(u8)
+     */
+    fun parseMissionCount(data: ByteArray, length: Int): MavlinkMissionCount? {
+        val frame = validate(data, length) ?: return null
+        if (frame.messageId != MavlinkMsgId.MISSION_COUNT) return null
+        val payload = paddedPayload(data, frame.payloadLength)
+        val buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+        return MavlinkMissionCount(
+            count = buffer.getShort(0).toInt() and 0xFFFF,
+            // mission_type is an extension, so a sender that omits it means "mission".
+            missionType = if (frame.payloadLength > MISSION_COUNT_TYPE_OFFSET) {
+                payload[MISSION_COUNT_TYPE_OFFSET].toInt() and 0xFF
+            } else {
+                MavlinkMissionStore.MISSION_TYPE_MISSION
+            },
+            senderSystem = data[5].toInt() and 0xFF,
+            senderComponent = data[6].toInt() and 0xFF
+        )
+    }
+
+    /**
+     * Parse a MISSION_ITEM_INT.
+     *
+     * param1..4(f), x(i32), y(i32), z(f), seq(u16), command(u16), target_system(u8),
+     * target_component(u8), frame(u8), current(u8), autocontinue(u8)
+     */
+    fun parseMissionItem(data: ByteArray, length: Int): MavlinkMissionItem? {
+        val frame = validate(data, length) ?: return null
+        if (frame.messageId != MavlinkMsgId.MISSION_ITEM_INT) return null
+        val payload = paddedPayload(data, frame.payloadLength)
+        val buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+        val item = MissionItem(
+            seq = buffer.getShort(28).toInt() and 0xFFFF,
+            command = buffer.getShort(30).toInt() and 0xFFFF,
+            param1 = buffer.getFloat(0),
+            param2 = buffer.getFloat(4),
+            param3 = buffer.getFloat(8),
+            // Left exactly as sent, NaN included: NaN is the heading mode, not a missing value.
+            param4 = buffer.getFloat(12),
+            latitudeDeg = buffer.getInt(16) / COORD_SCALE,
+            longitudeDeg = buffer.getInt(20) / COORD_SCALE,
+            altitudeM = buffer.getFloat(24).toDouble(),
+            autocontinue = payload[35].toInt() != 0
+        )
+        return MavlinkMissionItem(
+            item = item,
+            missionType = if (frame.payloadLength > MISSION_ITEM_TYPE_OFFSET) {
+                payload[MISSION_ITEM_TYPE_OFFSET].toInt() and 0xFF
+            } else {
+                MavlinkMissionStore.MISSION_TYPE_MISSION
+            },
+            senderSystem = data[5].toInt() and 0xFF,
+            senderComponent = data[6].toInt() and 0xFF
+        )
+    }
+
+    /**
+     * Stick input, if this frame is one.
+     *
+     * MANUAL_CONTROL carries each axis as an int16 in -1000..1000 (1000 meaning full deflection),
+     * so it is scaled to the -1..1 the controller expects. INT16_MAX means "this axis is not
+     * being controlled", which is normalised to neutral rather than to full deflection — reading
+     * it literally would command a hard input from a station that meant to command nothing.
+     */
+    fun parseManualControl(data: ByteArray, length: Int): MavlinkManualControl? {
+        val frame = validate(data, length) ?: return null
+        if (frame.messageId != MavlinkMsgId.MANUAL_CONTROL) return null
+        val payload = paddedPayload(data, frame.payloadLength)
+        val buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+        fun axis(offset: Int): Float {
+            val raw = buffer.getShort(offset).toInt()
+            if (raw == Short.MAX_VALUE.toInt()) return 0f
+            return (raw / MANUAL_CONTROL_SCALE).coerceIn(-1f, 1f)
+        }
+        // Wire order: x(i16) y(i16) z(i16) r(i16) buttons(u16) target(u8)
+        return MavlinkManualControl(
+            pitch = axis(0),
+            roll = axis(2),
+            throttle = axis(4),
+            yaw = axis(6)
+        )
+    }
+
+    /**
+     * A parameter write, if this frame is one.
+     *
+     * param_id is a 16-byte field that is NUL-terminated only when the name is shorter, so it is
+     * trimmed at the first NUL rather than assumed to be one.
+     */
+    fun parseParamSet(data: ByteArray, length: Int): MavlinkParamSet? {
+        val frame = validate(data, length) ?: return null
+        if (frame.messageId != MavlinkMsgId.PARAM_SET) return null
+        val payload = paddedPayload(data, frame.payloadLength)
+        val buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+        // Wire order: param_value(f32) target_system(u8) target_component(u8)
+        //             param_id(char[16]) param_type(u8)
+        val nameBytes = payload.copyOfRange(PARAM_SET_ID_OFFSET, PARAM_SET_ID_OFFSET + PARAM_ID_LENGTH)
+        val name = String(nameBytes, Charsets.US_ASCII).substringBefore('\u0000').trim()
+        if (name.isEmpty()) return null
+        return MavlinkParamSet(
+            name = name,
+            value = buffer.getFloat(0),
+            senderSystem = data[5].toInt() and 0xFF,
+            senderComponent = data[6].toInt() and 0xFF
+        )
+    }
+
+    /** True when the frame is a MISSION_CLEAR_ALL for the mission plan. */
+    fun isMissionClearAll(data: ByteArray, length: Int): Boolean {
+        val frame = validate(data, length) ?: return false
+        return frame.messageId == MavlinkMsgId.MISSION_CLEAR_ALL
+    }
+
+    /** True when the frame is the ground station acknowledging a download. */
+    fun isMissionAck(data: ByteArray, length: Int): Boolean {
+        val frame = validate(data, length) ?: return false
+        return frame.messageId == MavlinkMsgId.MISSION_ACK
+    }
+
+    /** MAVLink 2 truncates trailing zeros, so pad before reading fixed offsets. */
+    private fun paddedPayload(data: ByteArray, payloadLength: Int): ByteArray {
+        val payload = ByteArray(MAX_PAYLOAD)
+        System.arraycopy(data, HEADER_BYTES, payload, 0, payloadLength)
+        return payload
     }
 
     /** Frame-level facts shared by every parse path. */
@@ -181,7 +363,17 @@ internal object MavlinkInbound {
             param4 = buffer.getFloat(12),
             param5 = if (isCommandInt) buffer.getInt(16) / 1e7f else buffer.getFloat(16),
             param6 = if (isCommandInt) buffer.getInt(20) / 1e7f else buffer.getFloat(20),
-            param7 = buffer.getFloat(24)
+            param7 = buffer.getFloat(24),
+            latitudeDeg = if (isCommandInt) {
+                buffer.getInt(16) / COORD_SCALE
+            } else {
+                buffer.getFloat(16).toDouble()
+            },
+            longitudeDeg = if (isCommandInt) {
+                buffer.getInt(20) / COORD_SCALE
+            } else {
+                buffer.getFloat(20).toDouble()
+            }
         )
     }
 }

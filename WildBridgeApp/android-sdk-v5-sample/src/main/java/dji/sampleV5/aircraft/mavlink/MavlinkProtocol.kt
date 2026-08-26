@@ -5,6 +5,12 @@ import java.nio.ByteOrder
 
 /** Message ids for the telemetry set WildBridge emits. */
 internal object MavlinkMsgId {
+
+    /** Inbound stick input, the standard equivalent of WildBridge's /send/stick. */
+    const val MANUAL_CONTROL = 69
+
+    /** Inbound parameter write. */
+    const val PARAM_SET = 23
     const val HEARTBEAT = 0
     const val SYS_STATUS = 1
     const val SET_MODE = 11
@@ -30,6 +36,12 @@ internal object MavlinkMsgId {
     const val PARAM_VALUE = 22
     const val MISSION_REQUEST_LIST = 43
     const val MISSION_COUNT = 44
+    const val MISSION_CURRENT = 42
+    const val MISSION_CLEAR_ALL = 45
+    const val MISSION_ITEM_REACHED = 46
+    const val MISSION_ACK = 47
+    const val MISSION_REQUEST_INT = 51
+    const val MISSION_ITEM_INT = 73
 
     // Camera component (see MavlinkCameraComponent).
     const val CAMERA_INFORMATION = 259
@@ -129,6 +141,10 @@ internal object Mav {
     const val CMD_REQUEST_STORAGE_INFORMATION = 525
     const val CMD_REQUEST_CAMERA_CAPTURE_STATUS = 527
     const val CMD_DO_SET_STANDARD_MODE = 262
+    const val CMD_MISSION_START = 300
+    const val CMD_DO_SET_MISSION_CURRENT = 224
+    const val CMD_NAV_WAYPOINT = 16
+    const val CMD_DO_CHANGE_SPEED = 178
 
     // Payload and camera commands the endpoint executes. None of these can move the aircraft;
     // see MavlinkCommandSink for why that boundary is drawn where it is.
@@ -147,6 +163,34 @@ internal object Mav {
     const val CMD_DO_SET_MODE = 176
     const val CMD_DO_REPOSITION = 192
     const val CMD_COMPONENT_ARM_DISARM = 400
+
+    /** Climb or descend to an altitude, holding position. param1 = rate, param7 = altitude. */
+    const val CMD_CONDITION_CHANGE_ALT = 113
+
+    /** Standard payload release. WildBridge's drop port is a gripper in everything but name. */
+    const val CMD_DO_GRIPPER = 211
+    const val GRIPPER_ACTION_RELEASE = 0
+
+    /**
+     * The two WildBridge-specific commands.
+     *
+     * Everything that has a standard MAV_CMD uses it; these carry the residue that genuinely has
+     * no portable equivalent, kept to two commands with a selector rather than sprawling across
+     * the user range. A ground station that does not know WildBridge simply never sends them.
+     *
+     * USER_1 is payload aiming (relative gimbal, releasing the manual-override latch).
+     * USER_2 is payload sensing (laser rangefinder, spot temperature).
+     */
+    const val CMD_USER_1 = 31010
+    const val CMD_USER_2 = 31011
+
+    /** USER_1 selectors, in param1. */
+    const val USER1_GIMBAL_RELATIVE = 1f
+    const val USER1_RELEASE_MANUAL_OVERRIDE = 2f
+
+    /** USER_2 selectors, in param1. */
+    const val USER2_LRF_MEASURE = 1f
+    const val USER2_CAPTURE_TEMPERATURE = 2f
 
     const val RESULT_FAILED = 4
 
