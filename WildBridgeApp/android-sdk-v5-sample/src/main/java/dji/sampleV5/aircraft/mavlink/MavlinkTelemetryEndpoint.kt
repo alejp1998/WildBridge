@@ -254,6 +254,8 @@ internal class MavlinkTelemetryEndpoint(
                 if (forCamera) sendCameraSettings() else Mav.RESULT_UNSUPPORTED
             Mav.CMD_REQUEST_STORAGE_INFORMATION ->
                 if (forCamera) sendStorageInformation() else Mav.RESULT_UNSUPPORTED
+            Mav.CMD_REQUEST_VIDEO_STREAM_STATUS ->
+                if (forCamera) sendVideoStreamStatus() else Mav.RESULT_UNSUPPORTED
             else -> {
                 Log.d(TAG, "Refusing unsupported command ${command.command}")
                 Mav.RESULT_UNSUPPORTED
@@ -347,6 +349,8 @@ internal class MavlinkTelemetryEndpoint(
 
         messageId == MavlinkMsgId.CAMERA_SETTINGS && forCamera -> sendCameraSettings()
 
+        messageId == MavlinkMsgId.VIDEO_STREAM_STATUS && forCamera -> sendVideoStreamStatus()
+
         messageId == MavlinkMsgId.STORAGE_INFORMATION && forCamera -> sendStorageInformation()
 
         else -> {
@@ -383,6 +387,17 @@ internal class MavlinkTelemetryEndpoint(
         sendOnce(
             MavlinkMsgId.CAMERA_SETTINGS,
             MavlinkMessages.cameraSettings(timeBootMs(), zoomLevel = 1f),
+            fromCamera = true
+        )
+        return Mav.RESULT_ACCEPTED
+    }
+
+    private fun sendVideoStreamStatus(): Int {
+        val stream = runCatching { videoStreamProvider() }.getOrNull()
+        if (stream == null || stream.uri.isBlank()) return Mav.RESULT_DENIED
+        sendOnce(
+            MavlinkMsgId.VIDEO_STREAM_STATUS,
+            MavlinkMessages.videoStreamStatus(stream.framerate, stream.widthPx, stream.heightPx),
             fromCamera = true
         )
         return Mav.RESULT_ACCEPTED

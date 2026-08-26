@@ -222,6 +222,30 @@ internal object MavlinkMessages {
             .build()
 
     /**
+     * framerate(f), bitrate(u32), flags(u16), resolution_h(u16), resolution_v(u16),
+     * rotation(u16), hfov(u16), stream_id(u8)
+     *
+     * The running-state counterpart to [videoStreamInformation]. QGroundControl polls it after
+     * the stream is described; leaving it unanswered produces the same class of half-initialised
+     * camera as the settings and storage requests did.
+     */
+    fun videoStreamStatus(
+        framerate: Float,
+        widthPx: Int,
+        heightPx: Int
+    ): ByteArray =
+        PayloadWriter()
+            .f32(framerate)
+            .u32(0) // bitrate: unknown
+            .u16(Mav.VIDEO_STREAM_STATUS_RUNNING)
+            .u16(widthPx.coerceIn(0, MavlinkSnapshot.UINT16_UNKNOWN))
+            .u16(heightPx.coerceIn(0, MavlinkSnapshot.UINT16_UNKNOWN))
+            .u16(0) // rotation
+            .u16(0) // hfov: unknown
+            .u8(STREAM_ID)
+            .build()
+
+    /**
      * time_boot_ms(u32), mode_id(u8), [ext] zoomLevel(f), focusLevel(f)
      *
      * QGroundControl requests this as part of bringing a camera up, and its PhotoVideoControl QML

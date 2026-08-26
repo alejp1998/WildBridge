@@ -29,6 +29,7 @@ internal object MavlinkMsgId {
     const val VIDEO_STREAM_INFORMATION = 269
     const val CAMERA_SETTINGS = 260
     const val STORAGE_INFORMATION = 261
+    const val VIDEO_STREAM_STATUS = 270
 
     // Command protocol. COMMAND_LONG and COMMAND_INT are received only; the endpoint answers
     // requests for messages and refuses everything else.
