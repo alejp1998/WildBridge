@@ -197,6 +197,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
     companion object {
         private const val TAG = "WildBridgeDefaultLayout"
+
+        /** How long to wait for a DJI action callback before reporting the command failed. */
+        private const val ACTION_TIMEOUT_MS = 2_000L
         private const val TAG_THERMAL = "WildBridgeThermal"
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
@@ -3935,7 +3938,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             homeSet = isHomeSet(),
             flightMode = getFlightMode().name,
             motorsRunning = isFlyingKey.get(false),
-            manualOverrideActive = DroneController.isManualOverrideActive
+            manualOverrideActive = DroneController.isManualOverrideActive,
+            isRecording = isRecordingKey.get() ?: false
         )
     }
 
@@ -4007,18 +4011,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         override fun setCameraZoom(zoomRatio: Float): MavlinkCommandOutcome {
             if (zoomRatio <= 0f) return MavlinkCommandOutcome.FAILED
             zoomKey.set(zoomRatio.toDouble())
+            // set() is fire-and-forget; the ratio the aircraft settled on is reported in
+            // telemetry, which is where a ground station should read it back from.
             return MavlinkCommandOutcome.ACCEPTED
         }
 
-        override fun startVideoRecording(): MavlinkCommandOutcome {
-            startRecording.action()
-            return MavlinkCommandOutcome.ACCEPTED
-        }
+        override fun startVideoRecording(): MavlinkCommandOutcome = awaitAction(startRecording)
 
-        override fun stopVideoRecording(): MavlinkCommandOutcome {
-            stopRecording.action()
-            return MavlinkCommandOutcome.ACCEPTED
-        }
+        override fun stopVideoRecording(): MavlinkCommandOutcome = awaitAction(stopRecording)
 
         /**
          * Trips one shutter. Returns FAILED rather than ACCEPTED when the payload reports no
@@ -4032,6 +4032,38 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             } else {
                 MavlinkCommandOutcome.FAILED
             }
+        }
+    }
+
+    /**
+     * Issue a DJI action key and report what actually happened.
+     *
+     * The SDK's action callbacks are asynchronous while the command sink is synchronous, so this
+     * waits briefly for the result. Returning ACCEPTED without waiting is what the first version
+     * of this did, and it told a ground station that recording had stopped while the camera was
+     * still rolling — an ack that carries no information is worse than a slow one.
+     *
+     * The wait is bounded: a command the aircraft never answers becomes FAILED rather than
+     * blocking the endpoint's receive thread.
+     */
+    private fun awaitAction(key: DJIKey.ActionKey<EmptyMsg, EmptyMsg>): MavlinkCommandOutcome {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val succeeded = java.util.concurrent.atomic.AtomicBoolean(false)
+        key.action(
+            {
+                succeeded.set(true)
+                latch.countDown()
+            },
+            { error ->
+                Log.w(TAG, "DJI action failed: ${error.description()}")
+                latch.countDown()
+            }
+        )
+        val answered = latch.await(ACTION_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return when {
+            !answered -> MavlinkCommandOutcome.FAILED
+            succeeded.get() -> MavlinkCommandOutcome.ACCEPTED
+            else -> MavlinkCommandOutcome.FAILED
         }
     }
 

@@ -376,13 +376,37 @@ internal object MavlinkMessages {
      * cam_definition_version(u16), vendor_name(u8[32]), model_name(u8[32]), lens_id(u8),
      * cam_definition_uri(char[140])
      *
-     * Only [Mav.CAMERA_CAP_HAS_VIDEO_STREAM] is claimed. Capture and recording are not implemented
-     * yet, and advertising them would put buttons in a ground station that do nothing — the same
-     * failure the takeoff button already demonstrates.
+     * Claims the video stream plus image and video capture, all of which are now implemented in
+     * [MavlinkCommandSink]. The rule that keeps this honest: a capability flag is a promise about
+     * the whole microservice behind it, so nothing is claimed here until the messages and commands
+     * that support it exist. Capture and recording were deliberately absent until they did.
      *
      * `cam_definition_uri` is left empty: a camera definition file is how per-camera settings get
      * rendered, and there are none to expose until the detection and streaming parameters land.
      */
+    /**
+     * time_boot_ms(u32), image_interval(f), recording_time_ms(u32), available_capacity(f),
+     * image_status(u8), video_status(u8)
+     *
+     * The message that makes a ground station's record indicator tell the truth. QGroundControl
+     * polls it on a 1.5-second timer and drives its record button from `video_status`, so without
+     * it the button never reflects reality — in either direction. Recording started from the
+     * WildBridge UI or the RC shows up here too, because the state is read from the aircraft
+     * rather than remembered from whatever MAVLink last commanded.
+     *
+     * `recording_time_ms` is 0: MSDK 5.18 exposes no recording-duration key, and a fabricated
+     * elapsed time would be worse than none.
+     */
+    fun cameraCaptureStatus(timeBootMs: Long, recording: Boolean): ByteArray =
+        PayloadWriter()
+            .u32(timeBootMs)
+            .f32(0f) // image_interval: no interval capture
+            .u32(0) // recording_time_ms: not exposed by the SDK
+            .f32(0f) // available_capacity: storage is not enumerated, see storageInformation
+            .u8(Mav.CAPTURE_STATUS_IDLE)
+            .u8(if (recording) Mav.CAPTURE_STATUS_RUNNING else Mav.CAPTURE_STATUS_IDLE)
+            .build()
+
     fun cameraInformation(
         timeBootMs: Long,
         vendorName: String,
@@ -393,7 +417,11 @@ internal object MavlinkMessages {
             .u32(0) // firmware_version
             .f32(0f) // focal_length: unknown, varies with the DJI payload fitted
             .f32(0f).f32(0f) // sensor size: unknown
-            .u32(Mav.CAMERA_CAP_HAS_VIDEO_STREAM)
+            .u32(
+                Mav.CAMERA_CAP_HAS_VIDEO_STREAM or
+                    Mav.CAMERA_CAP_CAPTURE_VIDEO or
+                    Mav.CAMERA_CAP_CAPTURE_IMAGE
+            )
             .u16(0).u16(0) // still-capture resolution: not applicable while capture is unclaimed
             .u16(0) // cam_definition_version
             .chars(vendorName, NAME_FIELD_LENGTH)

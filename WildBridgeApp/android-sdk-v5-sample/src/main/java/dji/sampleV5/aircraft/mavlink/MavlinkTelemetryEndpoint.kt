@@ -222,6 +222,12 @@ internal class MavlinkTelemetryEndpoint(
             Stream(MavlinkMsgId.AUTOPILOT_VERSION, VERSION_INTERVAL_MS) {
                 MavlinkMessages.autopilotVersion()
             },
+            // Streamed as well as served on request: recording can be started from the WildBridge
+            // UI or the RC, and a ground station that only polled after its own commands would
+            // never notice.
+            Stream(MavlinkMsgId.CAMERA_CAPTURE_STATUS, CAPTURE_STATUS_INTERVAL_MS, camera = true) {
+                MavlinkMessages.cameraCaptureStatus(timeBootMs(), it.isRecording)
+            },
             Stream(MavlinkMsgId.CURRENT_MODE, CURRENT_MODE_INTERVAL_MS) {
                 MavlinkMessages.currentMode(
                     MavlinkFlightMode.fromDjiMode(it.flightMode, it.manualOverrideActive)
@@ -268,6 +274,8 @@ internal class MavlinkTelemetryEndpoint(
                 if (forCamera) sendStorageInformation() else Mav.RESULT_UNSUPPORTED
             Mav.CMD_REQUEST_VIDEO_STREAM_STATUS ->
                 if (forCamera) sendVideoStreamStatus() else Mav.RESULT_UNSUPPORTED
+            Mav.CMD_REQUEST_CAMERA_CAPTURE_STATUS ->
+                if (forCamera) sendCameraCaptureStatus() else Mav.RESULT_UNSUPPORTED
             else -> executeCommand(command)
         }
 
@@ -421,6 +429,8 @@ internal class MavlinkTelemetryEndpoint(
 
         messageId == MavlinkMsgId.CAMERA_SETTINGS && forCamera -> sendCameraSettings()
 
+        messageId == MavlinkMsgId.CAMERA_CAPTURE_STATUS && forCamera -> sendCameraCaptureStatus()
+
         messageId == MavlinkMsgId.VIDEO_STREAM_STATUS && forCamera -> sendVideoStreamStatus()
 
         messageId == MavlinkMsgId.STORAGE_INFORMATION && forCamera -> sendStorageInformation()
@@ -455,6 +465,16 @@ internal class MavlinkTelemetryEndpoint(
      * camera therefore commits us to answering these, even when the honest answer is "nothing to
      * report".
      */
+    private fun sendCameraCaptureStatus(): Int {
+        val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
+        sendOnce(
+            MavlinkMsgId.CAMERA_CAPTURE_STATUS,
+            MavlinkMessages.cameraCaptureStatus(timeBootMs(), snapshot.isRecording),
+            fromCamera = true
+        )
+        return Mav.RESULT_ACCEPTED
+    }
+
     private fun sendCameraSettings(): Int {
         sendOnce(
             MavlinkMsgId.CAMERA_SETTINGS,
@@ -612,6 +632,7 @@ internal class MavlinkTelemetryEndpoint(
         private const val ATTITUDE_INTERVAL_MS = 100L
         private const val VERSION_INTERVAL_MS = 5_000L
         private const val CURRENT_MODE_INTERVAL_MS = 2_000L
+        private const val CAPTURE_STATUS_INTERVAL_MS = 1_000L
 
         private const val CAMERA_VENDOR = "WildBridge"
         private const val CAMERA_MODEL_FALLBACK = "DJI Camera"

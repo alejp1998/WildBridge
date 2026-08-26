@@ -33,6 +33,7 @@ internal object MavlinkCrc {
         MavlinkMsgId.CAMERA_SETTINGS to 146,
         MavlinkMsgId.STORAGE_INFORMATION to 179,
         MavlinkMsgId.VIDEO_STREAM_STATUS to 59,
+        MavlinkMsgId.CAMERA_CAPTURE_STATUS to 12,
         MavlinkMsgId.AVAILABLE_MODES to 134,
         MavlinkMsgId.CURRENT_MODE to 193,
         MavlinkMsgId.COMMAND_ACK to 143,

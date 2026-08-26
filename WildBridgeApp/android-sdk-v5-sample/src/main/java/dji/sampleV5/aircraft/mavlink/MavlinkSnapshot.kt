@@ -55,7 +55,14 @@ internal data class MavlinkSnapshot(
      */
     val motorsRunning: Boolean = false,
 
-    val manualOverrideActive: Boolean = false
+    val manualOverrideActive: Boolean = false,
+
+    /**
+     * Camera is recording. Reported as CAMERA_CAPTURE_STATUS so a ground station's record button
+     * reflects what the aircraft is actually doing, including when recording was started from the
+     * WildBridge UI or the RC rather than over MAVLink.
+     */
+    val isRecording: Boolean = false
 ) {
     companion object {
         const val INVALID_BATTERY = -1

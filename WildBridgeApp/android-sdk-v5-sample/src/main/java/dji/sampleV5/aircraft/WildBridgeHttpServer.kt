@@ -289,11 +289,11 @@ internal class WildBridgeHttpCommandHandler(private val host: WildBridgeCommandH
                     "Received: enableVirtualStick"
                 }
             },
-            "/send/camera/host.startRecording" to {
+            "/send/camera/startRecording" to {
                 host.startRecording.action()
                 "Received: camera start recording"
             },
-            "/send/camera/host.stopRecording" to {
+            "/send/camera/stopRecording" to {
                 host.stopRecording.action()
                 "Received: camera stop recording"
             },

@@ -30,6 +30,7 @@ internal object MavlinkMsgId {
     const val CAMERA_SETTINGS = 260
     const val STORAGE_INFORMATION = 261
     const val VIDEO_STREAM_STATUS = 270
+    const val CAMERA_CAPTURE_STATUS = 262
 
     // Standard modes protocol. Without these a ground station can only show the raw custom_mode
     // integer, because MAV_AUTOPILOT_INVALID gives it no enum to look the number up in.
@@ -91,6 +92,7 @@ internal object Mav {
     const val CMD_REQUEST_VIDEO_STREAM_STATUS = 2505
     const val CMD_REQUEST_CAMERA_SETTINGS = 522
     const val CMD_REQUEST_STORAGE_INFORMATION = 525
+    const val CMD_REQUEST_CAMERA_CAPTURE_STATUS = 527
     const val CMD_DO_SET_STANDARD_MODE = 262
 
     // Payload and camera commands the endpoint executes. None of these can move the aircraft;
@@ -103,7 +105,16 @@ internal object Mav {
 
     const val RESULT_FAILED = 4
 
+    // Claimed only because the endpoint actually implements them — see MavlinkCommandSink.
+    // Advertising a capability commits us to the protocol behind it, which is how the camera
+    // panel got into a broken state the first time.
+    const val CAMERA_CAP_CAPTURE_VIDEO = 1L
+    const val CAMERA_CAP_CAPTURE_IMAGE = 2L
     const val CAMERA_CAP_HAS_VIDEO_STREAM = 256L
+
+    /** CAMERA_CAPTURE_STATUS video_status / image_status: 0 idle, 1 capture in progress. */
+    const val CAPTURE_STATUS_IDLE = 0
+    const val CAPTURE_STATUS_RUNNING = 1
 
     /**
      * RTSP, not WHEP. VIDEO_STREAM_TYPE_WHEP exists in the definitions, but QGroundControl's
