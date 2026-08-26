@@ -222,6 +222,47 @@ internal object MavlinkMessages {
             .build()
 
     /**
+     * custom_mode(u32), properties(u32), number_modes(u8), mode_index(u8),
+     * standard_mode(u8), mode_name(char[35])
+     *
+     * One message per mode; a ground station enumerates them to build its mode list. `mode_index`
+     * is 1-based. Modes that have a portable `MAV_STANDARD_MODE` identity send it and omit the
+     * name — the ground station already knows what to call those. Modes that do not (offboard,
+     * manual, DJI's intelligent-flight family) carry a name instead, which is the mechanism that
+     * lets WildBridge describe itself without borrowing another flight stack's mode numbers.
+     *
+     * Every mode is flagged NOT_USER_SELECTABLE for now: they are reported, not settable, because
+     * setting a mode means commanding the aircraft and that belongs with the rest of the command
+     * surface.
+     */
+    fun availableModes(mode: MavlinkFlightMode, index: Int, total: Int): ByteArray =
+        PayloadWriter()
+            .u32(mode.customMode.toLong())
+            .u32(Mav.MODE_PROPERTY_NOT_USER_SELECTABLE)
+            .u8(total)
+            .u8(index)
+            .u8(mode.standardMode)
+            .chars(
+                if (mode.standardMode == Mav.STANDARD_MODE_NON_STANDARD) mode.displayName else "",
+                MODE_NAME_LENGTH
+            )
+            .build()
+
+    /**
+     * custom_mode(u32), intended_custom_mode(u32), standard_mode(u8)
+     *
+     * `intended_custom_mode` is what the operator asked for, so a ground station can show a failed
+     * mode change. WildBridge does not accept mode commands yet, so intended always equals actual
+     * — reporting a different value would imply a transition that never happened.
+     */
+    fun currentMode(mode: MavlinkFlightMode): ByteArray =
+        PayloadWriter()
+            .u32(mode.customMode.toLong())
+            .u32(mode.customMode.toLong())
+            .u8(mode.standardMode)
+            .build()
+
+    /**
      * framerate(f), bitrate(u32), flags(u16), resolution_h(u16), resolution_v(u16),
      * rotation(u16), hfov(u16), stream_id(u8)
      *
@@ -455,6 +496,7 @@ internal object MavlinkMessages {
     private const val STATUSTEXT_LENGTH = 50
     private const val NAME_FIELD_LENGTH = 32
     private const val PARAM_ID_LENGTH = 16
+    private const val MODE_NAME_LENGTH = 35
     private const val CAM_DEFINITION_URI_LENGTH = 140
     private const val STREAM_URI_LENGTH = 160
 

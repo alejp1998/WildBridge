@@ -20,25 +20,37 @@ package dji.sampleV5.aircraft.mavlink
 internal enum class MavlinkFlightMode(
     val customMode: Int,
     val guided: Boolean,
-    val manualInput: Boolean
+    val manualInput: Boolean,
+    /** MAV_STANDARD_MODE value, or [Mav.STANDARD_MODE_NON_STANDARD] when there is no portable one. */
+    val standardMode: Int,
+    /** Name a ground station shows. Only meaningful for modes with no standard identity. */
+    val displayName: String
 ) {
-    UNKNOWN(0, guided = false, manualInput = false),
-    POSITION_HOLD(1, guided = false, manualInput = true),
-    ALTITUDE_HOLD(2, guided = false, manualInput = true),
-    OFFBOARD(3, guided = true, manualInput = false),
-    MISSION(4, guided = true, manualInput = false),
-    TAKEOFF(5, guided = true, manualInput = false),
-    LAND(6, guided = true, manualInput = false),
-    SAFE_RECOVERY(7, guided = true, manualInput = false),
-    ORBIT(8, guided = true, manualInput = false),
+    UNKNOWN(0, false, false, Mav.STANDARD_MODE_NON_STANDARD, "Unknown"),
+    POSITION_HOLD(1, false, true, Mav.STANDARD_MODE_POSITION_HOLD, "Position"),
+    ALTITUDE_HOLD(2, false, true, Mav.STANDARD_MODE_ALTITUDE_HOLD, "Altitude"),
+    OFFBOARD(3, true, false, Mav.STANDARD_MODE_NON_STANDARD, "Offboard"),
+    MISSION(4, true, false, Mav.STANDARD_MODE_MISSION, "Mission"),
+    TAKEOFF(5, true, false, Mav.STANDARD_MODE_TAKEOFF, "Takeoff"),
+    LAND(6, true, false, Mav.STANDARD_MODE_LAND, "Land"),
+    SAFE_RECOVERY(7, true, false, Mav.STANDARD_MODE_SAFE_RECOVERY, "Return"),
+    ORBIT(8, true, false, Mav.STANDARD_MODE_ORBIT, "Orbit"),
 
     /** DJI's fully manual mode: no position or altitude assistance. */
-    MANUAL(9, guided = false, manualInput = true),
+    MANUAL(9, false, true, Mav.STANDARD_MODE_NON_STANDARD, "Manual"),
 
     /** DJI intelligent-flight modes — follow, tap-fly, cinematic and friends. */
-    INTELLIGENT(10, guided = true, manualInput = false);
+    INTELLIGENT(10, true, false, Mav.STANDARD_MODE_NON_STANDARD, "Intelligent");
 
     companion object {
+        /**
+         * The modes advertised to a ground station, in the order they are listed.
+         *
+         * [UNKNOWN] is excluded deliberately: it describes "we cannot tell", not a mode anyone
+         * could select, and listing it would put a meaningless entry in the mode picker.
+         */
+        val ADVERTISED: List<MavlinkFlightMode> = entries.filter { it != UNKNOWN }
+
         /**
          * Map a DJI flight-mode name onto a WildBridge mode.
          *

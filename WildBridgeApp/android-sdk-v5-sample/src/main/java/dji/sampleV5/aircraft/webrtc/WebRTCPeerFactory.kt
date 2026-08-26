@@ -43,11 +43,17 @@ object WebRTCPeerFactory {
 
         factory = PeerConnectionFactory.builder()
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(rootEglBase.eglBaseContext))
+            // Wrapped so the stream emits periodic keyframes. libwebrtc sets a 20-second H.264
+            // key-frame interval, which is fine for a negotiated WebRTC call but leaves anything
+            // attaching to the MediaMTX RTSP republish — QGroundControl, ffmpeg — waiting seconds
+            // for a first picture. See PeriodicKeyframeEncoderFactory.
             .setVideoEncoderFactory(
-                DefaultVideoEncoderFactory(
-                    rootEglBase.eglBaseContext,
-                    false,
-                    true
+                PeriodicKeyframeEncoderFactory(
+                    DefaultVideoEncoderFactory(
+                        rootEglBase.eglBaseContext,
+                        false,
+                        true
+                    )
                 )
             )
             .setOptions(PeerConnectionFactory.Options())

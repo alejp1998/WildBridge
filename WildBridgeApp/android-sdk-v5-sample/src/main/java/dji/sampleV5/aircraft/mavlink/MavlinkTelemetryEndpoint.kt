@@ -217,6 +217,11 @@ internal class MavlinkTelemetryEndpoint(
             Stream(MavlinkMsgId.AUTOPILOT_VERSION, VERSION_INTERVAL_MS) {
                 MavlinkMessages.autopilotVersion()
             },
+            Stream(MavlinkMsgId.CURRENT_MODE, CURRENT_MODE_INTERVAL_MS) {
+                MavlinkMessages.currentMode(
+                    MavlinkFlightMode.fromDjiMode(it.flightMode, it.manualOverrideActive)
+                )
+            },
             // The camera component's own heartbeat. Without it QGroundControl never asks for
             // CAMERA_INFORMATION, and the video stream is never discovered.
             Stream(MavlinkMsgId.HEARTBEAT, HEARTBEAT_INTERVAL_MS, camera = true) {
@@ -245,7 +250,9 @@ internal class MavlinkTelemetryEndpoint(
             command.targetComponent == 0
 
         val result = when (command.command) {
-            Mav.CMD_REQUEST_MESSAGE -> sendRequestedMessage(command.param1.toInt(), forCamera)
+            Mav.CMD_REQUEST_MESSAGE -> sendRequestedMessage(
+                command.param1.toInt(), forCamera, command.param2.toInt()
+            )
             Mav.CMD_REQUEST_CAMERA_INFORMATION ->
                 if (forCamera) sendCameraInformation() else Mav.RESULT_UNSUPPORTED
             Mav.CMD_REQUEST_VIDEO_STREAM_INFORMATION ->
@@ -325,7 +332,11 @@ internal class MavlinkTelemetryEndpoint(
      * by running QGC against this endpoint and reading "RequestAutopilotVersion: Max retries
      * exhausted" in its log.
      */
-    private fun sendRequestedMessage(messageId: Int, forCamera: Boolean): Int = when {
+    private fun sendRequestedMessage(
+        messageId: Int,
+        forCamera: Boolean,
+        modeIndex: Int = 0
+    ): Int = when {
         messageId == MavlinkMsgId.AUTOPILOT_VERSION -> {
             sendOnce(MavlinkMsgId.AUTOPILOT_VERSION, MavlinkMessages.autopilotVersion())
             Mav.RESULT_ACCEPTED
@@ -346,6 +357,21 @@ internal class MavlinkTelemetryEndpoint(
 
         messageId == MavlinkMsgId.VIDEO_STREAM_INFORMATION && forCamera ->
             sendVideoStreamInformation()
+
+        messageId == MavlinkMsgId.AVAILABLE_MODES -> sendAvailableModes(modeIndex)
+
+        messageId == MavlinkMsgId.CURRENT_MODE -> {
+            val snapshot = runCatching { snapshotProvider() }.getOrDefault(MavlinkSnapshot())
+            sendOnce(
+                MavlinkMsgId.CURRENT_MODE,
+                MavlinkMessages.currentMode(
+                    MavlinkFlightMode.fromDjiMode(
+                        snapshot.flightMode, snapshot.manualOverrideActive
+                    )
+                )
+            )
+            Mav.RESULT_ACCEPTED
+        }
 
         messageId == MavlinkMsgId.CAMERA_SETTINGS && forCamera -> sendCameraSettings()
 
@@ -389,6 +415,26 @@ internal class MavlinkTelemetryEndpoint(
             MavlinkMessages.cameraSettings(timeBootMs(), zoomLevel = 1f),
             fromCamera = true
         )
+        return Mav.RESULT_ACCEPTED
+    }
+
+    /**
+     * Enumerate the mode list. `param2` of the request selects one 1-based index, or 0 for all.
+     */
+    private fun sendAvailableModes(requestedIndex: Int): Int {
+        val modes = MavlinkFlightMode.ADVERTISED
+        val selected = if (requestedIndex <= 0) {
+            modes.indices.toList()
+        } else {
+            listOf(requestedIndex - 1).filter { it in modes.indices }
+        }
+        if (selected.isEmpty()) return Mav.RESULT_DENIED
+        selected.forEach { i ->
+            sendOnce(
+                MavlinkMsgId.AVAILABLE_MODES,
+                MavlinkMessages.availableModes(modes[i], index = i + 1, total = modes.size)
+            )
+        }
         return Mav.RESULT_ACCEPTED
     }
 
@@ -519,6 +565,7 @@ internal class MavlinkTelemetryEndpoint(
         private const val POSITION_INTERVAL_MS = 200L
         private const val ATTITUDE_INTERVAL_MS = 100L
         private const val VERSION_INTERVAL_MS = 5_000L
+        private const val CURRENT_MODE_INTERVAL_MS = 2_000L
 
         private const val CAMERA_VENDOR = "WildBridge"
         private const val CAMERA_MODEL_FALLBACK = "DJI Camera"

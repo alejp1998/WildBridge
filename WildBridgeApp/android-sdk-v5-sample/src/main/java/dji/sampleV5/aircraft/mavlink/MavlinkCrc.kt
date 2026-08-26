@@ -33,6 +33,8 @@ internal object MavlinkCrc {
         MavlinkMsgId.CAMERA_SETTINGS to 146,
         MavlinkMsgId.STORAGE_INFORMATION to 179,
         MavlinkMsgId.VIDEO_STREAM_STATUS to 59,
+        MavlinkMsgId.AVAILABLE_MODES to 134,
+        MavlinkMsgId.CURRENT_MODE to 193,
         MavlinkMsgId.COMMAND_ACK to 143,
         // Received, not sent — needed to validate the checksum of inbound commands.
         MavlinkMsgId.COMMAND_INT to 158,

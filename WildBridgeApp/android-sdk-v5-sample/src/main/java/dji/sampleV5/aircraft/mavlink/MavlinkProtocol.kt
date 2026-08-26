@@ -31,6 +31,11 @@ internal object MavlinkMsgId {
     const val STORAGE_INFORMATION = 261
     const val VIDEO_STREAM_STATUS = 270
 
+    // Standard modes protocol. Without these a ground station can only show the raw custom_mode
+    // integer, because MAV_AUTOPILOT_INVALID gives it no enum to look the number up in.
+    const val AVAILABLE_MODES = 435
+    const val CURRENT_MODE = 436
+
     // Command protocol. COMMAND_LONG and COMMAND_INT are received only; the endpoint answers
     // requests for messages and refuses everything else.
     const val COMMAND_INT = 75
@@ -86,6 +91,7 @@ internal object Mav {
     const val CMD_REQUEST_VIDEO_STREAM_STATUS = 2505
     const val CMD_REQUEST_CAMERA_SETTINGS = 522
     const val CMD_REQUEST_STORAGE_INFORMATION = 525
+    const val CMD_DO_SET_STANDARD_MODE = 262
 
     const val CAMERA_CAP_HAS_VIDEO_STREAM = 256L
 
@@ -104,6 +110,18 @@ internal object Mav {
 
     /** STORAGE_STATUS_NOT_SUPPORTED: the DJI card is not exposed over MAVLink yet. */
     const val STORAGE_STATUS_NOT_SUPPORTED = 3
+
+    const val STANDARD_MODE_NON_STANDARD = 0
+    const val STANDARD_MODE_POSITION_HOLD = 1
+    const val STANDARD_MODE_ORBIT = 2
+    const val STANDARD_MODE_ALTITUDE_HOLD = 4
+    const val STANDARD_MODE_SAFE_RECOVERY = 5
+    const val STANDARD_MODE_MISSION = 6
+    const val STANDARD_MODE_LAND = 7
+    const val STANDARD_MODE_TAKEOFF = 8
+
+    /** MAV_MODE_PROPERTY_NOT_USER_SELECTABLE: advertised for display, but not settable yet. */
+    const val MODE_PROPERTY_NOT_USER_SELECTABLE = 2L
 
     const val SEVERITY_INFO = 6
     const val SEVERITY_WARNING = 4
