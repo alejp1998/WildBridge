@@ -49,5 +49,8 @@ internal data class MavlinkEndpointConfig(
         const val PREF_PORT = "wb_mav_0_port"
         const val PREF_MODE = "wb_mav_0_mode"
         const val PREF_SYSTEM_ID = "wb_mav_0_sysid"
+
+        /** Master switch for flight motion; false means every motion command is refused. */
+        const val PREF_ALLOW_FLIGHT = "wb_mav_0_allow_flight"
     }
 }

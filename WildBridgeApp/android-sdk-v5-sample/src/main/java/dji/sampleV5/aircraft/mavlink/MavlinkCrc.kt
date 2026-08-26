@@ -38,6 +38,8 @@ internal object MavlinkCrc {
         MavlinkMsgId.AVAILABLE_MODES to 134,
         MavlinkMsgId.CURRENT_MODE to 193,
         MavlinkMsgId.COMMAND_ACK to 143,
+        MavlinkMsgId.SET_MODE to 89,
+        MavlinkMsgId.EXTENDED_SYS_STATE to 130,
         // Received, not sent — needed to validate the checksum of inbound commands.
         MavlinkMsgId.COMMAND_INT to 158,
         MavlinkMsgId.COMMAND_LONG to 152,

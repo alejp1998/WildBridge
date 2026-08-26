@@ -15,11 +15,11 @@ import kotlin.concurrent.thread
  * shows the aircraft with no plugin and no configuration file.
  *
  * Inbound traffic is handled, but only just: a datagram can teach the endpoint where a ground
- * station lives, and it can ask for the camera and video-stream descriptions. Every other command
- * is acknowledged `MAV_RESULT_UNSUPPORTED` and dropped. **No inbound message can reach a flight
- * control path, because no such path is wired up here** — that is what keeps this reviewable
- * without a flight-safety argument, and it is a property to preserve deliberately rather than
- * lose by accident. See [handleCommand].
+ * station lives, ask for the camera and video-stream descriptions, and — through the host's
+ * gated motion sink — request takeoff, land, return-to-launch, reposition and yaw. Everything
+ * else is acknowledged `MAV_RESULT_UNSUPPORTED` and dropped. Motion reaches the aircraft only
+ * via [MavlinkMotionSink], which is null (and therefore refuses) unless the host enables it
+ * behind `wb_mav_0_allow_flight`. See [handleCommand] and [executeCommand].
  *
  * Messages are streamed at per-message rates rather than one uniform tick. A single rate is what
  * makes a link feel sluggish: attitude needs to be smooth, battery does not, and sending both at
@@ -43,7 +43,12 @@ internal class MavlinkTelemetryEndpoint(
      * Executes the payload and camera commands. Null means the endpoint stays request-only, which
      * is how it behaved before commands existed and remains a valid configuration.
      */
-    private val commandSink: MavlinkCommandSink? = null
+    private val commandSink: MavlinkCommandSink? = null,
+    /**
+     * Executes flight-motion commands, gated by the host. Null means motion is refused — the safe
+     * default until a flying platform deliberately enables it behind `wb_mav_0_allow_flight`.
+     */
+    private val motionSink: MavlinkMotionSink? = null
 ) {
     private val framer = MavlinkFramer(config.systemId)
 
@@ -187,6 +192,7 @@ internal class MavlinkTelemetryEndpoint(
             if (packet.length > 0 && buffer[0] == MavlinkFramer.MAGIC_V2) {
                 notePeer(InetSocketAddress(packet.address, packet.port))
                 MavlinkInbound.parseCommand(buffer, packet.length)?.let(::handleCommand)
+                MavlinkInbound.parseSetMode(buffer, packet.length)?.let(::handleSetMode)
                 MavlinkInbound.parseListRequest(buffer, packet.length)?.let(::handleListRequest)
             }
         }
@@ -203,6 +209,9 @@ internal class MavlinkTelemetryEndpoint(
     private fun streamLoop() {
         val streams = buildStreams()
         var lastTick = System.nanoTime()
+        // Last reported aircraft state, so transitions log once instead of every tick.
+        var lastArmed = false
+        var lastLanded = Mav.LANDED_STATE_ON_GROUND
 
         while (running) {
             val now = System.nanoTime()
@@ -212,6 +221,25 @@ internal class MavlinkTelemetryEndpoint(
             val snapshot = runCatching { snapshotProvider() }.getOrElse {
                 Log.w(TAG, "Snapshot failed: ${it.message}")
                 MavlinkSnapshot()
+            }
+
+            // Field diagnostic: log armed and landed-state transitions. QGC derives its "Flying"
+            // indicator and the Land/RTL button enablement from EXTENDED_SYS_STATE, so if a ground
+            // station ever shows the wrong state these two lines show exactly what was sent.
+            if (snapshot.motorsRunning != lastArmed) {
+                lastArmed = snapshot.motorsRunning
+                Log.i(TAG, "State change: motors/armed=$lastArmed")
+            }
+            val mode = MavlinkFlightMode.fromDjiMode(snapshot.flightMode, snapshot.manualOverrideActive)
+            val landed = when {
+                !snapshot.motorsRunning -> Mav.LANDED_STATE_ON_GROUND
+                mode == MavlinkFlightMode.LAND -> Mav.LANDED_STATE_LANDING
+                mode == MavlinkFlightMode.TAKEOFF -> Mav.LANDED_STATE_TAKEOFF
+                else -> Mav.LANDED_STATE_IN_AIR
+            }
+            if (landed != lastLanded) {
+                lastLanded = landed
+                Log.i(TAG, "State change: landed_state=$landed mode=${mode.name}")
             }
 
             for (stream in streams) {
@@ -237,6 +265,11 @@ internal class MavlinkTelemetryEndpoint(
         return listOf(
             Stream(MavlinkMsgId.HEARTBEAT, HEARTBEAT_INTERVAL_MS) { MavlinkMessages.heartbeat(it) },
             Stream(MavlinkMsgId.SYS_STATUS, SLOW_INTERVAL_MS) { MavlinkMessages.sysStatus(it) },
+            // landed_state is QGC's source of the flying state; without it the Fly View never
+            // offers Land/RTL because the vehicle is never "flying".
+            Stream(MavlinkMsgId.EXTENDED_SYS_STATE, SLOW_INTERVAL_MS) {
+                MavlinkMessages.extendedSysState(it)
+            },
             Stream(MavlinkMsgId.BATTERY_STATUS, SLOW_INTERVAL_MS) { MavlinkMessages.batteryStatus(it) },
             // Only once DJI actually has a home point. Before then the SDK reports an
             // uninitialised location, and a HOME_POSITION carrying it would put a home marker at a
@@ -349,14 +382,11 @@ internal class MavlinkTelemetryEndpoint(
     }
 
     /**
-     * Execute one payload or camera command, or refuse it.
+     * Execute one command, or refuse it.
      *
-     * This is the entire set of commands that reach the aircraft, and it is an allowlist: a
-     * command not named here gets `MAV_RESULT_UNSUPPORTED` and nothing happens. **No flight
-     * motion is reachable from here** — takeoff, land, return, reposition, yaw and altitude are
-     * not in this `when`, and are not in [MavlinkCommandSink] either, so there is no code path
-     * from an inbound packet to the aircraft moving. Keeping that true is the point; adding a
-     * motion command is a deliberate act with its own gate, not a new branch here.
+     * Payload/camera commands go through [MavlinkCommandSink]; flight-motion commands go through
+     * [MavlinkMotionSink], which is null (and therefore refuses motion) unless the host enables it
+     * behind `wb_mav_0_allow_flight`. A command not named here gets `MAV_RESULT_UNSUPPORTED`.
      */
     private fun executeCommand(command: MavlinkCommand): Int {
         val sink = commandSink
@@ -364,6 +394,7 @@ internal class MavlinkTelemetryEndpoint(
             Log.d(TAG, "Refusing command ${command.command}: no command sink configured")
             return Mav.RESULT_UNSUPPORTED
         }
+        val unsupported = CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
         val result = runCatching {
             when (command.command) {
                 // param1 pitch, param2 yaw, both degrees.
@@ -390,6 +421,33 @@ internal class MavlinkTelemetryEndpoint(
                 Mav.CMD_VIDEO_STOP_CAPTURE -> sink.stopVideoRecording()
                 Mav.CMD_IMAGE_START_CAPTURE -> sink.captureImage()
 
+                // Flight motion, executed through the host's gated MavlinkMotionSink. A null sink
+                // (motion disabled) is refused, and the gate itself returns DENIED when
+                // wb_mav_0_allow_flight is off or the Safety Computer holds authority.
+                Mav.CMD_NAV_TAKEOFF -> motionSink?.takeoff() ?: unsupported
+                Mav.CMD_NAV_LAND -> motionSink?.land() ?: unsupported
+                Mav.CMD_NAV_RETURN_TO_LAUNCH -> motionSink?.returnToHome() ?: unsupported
+                Mav.CMD_DO_REPOSITION -> motionSink?.reposition(
+                    latitudeDeg = command.param5.toDouble(),
+                    longitudeDeg = command.param6.toDouble(),
+                    altitudeMeters = command.param7.toDouble(),
+                    yawDeg = command.param4.toDouble(),
+                    groundSpeedMps = command.param1.toDouble()
+                ) ?: unsupported
+                Mav.CMD_CONDITION_YAW -> motionSink?.setYaw(command.param1.toDouble()) ?: unsupported
+
+                // DJI has no arm/disarm: the aircraft arms when a takeoff actually starts. QGC's
+                // PX4 plugin arms right after NAV_TAKEOFF is accepted, so this is acknowledged
+                // (still behind the gate) rather than refused, or takeoff aborts on the error.
+                Mav.CMD_COMPONENT_ARM_DISARM ->
+                    if (command.param1 >= 0.5f) motionSink?.arm() ?: unsupported
+                    else motionSink?.disarm() ?: unsupported
+
+                // QGC's APM plugin (and some PX4 flows) request modes this way; QGC's PX4 plugin
+                // normally sends SET_MODE instead — both land in the same mapper. The packed mode
+                // numbers fit a float exactly (low 16 bits are zero), so the round trip is lossless.
+                Mav.CMD_DO_SET_MODE -> modeResult(command.param2.toInt())
+
                 else -> {
                     Log.d(TAG, "Refusing unsupported command ${command.command}")
                     CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
@@ -403,6 +461,47 @@ internal class MavlinkTelemetryEndpoint(
             Log.i(TAG, "Command ${command.command} -> ${result.outcome}")
         }
         return result.mavResult
+    }
+
+    /**
+     * A SET_MODE request from a ground station. QGC's PX4 firmware plugin sends this (not
+     * DO_SET_MODE) when its Land / RTL buttons are pressed, and waits for the heartbeat to show
+     * the requested mode — which it does, because acting on the request makes DJI report the
+     * matching mode.
+     */
+    private fun handleSetMode(setMode: MavlinkSetMode) {
+        if (setMode.targetSystem != 0 && setMode.targetSystem != config.systemId) return
+        modeResult(setMode.customMode)
+    }
+
+    /**
+     * Turn a requested PX4 mode number into action. Only the modes with a real DJI equivalent are
+     * executed; the rest are refused, since DJI offers no way to change its flight mode remotely.
+     */
+    private fun modeResult(customMode: Int): CommandResult {
+        val requested = MavlinkFlightMode.fromPx4Mode(customMode)
+        if (requested == null) {
+            Log.d(TAG, "Refusing mode request 0x${customMode.toString(16)}: not a WildBridge mode")
+            return CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
+        }
+        val motion = motionSink
+        if (motion == null) {
+            Log.d(TAG, "Refusing mode request ${requested.displayName}: motion disabled")
+            return CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
+        }
+        val result = when (requested) {
+            MavlinkFlightMode.TAKEOFF -> motion.takeoff()
+            MavlinkFlightMode.LAND -> motion.land()
+            MavlinkFlightMode.SAFE_RECOVERY -> motion.returnToHome()
+            else -> {
+                Log.d(TAG, "Refusing mode request ${requested.displayName}: no DJI equivalent")
+                CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
+            }
+        }
+        if (result.outcome != MavlinkCommandOutcome.UNSUPPORTED) {
+            Log.i(TAG, "Mode request ${requested.displayName} -> ${result.outcome}")
+        }
+        return result
     }
 
     /**

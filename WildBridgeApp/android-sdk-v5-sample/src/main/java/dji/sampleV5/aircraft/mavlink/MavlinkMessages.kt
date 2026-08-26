@@ -44,10 +44,25 @@ internal object MavlinkMessages {
         return PayloadWriter()
             .u32(mode.customMode.toLong())
             .u8(Mav.TYPE_QUADROTOR)
-            .u8(Mav.AUTOPILOT_INVALID)
+            .u8(Mav.AUTOPILOT_PX4)
             .u8(baseMode)
             .u8(systemStatus)
             .u8(Mav.MAVLINK_VERSION)
+            .build()
+    }
+
+    /** vtol_state(u8), landed_state(u8) */
+    fun extendedSysState(snapshot: MavlinkSnapshot): ByteArray {
+        val mode = MavlinkFlightMode.fromDjiMode(snapshot.flightMode, snapshot.manualOverrideActive)
+        val landedState = when {
+            !snapshot.motorsRunning -> Mav.LANDED_STATE_ON_GROUND
+            mode == MavlinkFlightMode.LAND -> Mav.LANDED_STATE_LANDING
+            mode == MavlinkFlightMode.TAKEOFF -> Mav.LANDED_STATE_TAKEOFF
+            else -> Mav.LANDED_STATE_IN_AIR
+        }
+        return PayloadWriter()
+            .u8(Mav.VTOL_STATE_MC)
+            .u8(landedState)
             .build()
     }
 
@@ -204,14 +219,23 @@ internal object MavlinkMessages {
      *
      * Only capabilities that are actually implemented are advertised. Claiming MISSION_INT or FTP
      * before they exist is the same class of mistake as claiming the wrong autopilot.
+     *
+     * `flight_sw_version` reports PX4 1.15.0 official. QGC's initial-connect state machine parses
+     * it and, when it is zero, shows two dialogs on every connect: "supports PX4 Pro firmware
+     * 1.4.1 and above" and "not running latest stable firmware, running -1.-1.-1". The version is
+     * part of the same compatibility claim the heartbeat already makes by reporting
+     * MAV_AUTOPILOT_PX4 — it exists so QGC enables its action buttons — and a current, plausible
+     * PX4 version keeps those dialogs from appearing while meaning nothing else.
      */
     fun autopilotVersion(): ByteArray =
         PayloadWriter()
             .u64(Mav.CAP_MAVLINK2)
             .u64(0) // uid
-            .u32(0).u32(0).u32(0).u32(0)
+            .u32(PX4_COMPAT_FLIGHT_SW_VERSION.toLong())
+            .u32(0).u32(0).u32(0)
             .u16(0).u16(0)
-            .zeros(CUSTOM_VERSION_BYTES * 3)
+            .chars("WBbridge", CUSTOM_VERSION_BYTES)
+            .zeros(CUSTOM_VERSION_BYTES * 2)
             .build()
 
     /** severity(u8), text(char[50]) */
@@ -562,6 +586,12 @@ internal object MavlinkMessages {
     private const val VOLTAGE_CELLS = 10
     private const val QUATERNION_LENGTH = 4
     private const val CUSTOM_VERSION_BYTES = 8
+
+    /**
+     * PX4 release encoding: (major << 24) | (minor << 16) | (patch << 8) | type, with 0xFF the
+     * "official stable" type byte. See [autopilotVersion] for why a version is reported at all.
+     */
+    private const val PX4_COMPAT_FLIGHT_SW_VERSION = (1 shl 24) or (15 shl 16) or 0xFF
     private const val STATUSTEXT_LENGTH = 50
     private const val NAME_FIELD_LENGTH = 32
     private const val PARAM_ID_LENGTH = 16

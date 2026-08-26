@@ -83,6 +83,7 @@ import dji.sampleV5.aircraft.mavlink.GimbalRotation
 import dji.sampleV5.aircraft.mavlink.GimbalRotationMode
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
+import dji.sampleV5.aircraft.mavlink.MavlinkMotionSink
 import dji.sampleV5.aircraft.mavlink.MavlinkSystemId
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
@@ -4008,7 +4009,30 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             "WB_SPD_CRUISE" to profile.defaultCruiseSpeedMps.toFloat(),
             "WB_WP_ACC_RAD" to DroneController.WP_ACCEPT_DISTANCE_M.toFloat(),
             "WB_WP_ACC_ALT" to DroneController.WP_ACCEPT_ALTITUDE_M.toFloat(),
-            "WB_WP_ACC_YAW" to DroneController.WP_ACCEPT_YAW_DEG.toFloat()
+            "WB_WP_ACC_YAW" to DroneController.WP_ACCEPT_YAW_DEG.toFloat(),
+            // QGC's PX4 airframe component reads this one PX4 parameter and pops a "Parameters
+            // are missing from firmware" dialog when it is absent. 4001 is PX4's "Generic
+            // Quadcopter" airframe id; published read-only like the rest of the list.
+            "SYS_AUTOSTART" to 4001f,
+            // PX4 radio parameters. COM_RC_IN_MODE=1 tells QGC the RC comes from a joystick
+            // rather than a MAVLink RC link, which makes its Radio setup task not-required (the
+            // DJI remote is not exposed over MAVLink, so a calibration wizard would have nothing
+            // to calibrate). The RC_MAP_* pins are 0 = unmapped, which is honest: there are no
+            // MAVLink RC channels to map. Without these, QGC reports them missing and lists a
+            // "Configuration tasks remain" setup task on every connect.
+            "COM_RC_IN_MODE" to 1f,
+            "RC_MAP_ROLL" to 0f,
+            "RC_MAP_PITCH" to 0f,
+            "RC_MAP_YAW" to 0f,
+            "RC_MAP_THROTTLE" to 0f,
+            // PX4 sensor calibration. QGC's Sensors setup task requires CAL_GYRO0_ID and
+            // CAL_ACC0_ID to be non-zero before it is complete, and reports them missing on every
+            // connect otherwise ("Parameters are missing ... Configuration tasks remain"). DJI
+            // calibrates its IMU in the factory, so these are published as already-calibrated
+            // device ids (any non-zero value satisfies QGC) rather than exposed for recalibration.
+            "CAL_GYRO0_ID" to 131074f,
+            "CAL_ACC0_ID" to 131330f,
+            "CAL_MAG0_ID" to 131586f
         )
     }
 
@@ -4119,6 +4143,87 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         }
     }
 
+    /**
+     * Flight-motion commands over MAVLink, behind the safety gate.
+     *
+     * Three layers, checked in order:
+     *   1. wb_mav_0_allow_flight — ships false, so nothing moves until deliberately enabled.
+     *   2. command authority — MAVLink speaks as the Pilot, so it is refused once the Safety
+     *      Computer has seized control over HTTP.
+     *   3. the RC manual-override latch — closed-loop commands (reposition, yaw) are refused while
+     *      the physical RC pilot has taken over.
+     */
+    private val mavlinkMotionSink = object : MavlinkMotionSink {
+
+        /** Returns a refusal when motion is blocked, or null when the command may proceed. */
+        private fun gate(): CommandResult? {
+            if (!sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ALLOW_FLIGHT, false)) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            if (!ControlAuthority.authorizeControlCommand(ControlAuthority.Source.PILOT)) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            return null
+        }
+
+        override fun takeoff(): CommandResult {
+            gate()?.let { return it }
+            DroneController.startTakeOff()
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun land(): CommandResult {
+            gate()?.let { return it }
+            DroneController.startLanding()
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun returnToHome(): CommandResult {
+            gate()?.let { return it }
+            DroneController.startReturnToHome()
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun reposition(
+            latitudeDeg: Double,
+            longitudeDeg: Double,
+            altitudeMeters: Double,
+            yawDeg: Double,
+            groundSpeedMps: Double
+        ): CommandResult {
+            gate()?.let { return it }
+            if (DroneController.shouldRejectAutonomousCommand("reposition")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            DroneController.flyToWaypointHoldHeading(
+                latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, groundSpeedMps
+            )
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun setYaw(yawDeg: Double): CommandResult {
+            gate()?.let { return it }
+            if (DroneController.shouldRejectAutonomousCommand("yaw")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            DroneController.gotoYaw(yawDeg)
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun arm(): CommandResult {
+            // DJI has no arming: motors spin up when the takeoff command actually runs. QGC's
+            // takeoff sequence arms right after NAV_TAKEOFF is accepted, so this is a gated no-op
+            // that keeps the sequence moving rather than an honest refusal that aborts it.
+            gate()?.let { return it }
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun disarm(): CommandResult {
+            gate()?.let { return it }
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+    }
+
     private fun startMavlinkEndpoint() {
         val config = readMavlinkConfig()
         if (!config.enabled) {
@@ -4131,7 +4236,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 ::buildMavlinkSnapshot,
                 ::currentMavlinkVideoStream,
                 ::mavlinkParameters,
-                mavlinkCommandSink
+                mavlinkCommandSink,
+                mavlinkMotionSink
             )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")

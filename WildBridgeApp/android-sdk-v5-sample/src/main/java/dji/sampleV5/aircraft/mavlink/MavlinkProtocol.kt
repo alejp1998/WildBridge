@@ -7,10 +7,17 @@ import java.nio.ByteOrder
 internal object MavlinkMsgId {
     const val HEARTBEAT = 0
     const val SYS_STATUS = 1
+    const val SET_MODE = 11
     const val GPS_RAW_INT = 24
     const val ATTITUDE = 30
     const val GLOBAL_POSITION_INT = 33
     const val VFR_HUD = 74
+    // MAVLink 2 message id for EXTENDED_SYS_STATE. The message only exists in the MAVLink 2
+    // dialect and lives at 245 there; 125 is POWER_STATUS in both dialects. QGroundControl 5.1.3
+    // (which is MAVLink 2 only) listens for EXTENDED_SYS_STATE at 245, so sending 125 made its
+    // flying-state logic never fire and Land/RTL never appeared after takeoff. The crc_extra
+    // (130) is a property of the message definition and is unchanged.
+    const val EXTENDED_SYS_STATE = 245
     const val BATTERY_STATUS = 147
     const val AUTOPILOT_VERSION = 148
     const val HOME_POSITION = 242
@@ -48,11 +55,14 @@ internal object MavlinkMsgId {
 /**
  * The enum values used by the telemetry set, taken from the upstream definitions.
  *
- * WildBridge is not a flight stack, so it reports [Mav.AUTOPILOT_INVALID] rather than claiming to
- * be PX4 or ArduPilot. That is the honest declaration for a component that speaks the protocol,
- * and it keeps mode names coming from WildBridge itself rather than being read through another
- * stack's enum. [Mav.AUTOPILOT_PX4] is left here as the documented fallback if ground-station
- * compatibility ever forces the issue.
+ * The heartbeat reports [Mav.AUTOPILOT_PX4]. WildBridge is not a flight stack, but QGroundControl
+ * only enables its Fly View action buttons (Takeoff / Land / RTL) for firmware plugins that
+ * declare guided-mode capabilities — and its Generic plugin, selected for
+ * [Mav.AUTOPILOT_INVALID] / [Mav.AUTOPILOT_GENERIC], declares none, so the buttons stayed grey.
+ * The claim was the documented fallback all along; the cost is that QGC renders `custom_mode`
+ * through PX4's mode enum, which is why [MavlinkFlightMode] now carries PX4's packed mode
+ * numbers and maps every WildBridge mode to the PX4 mode whose meaning matches. The reverse
+ * direction — QGC's PX4 plugin asking for Land/RTL via SET_MODE — is mapped back the same way.
  */
 internal object Mav {
     const val TYPE_QUADROTOR = 2
@@ -65,11 +75,35 @@ internal object Mav {
     const val STATE_STANDBY = 3
     const val STATE_ACTIVE = 4
 
+    // EXTENDED_SYS_STATE (message id 245 in the MAVLink 2 dialect). landed_state is QGC's source
+    // of the flying state, so it must be reported or the Fly View never offers Land/RTL — those
+    // buttons require the vehicle to be flying, and without this message it never is.
+    const val VTOL_STATE_MC = 3
+    const val LANDED_STATE_ON_GROUND = 1
+    const val LANDED_STATE_IN_AIR = 2
+    const val LANDED_STATE_TAKEOFF = 3
+    const val LANDED_STATE_LANDING = 4
+
     const val MODE_FLAG_CUSTOM_MODE_ENABLED = 1
     const val MODE_FLAG_STABILIZE_ENABLED = 16
     const val MODE_FLAG_GUIDED_ENABLED = 8
     const val MODE_FLAG_MANUAL_INPUT_ENABLED = 64
     const val MODE_FLAG_SAFETY_ARMED = 128
+
+    // PX4 packed custom_mode values — (main_mode << 16) | (sub_mode << 24). Reported because the
+    // heartbeat claims MAV_AUTOPILOT_PX4; the numbers are PX4's, but the meanings they carry are
+    // WildBridge's own modes (see MavlinkFlightMode). Values are PX4's, mirrored from QGC's
+    // px4_custom_mode.h.
+    const val PX4_MODE_MANUAL = 1 shl 16
+    const val PX4_MODE_ALTCTL = 2 shl 16
+    const val PX4_MODE_POSCTL = 3 shl 16
+    const val PX4_MODE_OFFBOARD = 6 shl 16
+    const val PX4_MODE_ORBIT = (3 shl 16) or (1 shl 24)
+    const val PX4_MODE_MISSION = (4 shl 16) or (4 shl 24)
+    const val PX4_MODE_TAKEOFF = (4 shl 16) or (2 shl 24)
+    const val PX4_MODE_LAND = (4 shl 16) or (6 shl 24)
+    const val PX4_MODE_RTL = (4 shl 16) or (5 shl 24)
+    const val PX4_MODE_FOLLOW_TARGET = (4 shl 16) or (8 shl 24)
 
     const val COMP_ID_AUTOPILOT1 = 1
 
@@ -103,6 +137,16 @@ internal object Mav {
     const val CMD_VIDEO_START_CAPTURE = 2500
     const val CMD_VIDEO_STOP_CAPTURE = 2501
     const val CMD_DO_GIMBAL_MANAGER_PITCHYAW = 1000
+
+    // Flight-motion commands. None of these executes until wb_mav_0_allow_flight is true and the
+    // authority / manual-override gates pass — see MavlinkMotionSink.
+    const val CMD_NAV_RETURN_TO_LAUNCH = 20
+    const val CMD_NAV_LAND = 21
+    const val CMD_NAV_TAKEOFF = 22
+    const val CMD_CONDITION_YAW = 115
+    const val CMD_DO_SET_MODE = 176
+    const val CMD_DO_REPOSITION = 192
+    const val CMD_COMPONENT_ARM_DISARM = 400
 
     const val RESULT_FAILED = 4
 
