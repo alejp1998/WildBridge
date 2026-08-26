@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from wildbridge_groundstation.dji_client import DJIInterface
 
 
@@ -194,7 +196,7 @@ def test_safety_client_tokens_capture_and_media_paths(monkeypatch):
 
     class Response:
         status_code = 200
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
         text = "{}"
         content = b"{}"
 

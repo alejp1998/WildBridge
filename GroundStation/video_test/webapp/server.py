@@ -67,6 +67,26 @@ def _coerce_setting_value(key, coerce, value):
 DISCOVERY_INTERVAL_MS = int(os.environ.get("DISCOVERY_INTERVAL_MS", "5000"))
 MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", "http://127.0.0.1:9997").rstrip("/")
 MEDIAMTX_WEBRTC_URL = os.environ.get("MEDIAMTX_WEBRTC_URL", "http://127.0.0.1:8889").rstrip("/")
+
+ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _open_url(target, timeout):
+    """urlopen restricted to HTTP(S).
+
+    Every URL here is built from an environment variable, so whoever sets the environment could
+    otherwise point these calls at a file:// path or a custom scheme and have the process read
+    local files. Validating the scheme is what makes the call safe; the nosec records that it was
+    checked rather than ignored, and keeping the check in one place means a new call site cannot
+    quietly skip it.
+    """
+    url = target.full_url if isinstance(target, urllib.request.Request) else target
+    scheme = urlparse(url).scheme
+    if scheme not in ALLOWED_URL_SCHEMES:
+        raise ValueError(f"refusing to open URL with scheme {scheme!r}: {url!r}")
+    return urllib.request.urlopen(target, timeout=timeout)  # nosec B310 - scheme checked above
+
+
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/logs"))
 DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
 DISCOVERY_PORT = 30000
@@ -346,8 +366,8 @@ def configure_mediamtx_path(drone_name, mode, source_url=None):
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                pass
+            # The PATCH result is not inspected; a 404 below is what tells us the path is new.
+            _open_url(req, 2).close()
         except urllib.error.HTTPError as e:
             if e.code == 404:  # Doesn't exist yet, try to add
                 req = urllib.request.Request(
@@ -356,12 +376,62 @@ def configure_mediamtx_path(drone_name, mode, source_url=None):
                     method="POST",
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    pass
+                # Fire and forget: the endpoint's status is not consulted, only that the
+                # request was delivered without raising.
+                _open_url(req, 2).close()
             else:
                 raise
     except Exception as exc:
         log_event("mediamtx_config_error", drone=drone_name, error=str(exc))
+
+
+def _rtsp_source_url(name, streaming):
+    """Work out the RTSP URL to pull a drone's stream from.
+
+    Prefers the consumptionPath the drone reports, normalising the two shapes DJI's own RTSP
+    server produces, and falls back to building the URL from the drone's IP and credentials.
+    """
+    source_url = streaming.get("consumptionPath")
+    if isinstance(source_url, str):
+        source_url = source_url.strip()
+        if source_url.endswith("/live"):
+            source_url = f"{source_url}/livestream"
+        if source_url.endswith("/live/livestream"):
+            source_url = source_url[: -len("/live/livestream")] + "/streaming/live/1"
+    if source_url and source_url.startswith("rtsp://"):
+        return source_url
+
+    ip = drones[name].get("ip")
+    port = streaming.get("rtspPort", 8554)
+    user = streaming.get("rtspUser", "")
+    pwd = streaming.get("rtspPwd", "")
+    credentials = f"{user}:{pwd}@" if user and pwd else ""
+    return f"rtsp://{credentials}{ip}:{port}/streaming/live/1"
+
+
+def _apply_streaming_config(name, streaming):
+    """Point MediaMTX at whatever the drone says it is publishing.
+
+    Only calls the MediaMTX API when the desired state actually changed — telemetry arrives
+    several times a second and reconfiguring the path on every packet would be pointless churn.
+    """
+    if not streaming:
+        return
+    mode = (streaming.get("mode") or "").lower()
+    if mode == "rtsp":
+        source_url = _rtsp_source_url(name, streaming)
+        desired_state = f"rtsp:{source_url}"
+        configure_args = ("rtsp", source_url)
+    elif mode in {"rtmp", "webrtc"}:
+        desired_state = f"{mode}:publisher"
+        configure_args = (mode,)
+    else:
+        return
+
+    if drones[name].get("last_applied_stream_source") == desired_state:
+        return
+    drones[name]["last_applied_stream_source"] = desired_state
+    configure_mediamtx_path(name, *configure_args)
 
 
 def _handle_telemetry_line(name, line, last_sample_log):
@@ -379,41 +449,7 @@ def _handle_telemetry_line(name, line, last_sample_log):
     with lock:
         drones[name]["lastTelemetry"] = telemetry
 
-    # Check streaming config from telemetry!
-    streaming = telemetry.get("streaming")
-    if streaming:
-        mode = (streaming.get("mode") or "").lower()
-        if mode == "rtsp":
-            # Construct RTSP url, utilizing consumptionPath from telemetry if available
-            source_url = streaming.get("consumptionPath")
-            if isinstance(source_url, str):
-                source_url = source_url.strip()
-                if source_url.endswith("/live"):
-                    source_url = f"{source_url}/livestream"
-                if source_url.endswith("/live/livestream"):
-                    source_url = source_url[: -len("/live/livestream")] + "/streaming/live/1"
-            if not source_url or not source_url.startswith("rtsp://"):
-                ip = drones[name].get("ip")
-                port = streaming.get("rtspPort", 8554)
-                user = streaming.get("rtspUser", "")
-                pwd = streaming.get("rtspPwd", "")
-                if user and pwd:
-                    source_url = f"rtsp://{user}:{pwd}@{ip}:{port}/streaming/live/1"
-                else:
-                    source_url = f"rtsp://{ip}:{port}/streaming/live/1"
-
-            # Let's keep track of last applied mode/url to avoid redundant API calls
-            last_applied = drones[name].get("last_applied_stream_source")
-            desired_state = f"rtsp:{source_url}"
-            if last_applied != desired_state:
-                drones[name]["last_applied_stream_source"] = desired_state
-                configure_mediamtx_path(name, "rtsp", source_url)
-        elif mode in {"rtmp", "webrtc"}:
-            last_applied = drones[name].get("last_applied_stream_source")
-            desired_state = f"{mode}:publisher"
-            if last_applied != desired_state:
-                drones[name]["last_applied_stream_source"] = desired_state
-                configure_mediamtx_path(name, mode)
+    _apply_streaming_config(name, telemetry.get("streaming"))
 
     now = time.time()
     if now - last_sample_log <= 1:
@@ -492,9 +528,7 @@ def telemetry_loop(name, stop_event):
 def poll_mediamtx_loop():
     while True:
         try:
-            with urllib.request.urlopen(  # nosec B310
-                f"{MEDIAMTX_API_URL}/v3/paths/list", timeout=2
-            ) as response:
+            with _open_url(f"{MEDIAMTX_API_URL}/v3/paths/list", 2) as response:
                 body = json.loads(response.read().decode("utf-8"))
             items = body.get("items") or []
             with lock:
@@ -606,7 +640,7 @@ class Handler(SimpleHTTPRequestHandler):
                 method="POST",
                 headers={"Content-Type": "text/plain"},
             )
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with _open_url(req, 3) as resp:
                 reply = resp.read().decode("utf-8")
 
             with lock:
@@ -638,7 +672,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             req = urllib.request.Request(f"http://{ip}:{DRONE_HTTP_PORT}/config/settings")
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with _open_url(req, 3) as resp:
                 raw = resp.read().decode("utf-8")
             try:
                 settings = json.loads(raw)
@@ -682,7 +716,7 @@ class Handler(SimpleHTTPRequestHandler):
                 method="POST",
                 headers={"Content-Type": "text/plain"},
             )
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with _open_url(req, 3) as resp:
                 reply = resp.read().decode("utf-8")
             self.send_json(200, {"ok": True, "key": key, "value": payload, "message": reply})
         except Exception as exc:
@@ -711,7 +745,7 @@ class Handler(SimpleHTTPRequestHandler):
                 method="POST",
                 headers={"Content-Type": "text/plain"},
             )
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with _open_url(req, 3) as resp:
                 reply = resp.read().decode("utf-8")
             self.send_json(200, {"ok": True, "action": action, "message": reply})
         except Exception as exc:
@@ -774,30 +808,46 @@ class Handler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def handle_discover_post(self):
+        discover_now()
+        self.send_json(202, {"ok": True})
+
+    def _drone_post_handler(self, path):
+        """Pick the handler for a /api/drones/... POST, or None if nothing matches.
+
+        Order matters and mirrors the original chain: the specific suffixes are checked before
+        the general /settings/ case, which would otherwise swallow them.
+        """
+        if not path.startswith("/api/drones/"):
+            return None
+        if path.endswith("/ignore"):
+            return self.handle_ignore_post
+        if path.endswith("/streaming/mode"):
+            return self.handle_streaming_mode_post
+        if any(path.endswith(action) for action in RC_ACTIONS):
+            return self.handle_rc_action_post
+        if "/settings/" in path:
+            return self.handle_settings_post
+        return None
+
     def do_POST(self):
         path = urlparse(self.path).path
-        if path == "/api/discover":
-            discover_now()
-            self.send_json(202, {"ok": True})
+
+        exact_routes = {
+            "/api/discover": self.handle_discover_post,
+            "/api/ros-status": self.handle_ros_status_post,
+            "/api/client-stats": self.handle_client_stats_post,
+        }
+        handler = exact_routes.get(path)
+        if handler is not None:
+            handler()
             return
-        if path == "/api/ros-status":
-            self.handle_ros_status_post()
+
+        drone_handler = self._drone_post_handler(path)
+        if drone_handler is not None:
+            drone_handler(path)
             return
-        if path.startswith("/api/drones/") and path.endswith("/ignore"):
-            self.handle_ignore_post(path)
-            return
-        if path.startswith("/api/drones/") and path.endswith("/streaming/mode"):
-            self.handle_streaming_mode_post(path)
-            return
-        if path.startswith("/api/drones/") and any(path.endswith(s) for s in RC_ACTIONS):
-            self.handle_rc_action_post(path)
-            return
-        if "/settings/" in path and path.startswith("/api/drones/"):
-            self.handle_settings_post(path)
-            return
-        if path == "/api/client-stats":
-            self.handle_client_stats_post()
-            return
+
         self.send_error(404)
 
 

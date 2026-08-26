@@ -14,6 +14,7 @@ import json
 import os
 import time
 import urllib.request
+from urllib.parse import urlparse
 
 import rclpy
 from geometry_msgs.msg import Vector3
@@ -22,6 +23,26 @@ from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool, Empty, Float64, Float64MultiArray, Int32, String
 
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "http://127.0.0.1:8090")
+
+ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _open_url(target, timeout):
+    """urlopen restricted to HTTP(S).
+
+    Every URL here is built from an environment variable, so whoever sets the environment could
+    otherwise point these calls at a file:// path or a custom scheme and have the process read
+    local files. Validating the scheme is what makes the call safe; the nosec records that it was
+    checked rather than ignored, and keeping the check in one place means a new call site cannot
+    quietly skip it.
+    """
+    url = target.full_url if isinstance(target, urllib.request.Request) else target
+    scheme = urlparse(url).scheme
+    if scheme not in ALLOWED_URL_SCHEMES:
+        raise ValueError(f"refusing to open URL with scheme {scheme!r}: {url!r}")
+    return urllib.request.urlopen(target, timeout=timeout)  # nosec B310 - scheme checked above
+
+
 REPORT_INTERVAL = float(os.environ.get("ROS_REPORT_INTERVAL", "3"))
 SYNC_INTERVAL = float(os.environ.get("ROS_SYNC_INTERVAL", "2"))
 # How often to retry the phone HTTP probe for a drone that isn't reachable yet
@@ -132,7 +153,7 @@ def _fetch_drone_ips():
     """Best-effort name -> ip lookup from the webapp's own discovery state, used
     only to probe each drone's phone HTTP surface (not required for ROS)."""
     try:
-        with urllib.request.urlopen(f"{WEBAPP_URL}/api/drones", timeout=3) as resp:
+        with _open_url(f"{WEBAPP_URL}/api/drones", 3) as resp:
             state = json.loads(resp.read().decode("utf-8"))
         return {
             drone["name"]: drone.get("ip") for drone in state.get("drones", []) if drone.get("ip")
@@ -145,7 +166,7 @@ def _probe_phone(ip):
     if not ip:
         return False, "no ip known for this drone yet"
     try:
-        with urllib.request.urlopen(f"http://{ip}:8080/config", timeout=3) as resp:
+        with _open_url(f"http://{ip}:8080/config", 3) as resp:
             return resp.status == 200, ""
     except Exception as exc:
         return False, str(exc)[:120]
@@ -279,7 +300,7 @@ class RosMonitor(Node):
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=3):
+            with _open_url(req, 3):
                 pass
         except Exception:
             pass
