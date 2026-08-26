@@ -52,13 +52,23 @@ def parse_ack_seq(response):
 
 
 class DjiNode(Node):
-    def __init__(self):
-        super().__init__("DjiNode")
+    def __init__(self, ip_rc=None, node_name="DjiNode", namespace=None):
+        """Create a node for one drone.
+
+        The arguments exist so several drones can be run inside one process, each as its own
+        node under its own namespace. Launched on its own the defaults reproduce the previous
+        single-drone behaviour exactly: no name, no namespace, IP from the ROS parameter.
+        """
+        super().__init__(node_name, namespace=namespace)
         self.get_logger().info("Node Initialisation")
 
+        # False until the drone answers. A caller running several of these in one process checks
+        # this and destroys the node itself, rather than the node tearing down the whole context.
+        self.connection_ready = False
+
         # Retrieve the drone's IP address from the parameter server
-        self.declare_parameter("ip_rc", "")  # Default IP (empty for auto-discovery)
-        self.ip_rc = self.get_parameter("ip_rc").get_parameter_value().string_value
+        self.declare_parameter("ip_rc", ip_rc or "")  # Default IP (empty for auto-discovery)
+        self.ip_rc = ip_rc or self.get_parameter("ip_rc").get_parameter_value().string_value
 
         # Initialize the DJI drone interface
         self.dji_interface = DJIInterface(self.ip_rc)
@@ -72,12 +82,14 @@ class DjiNode(Node):
 
         # Verify the connection to the drone
         if not self.verify_connection():
-            self.get_logger().error(
-                f"Unable to connect to the drone at IP: {self.ip_rc}. Shutting down node."
-            )
-            self.get_logger().info("Connection Failure")
-            rclpy.shutdown()  # Shut down ROS
+            self.get_logger().error(f"Unable to connect to the drone at IP: {self.ip_rc}.")
+            # Deliberately not rclpy.shutdown(): this node may be one of several created in the
+            # same process, and tearing down the context would kill every other drone's node
+            # over one unreachable aircraft. The caller checks connection_ready and destroys
+            # this node on its own.
             return
+
+        self.connection_ready = True
 
         # Start the telemetry stream (TCP socket on port 8081)
         self.dji_interface.startTelemetryStream()
@@ -102,6 +114,15 @@ class DjiNode(Node):
         )
 
         # Subscribers for drone commands with specific messages
+        # Compatibility alias: this topic was renamed to goto_waypoint_nose_forward, but
+        # downstream consumers still publish the original name. Both reach the same callback so
+        # neither side has to move first.
+        self.create_subscription(
+            Float64MultiArray,
+            "command/goto_waypoint",
+            self.goto_waypoint_nose_forward_callback,
+            10,
+        )
         self.create_subscription(
             Float64MultiArray,
             "command/goto_waypoint_nose_forward",
@@ -706,9 +727,10 @@ class DjiNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = DjiNode()
-    if not rclpy.ok():
-        # DjiNode.__init__ already shut down the context (connection failure);
-        # spinning on a dead context would raise.
+    if not node.connection_ready:
+        # The drone did not answer. Tear down just this node and the context we created.
+        node.destroy_node()
+        rclpy.shutdown()
         return
     try:
         rclpy.spin(node)
