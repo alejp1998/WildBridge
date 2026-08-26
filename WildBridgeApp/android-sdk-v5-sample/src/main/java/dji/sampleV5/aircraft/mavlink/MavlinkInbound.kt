@@ -25,7 +25,9 @@ internal data class MavlinkCommand(
     val senderSystem: Int,
     val senderComponent: Int,
     val param1: Float,
-    val param2: Float
+    val param2: Float,
+    val param3: Float,
+    val param4: Float
 )
 
 /**
@@ -133,7 +135,9 @@ internal object MavlinkInbound {
             senderSystem = data[5].toInt() and 0xFF,
             senderComponent = data[6].toInt() and 0xFF,
             param1 = buffer.getFloat(0),
-            param2 = buffer.getFloat(4)
+            param2 = buffer.getFloat(4),
+            param3 = buffer.getFloat(8),
+            param4 = buffer.getFloat(12)
         )
     }
 }

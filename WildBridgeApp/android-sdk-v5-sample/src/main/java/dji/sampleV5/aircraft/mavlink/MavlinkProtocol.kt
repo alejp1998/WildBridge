@@ -93,6 +93,16 @@ internal object Mav {
     const val CMD_REQUEST_STORAGE_INFORMATION = 525
     const val CMD_DO_SET_STANDARD_MODE = 262
 
+    // Payload and camera commands the endpoint executes. None of these can move the aircraft;
+    // see MavlinkCommandSink for why that boundary is drawn where it is.
+    const val CMD_SET_CAMERA_ZOOM = 531
+    const val CMD_IMAGE_START_CAPTURE = 2000
+    const val CMD_VIDEO_START_CAPTURE = 2500
+    const val CMD_VIDEO_STOP_CAPTURE = 2501
+    const val CMD_DO_GIMBAL_MANAGER_PITCHYAW = 1000
+
+    const val RESULT_FAILED = 4
+
     const val CAMERA_CAP_HAS_VIDEO_STREAM = 256L
 
     /**

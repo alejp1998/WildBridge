@@ -78,6 +78,8 @@ import dji.sampleV5.aircraft.models.PayloadWidgetVM
 import dji.sampleV5.aircraft.models.VirtualStickVM
 import dji.sampleV5.aircraft.mavlink.MavlinkEndpointConfig
 import dji.sampleV5.aircraft.mavlink.MavlinkSnapshot
+import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
+import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -3978,6 +3980,61 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         )
     }
 
+    /**
+     * Payload and camera commands reachable over MAVLink.
+     *
+     * Deliberately excludes every command that could move the aircraft. The set here is the same
+     * work the equivalent HTTP endpoints do, called through the same view models, so the two
+     * surfaces cannot drift in behaviour — which is the failure that killed the previous
+     * ground-station MAVLink proxy.
+     *
+     * Commands run on the main thread because the DJI view models expect it, and the endpoint
+     * calls this from its receive thread.
+     */
+    private val mavlinkCommandSink = object : MavlinkCommandSink {
+
+        override fun setGimbalPitchYaw(pitchDeg: Float, yawDeg: Float): MavlinkCommandOutcome {
+            gimbalKey.action(
+                GimbalAngleRotation(
+                    GimbalAngleRotationMode.ABSOLUTE_ANGLE,
+                    pitchDeg.toDouble(), 0.0, yawDeg.toDouble(),
+                    true, true, false, 0.1, false, 0
+                )
+            )
+            return MavlinkCommandOutcome.ACCEPTED
+        }
+
+        override fun setCameraZoom(zoomRatio: Float): MavlinkCommandOutcome {
+            if (zoomRatio <= 0f) return MavlinkCommandOutcome.FAILED
+            zoomKey.set(zoomRatio.toDouble())
+            return MavlinkCommandOutcome.ACCEPTED
+        }
+
+        override fun startVideoRecording(): MavlinkCommandOutcome {
+            startRecording.action()
+            return MavlinkCommandOutcome.ACCEPTED
+        }
+
+        override fun stopVideoRecording(): MavlinkCommandOutcome {
+            stopRecording.action()
+            return MavlinkCommandOutcome.ACCEPTED
+        }
+
+        /**
+         * Trips one shutter. Returns FAILED rather than ACCEPTED when the payload reports no
+         * capture, so a ground station sees the difference between "done" and "nothing happened"
+         * instead of a cheerful ack for a photo that does not exist.
+         */
+        override fun captureImage(): MavlinkCommandOutcome {
+            val descriptor = Payload.captureThermal(mediaVM)
+            return if (descriptor != null) {
+                MavlinkCommandOutcome.ACCEPTED
+            } else {
+                MavlinkCommandOutcome.FAILED
+            }
+        }
+    }
+
     private fun startMavlinkEndpoint() {
         val config = readMavlinkConfig()
         if (!config.enabled) {
@@ -3986,7 +4043,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         }
         runCatching {
             val endpoint = MavlinkTelemetryEndpoint(
-                config, ::buildMavlinkSnapshot, ::currentMavlinkVideoStream, ::mavlinkParameters
+                config,
+                ::buildMavlinkSnapshot,
+                ::currentMavlinkVideoStream,
+                ::mavlinkParameters,
+                mavlinkCommandSink
             )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")

@@ -37,7 +37,12 @@ internal class MavlinkTelemetryEndpoint(
      * Read-only parameters to publish, typically the active control profile. Empty is valid but
      * costs a ground station its initial connect — see [handleListRequest].
      */
-    private val parameterProvider: () -> List<Pair<String, Float>> = { emptyList() }
+    private val parameterProvider: () -> List<Pair<String, Float>> = { emptyList() },
+    /**
+     * Executes the payload and camera commands. Null means the endpoint stays request-only, which
+     * is how it behaved before commands existed and remains a valid configuration.
+     */
+    private val commandSink: MavlinkCommandSink? = null
 ) {
     private val framer = MavlinkFramer(config.systemId)
 
@@ -263,10 +268,7 @@ internal class MavlinkTelemetryEndpoint(
                 if (forCamera) sendStorageInformation() else Mav.RESULT_UNSUPPORTED
             Mav.CMD_REQUEST_VIDEO_STREAM_STATUS ->
                 if (forCamera) sendVideoStreamStatus() else Mav.RESULT_UNSUPPORTED
-            else -> {
-                Log.d(TAG, "Refusing unsupported command ${command.command}")
-                Mav.RESULT_UNSUPPORTED
-            }
+            else -> executeCommand(command)
         }
 
         val ack = MavlinkMessages.commandAck(
@@ -278,6 +280,50 @@ internal class MavlinkTelemetryEndpoint(
         // The ack must come from the component that was addressed, or the requester will not
         // match it to its request.
         sendOnce(MavlinkMsgId.COMMAND_ACK, ack, fromCamera = forCamera)
+    }
+
+    /**
+     * Execute one payload or camera command, or refuse it.
+     *
+     * This is the entire set of commands that reach the aircraft, and it is an allowlist: a
+     * command not named here gets `MAV_RESULT_UNSUPPORTED` and nothing happens. **No flight
+     * motion is reachable from here** — takeoff, land, return, reposition, yaw and altitude are
+     * not in this `when`, and are not in [MavlinkCommandSink] either, so there is no code path
+     * from an inbound packet to the aircraft moving. Keeping that true is the point; adding a
+     * motion command is a deliberate act with its own gate, not a new branch here.
+     */
+    private fun executeCommand(command: MavlinkCommand): Int {
+        val sink = commandSink
+        if (sink == null) {
+            Log.d(TAG, "Refusing command ${command.command}: no command sink configured")
+            return Mav.RESULT_UNSUPPORTED
+        }
+        val outcome = runCatching {
+            when (command.command) {
+                // param1 pitch, param2 yaw, both degrees.
+                Mav.CMD_DO_GIMBAL_MANAGER_PITCHYAW ->
+                    sink.setGimbalPitchYaw(command.param1, command.param2)
+
+                // param2 is the zoom value for MAV_ZOOM_TYPE_RANGE / _CONTINUOUS.
+                Mav.CMD_SET_CAMERA_ZOOM -> sink.setCameraZoom(command.param2)
+
+                Mav.CMD_VIDEO_START_CAPTURE -> sink.startVideoRecording()
+                Mav.CMD_VIDEO_STOP_CAPTURE -> sink.stopVideoRecording()
+                Mav.CMD_IMAGE_START_CAPTURE -> sink.captureImage()
+
+                else -> {
+                    Log.d(TAG, "Refusing unsupported command ${command.command}")
+                    MavlinkCommandOutcome.UNSUPPORTED
+                }
+            }
+        }.getOrElse { error ->
+            Log.w(TAG, "Command ${command.command} failed: ${error.message}", error)
+            MavlinkCommandOutcome.FAILED
+        }
+        if (outcome != MavlinkCommandOutcome.UNSUPPORTED) {
+            Log.i(TAG, "Command ${command.command} -> $outcome")
+        }
+        return outcome.mavResult
     }
 
     /**
