@@ -346,3 +346,187 @@ Also published PX4 calibration params to end the whack-a-mole of missing-param d
 Sensors setup task; DJI calibrates the IMU in the factory).
 
 
+
+---
+
+## Mission protocol (this session)
+
+The mission protocol is the first microservice where WildBridge is not translating an existing
+HTTP endpoint but taking over a job the ground station used to do. It is worth writing down why.
+
+### One protocol, two executors
+
+WildBridge already has two ways to fly a path: DJI's native wayline engine, and its own PID
+controller driven waypoint-by-waypoint. The obvious reading of "we have two ways" is that we need
+two MAVLink surfaces. We do not — **the choice of executor is a property of the vehicle, not of
+the plan**. A ground station uploads one plan; `WB_MISSION_EXEC` decides who flies it:
+
+| `WB_MISSION_EXEC` | Executor | Notes |
+|---|---|---|
+| `onboard` (default) | WildBridge's PID controller, sequenced on the aircraft | Per-item heading, per-leg speed |
+| `dji_native` | DJI's wayline engine | Needs ≥ 2 waypoints; per-item heading is lost |
+
+The one thing the plan format genuinely has to express — nose-forward versus hold-heading — is
+already expressed by MAVLink itself. `NAV_WAYPOINT.param4` is the yaw at the waypoint, and **NaN
+means "use the vehicle's own heading mode"**. That is exactly the distinction between WildBridge's
+two waypoint controllers, so it is read per item and one plan may mix them. This is why no custom
+mission item was needed.
+
+The same convention now applies to `DO_REPOSITION` (a single goto), which previously always held
+heading. A goto should not change character depending on whether it arrived as a reposition or as
+a one-item plan.
+
+### Sequencing moved onto the aircraft
+
+Previously the ground station chained waypoints: send one, watch the reach latch, send the next.
+That is why the seq-tracked reach flags exist. MAVLink expects the *vehicle* to own that state,
+because `MISSION_CURRENT` and `MISSION_ITEM_REACHED` are reported by the aircraft. The onboard
+sequencer in `WildBridgeDefaultLayoutActivity` does that: it walks the stored items, issues each
+leg through the controller its `param4` asks for, waits on the reach latch **comparing the seq**
+(a bare boolean would read a stale latch from the previous leg as this one's arrival), and reports
+progress. It aborts rather than skipping on if a leg times out or the pilot takes the sticks.
+
+### What is deliberately refused
+
+- **Geofence and rally uploads** (`MAV_MISSION_TYPE_FENCE` / `_RALLY`) are refused at the count
+  with `MAV_MISSION_UNSUPPORTED`. DJI owns these through FlySafe and WildBridge cannot write them.
+  Accepting an upload we would then ignore is the silent-drop failure that makes a plan upload
+  dangerous.
+- **Anything outside the navigation subset.** Only `NAV_WAYPOINT` and `DO_CHANGE_SPEED` are
+  accepted; other commands are refused per item with `MAV_MISSION_UNSUPPORTED`.
+- **Out-of-order items** are refused with `MAV_MISSION_INVALID_SEQUENCE` rather than reordered:
+  the protocol requests items by index, so an unexpected index means the two ends disagree about
+  where they are, and guessing would store a plan neither side intended.
+
+A failed upload leaves the previously stored plan untouched, because incoming items are staged
+separately and only promoted on a complete upload.
+
+### Position precision
+
+`COMMAND_LONG` carries `param5`/`param6` as float32. At 46° latitude that is roughly **0.6 m** of
+rounding error, which is why MAVLink defines `COMMAND_INT` with the position as int32 degE7. Two
+fixes followed from measuring this:
+
+- The ground station sends positional commands (`DO_REPOSITION`) as `COMMAND_INT`.
+- `MavlinkCommand` now carries `latitudeDeg`/`longitudeDeg` as **doubles**, so a `COMMAND_INT`
+  keeps the precision it was sent with instead of losing it on arrival. (The parser accepted
+  `COMMAND_INT` before this, but funnelled the position through a float anyway.)
+
+Verified: `46.5180001` round-trips exactly, where float32 gives `46.518001556`.
+
+### Verified against the real aircraft
+
+Upload handshake, per-item requests, ack, download, and exact round-trip of position and the NaN
+heading distinction — all confirmed against a live aircraft, plus 14 JVM unit tests
+(`MavlinkMissionProtocolTest`) covering the state machine and the refusal paths.
+
+---
+
+## Ground-station transport selector
+
+`WB_TRANSPORT` lets the Python ground station choose its wire without forking the client, because
+the whole surface funnels through exactly two chokepoints — the telemetry dictionary and
+`requestSend`:
+
+| Value | Telemetry | Commands |
+|---|---|---|
+| `http` (default) | TCP 8081, as today | HTTP POST |
+| `mavlink` | MAVLink UDP | MAVLink; **anything unsupported is refused, never silently retried over HTTP** |
+| `both` | MAVLink | MAVLink where it has an equivalent, HTTP where it does not |
+
+MAVLink-derived telemetry is written under **the same keys the HTTP stream already produces**, so
+every getter, every ROS publisher and every script is transport-agnostic. A misspelled
+`WB_TRANSPORT` raises rather than defaulting to HTTP — a typo that quietly ran over HTTP would
+produce a passing "MAVLink" test result.
+
+### Measured gap
+
+Against a live aircraft, MAVLink mode currently carries **10 of the 47** telemetry keys HTTP
+provides, and all 10 agree with HTTP exactly. Still HTTP-only: gimbal attitude, zoom/focal
+lengths, thermal and LRF state, detections, WebRTC/streaming state, the battery and time budgets,
+`distanceToHome`, `readyToTakeoff`/`takeoffBlockReason`, and the yaw/altitude reach latches.
+
+Two bugs were found by making this comparison rather than by reading code:
+
+1. **Heading convention.** MAVLink reports 0–360, DJI reports −180–180. Unconverted, a consumer
+   switching transports would see a 360° jump at north.
+2. **The camera's heartbeat clobbered the flight mode.** A WildBridge aircraft heartbeats from
+   *two* components — the autopilot, and the camera at `MAV_COMP_ID_CAMERA` with a meaningless
+   zero `custom_mode`. Believing whichever arrived last reported `UNKNOWN` for a drone sitting in
+   position hold. QGroundControl filters the same way, and for the same reason.
+
+---
+
+## Covering Swarm-Steward's whole command set
+
+The ROS controller drives WildBridge through 27 commands. Before this pass MAVLink covered 12,
+and the 15 missing included **all three aborts** — its stop path — which made `WB_TRANSPORT=mavlink`
+unusable for it. All 27 are now covered.
+
+The rule was: a standard `MAV_CMD` wherever one genuinely fits, and only then the user range.
+
+| HTTP endpoint | MAVLink form |
+|---|---|
+| `abortMission`, `abortAll`, `abort/DJIMission` | `DO_SET_MODE` → position hold |
+| `enableVirtualStick` | `DO_SET_MODE` → offboard |
+| `gotoAltitude` | `CONDITION_CHANGE_ALT` |
+| `stick` | `MANUAL_CONTROL` (a message, not a command) |
+| `navigateTrajectoryDJINative` | mission upload + `MISSION_START` |
+| `drop` | `DO_GRIPPER` (release) |
+| `setRTHAltitude`, `setSetting` | `PARAM_SET` |
+| `gimbal/rel_pitch`, `gimbal/rel_yaw`, `deactivateManualOverride` | `MAV_CMD_USER_1` + selector |
+| `lrf/measure`, `captureTemperature` | `MAV_CMD_USER_2` + selector |
+
+Three decisions are worth recording.
+
+**One abort, not three.** The HTTP surface has three aborts with different scopes. MAVLink
+expresses an abort as a mode change, which has one meaning, so all three arrive as position hold
+and the aircraft does the *union* of the three — stop the PID loops, neutralise the sticks, leave
+virtual stick, end any DJI wayline. Widening an abort is the only direction it is safe to be wrong
+in.
+
+**Two user commands, not eight.** The residue that has no portable equivalent is carried on
+`MAV_CMD_USER_1` (payload aiming) and `USER_2` (payload sensing), each with a selector in `param1`,
+rather than spreading across the user range. A ground station that does not know WildBridge simply
+never sends them.
+
+**Read commands return their reading.** `COMMAND_ACK.result_param2` exists for exactly this, so the
+rangefinder's distance (centimetres) and the thermal spot temperature (hundredths of a degree) come
+back in the ack instead of forcing a caller to poll telemetry and hope it is looking at the right
+sample. This also meant the ground station had to start *waiting* for acks rather than optimistically
+reporting acceptance — so every command now reports its true outcome.
+
+### Writable parameters
+
+`PARAM_SET` is now handled, against an **allowlist of one** (`WB_RTH_ALT`). Most of the published
+list is read-only by nature: PID gains belong to the control profile, and the PX4 compatibility
+parameters are constants that exist only to satisfy QGroundControl's setup checks. Writing those
+would either do nothing or quietly change flight behaviour from a settings dialog. The aircraft
+answers every write with a `PARAM_VALUE` carrying what the parameter *now* holds, which is how a
+refused write is detected — verified: a write to `WB_DIST_KP` comes back `DENIED` with the old value.
+
+**A caveat, found by testing.** `WB_RTH_ALT` reads `-1` on a real aircraft, because DJI's
+`KeyGoHomeHeight` listener only fires on change and nothing seeds it — `.get(default)` reads
+KeyManager's cache without triggering a fetch. This is pre-existing and affects the HTTP surface
+identically (`GET /config/settings` also reports `-1`). The ground station therefore reports such a
+write as `ACCEPTED (unverified: the aircraft does not report WB_RTH_ALT)` rather than either
+claiming success or rejecting a write that probably took.
+
+### Stopping a mission — a blocker found before the field
+
+A running plan could only be stopped by `MISSION_CLEAR_ALL`. Pressing **Land** or **RTL** in a
+ground station would land the aircraft, and the sequencer — which only watches the reach latch —
+would then issue the next leg and fly it away again. Land, RTL, reposition, yaw and abort now all
+supersede a running plan. The flight gate moved onto the activity in the same pass: a gate that
+only one of the two sinks consulted is a hole, not a gate.
+
+`MAV_CMD_DO_PAUSE_CONTINUE` is still refused. Land/RTL is the stop.
+
+### Fleets need one port per aircraft
+
+The MAVLink telemetry source filters on the aircraft's address, because several aircraft streaming
+to one UDP port would be folded into a single telemetry dictionary — which would look like one
+drone teleporting between positions rather than like an error. Filtering is not sufficient on its
+own: only one socket receives a given UDP port's packets, so **each aircraft must be configured
+with its own ground-station port** (`WB_MAVLINK_PORT` on the ground side, `wb_mav_0_port` on the
+aircraft).
