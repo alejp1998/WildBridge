@@ -42,32 +42,48 @@ def main():
     results = []
 
     # 1) Initial state: Pilot holds control.
-    results.append(expect("Pilot command (initial)",
-                          pilot.requestSetRTHAltitude(30), should_be_rejected=False))
+    results.append(
+        expect("Pilot command (initial)", pilot.requestSetRTHAltitude(30), should_be_rejected=False)
+    )
 
     # 2) Safety sends a command -> seizes persistent control.
-    results.append(expect("Safety command (takeover)",
-                          safety.requestSetRTHAltitude(40), should_be_rejected=False))
+    results.append(
+        expect(
+            "Safety command (takeover)", safety.requestSetRTHAltitude(40), should_be_rejected=False
+        )
+    )
 
     # 3) Pilot is now locked out.
-    results.append(expect("Pilot command (while Safety holds)",
-                          pilot.requestSetRTHAltitude(30), should_be_rejected=True))
+    results.append(
+        expect(
+            "Pilot command (while Safety holds)",
+            pilot.requestSetRTHAltitude(30),
+            should_be_rejected=True,
+        )
+    )
 
     # 4) Pilot CANNOT release (not the Safety Computer).
     pilot_release = pilot.requestSend("/releaseSafetyControl", "")
-    results.append(expect("Pilot tries to release",
-                          pilot_release, should_be_rejected=True))
+    results.append(expect("Pilot tries to release", pilot_release, should_be_rejected=True))
 
     # 5) Pilot still locked out after its failed release attempt.
-    results.append(expect("Pilot command (still locked)",
-                          pilot.requestSetRTHAltitude(30), should_be_rejected=True))
+    results.append(
+        expect(
+            "Pilot command (still locked)", pilot.requestSetRTHAltitude(30), should_be_rejected=True
+        )
+    )
 
     # 6) Safety releases control explicitly.
     print(f"[INFO] Safety release -> {safety.requestReleaseSafetyControl()!r}")
 
     # 7) Pilot regains control.
-    results.append(expect("Pilot command (after release)",
-                          pilot.requestSetRTHAltitude(30), should_be_rejected=False))
+    results.append(
+        expect(
+            "Pilot command (after release)",
+            pilot.requestSetRTHAltitude(30),
+            should_be_rejected=False,
+        )
+    )
 
     print("=" * 60)
     print(f"{sum(results)}/{len(results)} checks passed.")

@@ -45,7 +45,6 @@ def main():
         return 1
     print(f"Capture OK: {capture_info}")
 
-
     download_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "downloads",
@@ -71,7 +70,6 @@ def main():
         else:
             print(f"  {lens}: FAILED after {dt:.1f}s")
             failures.append(lens)
-
 
     if failures:
         print(f"Done with failures: {', '.join(failures)}")

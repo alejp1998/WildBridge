@@ -67,11 +67,18 @@ def _scan_for_new_drones(discover_all_drones, known_namespaces, next_index, verb
 
 def _periodic_rescan(context, discover_all_drones, known_namespaces, next_index):
     actions = _scan_for_new_drones(discover_all_drones, known_namespaces, next_index, verbose=False)
-    actions.append(TimerAction(
-        period=DISCOVERY_PERIOD,
-        actions=[OpaqueFunction(function=lambda ctx: _periodic_rescan(
-            ctx, discover_all_drones, known_namespaces, next_index))],
-    ))
+    actions.append(
+        TimerAction(
+            period=DISCOVERY_PERIOD,
+            actions=[
+                OpaqueFunction(
+                    function=lambda ctx: _periodic_rescan(
+                        ctx, discover_all_drones, known_namespaces, next_index
+                    )
+                )
+            ],
+        )
+    )
     return actions
 
 
@@ -91,11 +98,18 @@ def launch_setup(context, *args, **kwargs):
 
     # Keep discovering newly-joined drones after the initial launch instead
     # of only ever launching whatever this first scan happened to catch.
-    actions.append(TimerAction(
-        period=DISCOVERY_PERIOD,
-        actions=[OpaqueFunction(function=lambda ctx: _periodic_rescan(
-            ctx, discover_all_drones, known_namespaces, next_index))],
-    ))
+    actions.append(
+        TimerAction(
+            period=DISCOVERY_PERIOD,
+            actions=[
+                OpaqueFunction(
+                    function=lambda ctx: _periodic_rescan(
+                        ctx, discover_all_drones, known_namespaces, next_index
+                    )
+                )
+            ],
+        )
+    )
 
     return actions
 

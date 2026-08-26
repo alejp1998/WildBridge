@@ -539,7 +539,9 @@ class DJIInterface:
         match = re.search(r"seq=(\d+)", str(response))
         return int(match.group(1)) if match else None
 
-    def requestSendGoToWaypointHoldHeading(self, latitude, longitude, altitude, yaw, speed: float = 5.0):
+    def requestSendGoToWaypointHoldHeading(
+        self, latitude, longitude, altitude, yaw, speed: float = 5.0
+    ):
         """Navigate to a waypoint holding a fixed heading for the whole flight.
 
         CONTRACT: the nose stays on `yaw` from start to arrival — the drone crabs sideways or
@@ -555,10 +557,14 @@ class DJIInterface:
         Returns:
             int: the seq id parsed from "WAYPOINT_ACCEPTED seq=<n> ...", or None if rejected.
         """
-        response = self.requestSend(EP_GOTO_WP_HOLD_HEADING, f"{latitude},{longitude},{altitude},{yaw},{speed}")
+        response = self.requestSend(
+            EP_GOTO_WP_HOLD_HEADING, f"{latitude},{longitude},{altitude},{yaw},{speed}"
+        )
         return self._parseSeq(response)
 
-    def requestSendGoToWaypointNoseForward(self, latitude, longitude, altitude, yaw, speed: float = 20.0):
+    def requestSendGoToWaypointNoseForward(
+        self, latitude, longitude, altitude, yaw, speed: float = 20.0
+    ):
         """Navigate to a waypoint with PID control (nose-follows-path, final-heading).
 
         CONTRACT: during travel the drone faces its direction of motion — the bridge forces the
@@ -582,11 +588,12 @@ class DJIInterface:
                  isWaypointReached(seq) to avoid the stale-latch race.
             None: if the command was rejected or the response had no seq.
         """
-        response = self.requestSend(EP_GOTO_WP_NOSE_FORWARD, f"{latitude},{longitude},{altitude},{yaw},{speed}")
+        response = self.requestSend(
+            EP_GOTO_WP_NOSE_FORWARD, f"{latitude},{longitude},{altitude},{yaw},{speed}"
+        )
         return self._parseSeq(response)
 
     @staticmethod
-
     def requestSendGimbalRelPitch(self, rel_pitch=0):
         """Adjust gimbal pitch by a relative angle."""
         return self.requestSend(EP_GIMBAL_SET_REL_PITCH, f"0,{rel_pitch},0")
@@ -620,8 +627,10 @@ class DJIInterface:
         try:
             info = response.json()
         except ValueError:
-            print(f"Capture returned non-JSON: HTTP {response.status_code}, "
-                  f"body={response.text[:200]!r}")
+            print(
+                f"Capture returned non-JSON: HTTP {response.status_code}, "
+                f"body={response.text[:200]!r}"
+            )
             return False
         if info.get("error") or not info.get("thermal"):
             print(f"Capture failed: {info}")
@@ -655,8 +664,10 @@ class DJIInterface:
         try:
             info = response.json()
         except ValueError:
-            print(f"listMedia returned non-JSON: HTTP {response.status_code}, "
-                  f"body={response.text[:200]!r}")
+            print(
+                f"listMedia returned non-JSON: HTTP {response.status_code}, "
+                f"body={response.text[:200]!r}"
+            )
             return False
         return info.get("files", [])
 
@@ -689,8 +700,10 @@ class DJIInterface:
             return None
         content_type = response.headers.get("Content-Type", "")
         if response.status_code != 200 or not content_type.startswith("image/"):
-            print(f"{file_name}: download failed (HTTP {response.status_code}, "
-                  f"Content-Type={content_type!r}, body={response.text[:200]!r})")
+            print(
+                f"{file_name}: download failed (HTTP {response.status_code}, "
+                f"Content-Type={content_type!r}, body={response.text[:200]!r})"
+            )
             return None
         with open(save_path, "wb") as f:
             f.write(response.content)

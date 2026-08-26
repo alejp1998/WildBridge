@@ -62,6 +62,8 @@ def _coerce_setting_value(key, coerce, value):
                 return False
         raise ValueError(f"Invalid boolean value for {key}")
     return coerce(value)
+
+
 DISCOVERY_INTERVAL_MS = int(os.environ.get("DISCOVERY_INTERVAL_MS", "5000"))
 MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", "http://127.0.0.1:9997").rstrip("/")
 MEDIAMTX_WEBRTC_URL = os.environ.get("MEDIAMTX_WEBRTC_URL", "http://127.0.0.1:8889").rstrip("/")
@@ -341,18 +343,18 @@ def configure_mediamtx_path(drone_name, mode, source_url=None):
             f"{MEDIAMTX_API_URL}/v3/config/paths/patch/{drone_name}",
             data=body,
             method="PATCH",
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
         try:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 pass
         except urllib.error.HTTPError as e:
-            if e.code == 404: # Doesn't exist yet, try to add
+            if e.code == 404:  # Doesn't exist yet, try to add
                 req = urllib.request.Request(
                     f"{MEDIAMTX_API_URL}/v3/config/paths/add/{drone_name}",
                     data=body,
                     method="POST",
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json"},
                 )
                 with urllib.request.urlopen(req, timeout=2) as resp:
                     pass
@@ -576,7 +578,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_streaming_mode_post(self, path):
         parts = [part for part in path.split("/") if part]
-        if len(parts) != 5: # /api/drones/<name>/streaming/mode
+        if len(parts) != 5:  # /api/drones/<name>/streaming/mode
             self.send_error(404)
             return
         name = unquote(parts[2])
@@ -602,7 +604,7 @@ class Handler(SimpleHTTPRequestHandler):
                 f"http://{ip}:8080/send/streaming/mode",
                 data=mode.encode("utf-8"),
                 method="POST",
-                headers={"Content-Type": "text/plain"}
+                headers={"Content-Type": "text/plain"},
             )
             with urllib.request.urlopen(req, timeout=3) as resp:
                 reply = resp.read().decode("utf-8")

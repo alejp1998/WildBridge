@@ -77,7 +77,7 @@ class DJIInterfaceSafety(DJIInterface):
         return self.requestSend(EP_RELEASE_SAFETY_CONTROL, "")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
     import time
 
@@ -89,8 +89,16 @@ if __name__ == '__main__':
         if text == "":
             return True
         rejection_markers = (
-            "reject", "rejected", "denied", "forbidden", "unauthorized",
-            "not allowed", "not authorised", "401", "403", "safety"
+            "reject",
+            "rejected",
+            "denied",
+            "forbidden",
+            "unauthorized",
+            "not allowed",
+            "not authorised",
+            "401",
+            "403",
+            "safety",
         )
         return any(marker in text for marker in rejection_markers)
 

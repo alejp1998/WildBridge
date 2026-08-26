@@ -134,7 +134,9 @@ def _fetch_drone_ips():
     try:
         with urllib.request.urlopen(f"{WEBAPP_URL}/api/drones", timeout=3) as resp:
             state = json.loads(resp.read().decode("utf-8"))
-        return {drone["name"]: drone.get("ip") for drone in state.get("drones", []) if drone.get("ip")}
+        return {
+            drone["name"]: drone.get("ip") for drone in state.get("drones", []) if drone.get("ip")
+        }
     except Exception:
         return {}
 
@@ -168,7 +170,9 @@ class RosMonitor(Node):
             nodes = self.get_node_names_and_namespaces()
         except Exception:
             return
-        active = {ns.strip("/") for name, ns in nodes if name.startswith("dji_node") and ns.strip("/")}
+        active = {
+            ns.strip("/") for name, ns in nodes if name.startswith("dji_node") and ns.strip("/")
+        }
         for namespace in active - self.drone_stats.keys():
             self._attach_drone(namespace)
         for namespace in self.drone_stats.keys() - active:
@@ -180,13 +184,22 @@ class RosMonitor(Node):
         stats = {}
         subs = {}
         for topic, msg_type in TOPICS.items():
-            stats[topic] = {"count": 0, "last_value": None, "last_time": None, "type": msg_type.__name__}
+            stats[topic] = {
+                "count": 0,
+                "last_value": None,
+                "last_time": None,
+                "type": msg_type.__name__,
+            }
             subs[topic] = self.create_subscription(
                 msg_type, f"/{namespace}/{topic}", self._make_callback(namespace, topic), 10
             )
         self.drone_stats[namespace] = stats
         self.drone_subs[namespace] = subs
-        self.drone_phone[namespace] = {"reachable": False, "error": "not probed yet", "checked_at": 0.0}
+        self.drone_phone[namespace] = {
+            "reachable": False,
+            "error": "not probed yet",
+            "checked_at": 0.0,
+        }
 
     def _detach_drone(self, namespace):
         self.get_logger().info(f"Detaching drone namespace: {namespace}")
@@ -198,7 +211,8 @@ class RosMonitor(Node):
     def _refresh_phone_reachability(self, namespaces):
         now = time.time()
         due = [
-            ns for ns in namespaces
+            ns
+            for ns in namespaces
             if not self.drone_phone.get(ns, {}).get("reachable")
             and now - self.drone_phone.get(ns, {}).get("checked_at", 0.0) >= PHONE_RETRY_INTERVAL
         ]
@@ -207,7 +221,11 @@ class RosMonitor(Node):
         ip_by_name = _fetch_drone_ips()
         for namespace in due:
             reachable, error = _probe_phone(ip_by_name.get(namespace))
-            self.drone_phone[namespace] = {"reachable": reachable, "error": error, "checked_at": now}
+            self.drone_phone[namespace] = {
+                "reachable": reachable,
+                "error": error,
+                "checked_at": now,
+            }
 
     def _make_callback(self, namespace, topic):
         def callback(msg):
