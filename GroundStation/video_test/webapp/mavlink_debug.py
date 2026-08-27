@@ -32,11 +32,17 @@ NUMERIC_TOLERANCE = 1.0
 #: Each wire is a cache of its latest frame, updated at its own message rate, so a single read is
 #: skewed by however far the aircraft moved between the two wires' last updates. That skew is
 #: exactly how the gimbal rows read "differ" while the aircraft was moving -- both wires carried
-#: the same value, sampled a few milliseconds apart. A short burst lets both caches advance; a
-#: real wire disagreement survives every pair, while sampling skew does not (some pair lands on
-#: the same underlying value). A field therefore agrees when the two wires agreed on any pair.
-COMPARISON_BURST_PAIRS = 3
-COMPARISON_BURST_PAUSE_S = 0.05
+#: the same value, sampled a few milliseconds apart. A burst lets both caches advance; a real
+#: wire disagreement survives every pair, while sampling skew does not (some pair lands on the
+#: same underlying value). A field therefore agrees when the two wires agreed on any pair.
+#:
+#: The window must span several refresh cycles of BOTH wires, or every pair returns the same
+#: stale values and the burst degrades into a single skewed read (measured on the aircraft:
+#: MAVLink gimbal GIMBAL_DEVICE_ATTITUDE_STATUS refreshes every 200ms, HTTP telemetry every
+#: 500ms). 8 pairs at 250ms spans ~1.75s -- ~3 HTTP advances and ~8 MAVLink advances -- so
+#: enough cross pairs exist to land on aligned values even while the aircraft is moving.
+COMPARISON_BURST_PAIRS = 8
+COMPARISON_BURST_PAUSE_S = 0.25
 
 
 class _Comparison:
