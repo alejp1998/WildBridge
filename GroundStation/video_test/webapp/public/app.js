@@ -1357,7 +1357,17 @@ async function loadMavlinkCoverage() {
 // They previously each showed a tile labelled "HTTP only" counting different things — endpoints
 // on one, telemetry fields on the other — so the two tabs appeared to contradict each other.
 // Every number here carries its unit, and both tabs render the same strip.
-const coverage = { commands: 0, commandsTotal: 0, fields: 0, fieldsTotal: 0, differing: null };
+const coverage = {
+  commands: 0,
+  commandsTotal: 0,
+  // shared / httpTotal, not mavlinkTotal / httpTotal. Those are different populations: MAVLink
+  // reports fields HTTP has no equivalent for, so a ratio between the two totals implies a
+  // containment that does not hold — 43 of 47 read as "four missing" when ten were.
+  shared: 0,
+  httpTotal: 0,
+  mavlinkOnly: 0,
+  differing: null,
+};
 
 function renderCoverageStrips() {
   document.querySelectorAll('.coverageStrip').forEach((strip) => {
@@ -1366,8 +1376,14 @@ function renderCoverageStrips() {
     if (coverage.commandsTotal) {
       parts.push(coverageFact(`${coverage.commands}/${coverage.commandsTotal}`, 'commands on MAVLink'));
     }
-    if (coverage.fieldsTotal) {
-      parts.push(coverageFact(`${coverage.fields}/${coverage.fieldsTotal}`, 'telemetry fields on MAVLink'));
+    if (coverage.httpTotal) {
+      parts.push(coverageFact(
+        `${coverage.shared}/${coverage.httpTotal}`,
+        'HTTP telemetry fields also on MAVLink',
+      ));
+    }
+    if (coverage.mavlinkOnly) {
+      parts.push(coverageFact(`+${coverage.mavlinkOnly}`, 'fields only MAVLink reports'));
     }
     if (coverage.differing !== null) {
       parts.push(coverageFact(
@@ -2047,9 +2063,19 @@ let mavlinkTimer = null;
 const MAVLINK_STATUS_LABELS = {
   agree: 'matches HTTP',
   differ: 'differs from HTTP',
-  httpOnly: 'not on MAVLink',
+  // Two different things were both called "not on MAVLink": a field the protocol has no form
+  // for, and one it carries perfectly well that simply has not arrived — home position before a
+  // home point exists, flight time before the battery reports one. Calling both an absence made
+  // the interface look less complete than it is.
+  notYet: 'not reported yet',
+  httpOnly: 'no MAVLink form',
   mavlinkOnly: 'MAVLink only',
 };
+
+function mavlinkRowState(row) {
+  if (row.status !== 'httpOnly') return row.status;
+  return mavlinkStreamedFields.has(row.key) ? 'notYet' : 'httpOnly';
+}
 
 function mavlinkDroneNames() {
   // latestState, not state: `state` is a parameter of render(), so reading it here found nothing
@@ -2118,8 +2144,13 @@ function renderMavlinkComparison(payload) {
   const compare = mavlinkDiffOnly.checked;
   const reported = rows.filter((row) => row.status !== 'httpOnly');
 
-  coverage.fields = payload.mavlinkKeys;
-  coverage.fieldsTotal = payload.httpKeys;
+  // Capability, not what happens to have arrived: a field MAVLink carries is carried whether or
+  // not the aircraft has reported one yet, and a ratio that moved as the drone warmed up would
+  // be describing the weather rather than the interface.
+  coverage.shared = rows.filter((row) => mavlinkRowState(row) !== 'httpOnly').length
+    - rows.filter((row) => row.status === 'mavlinkOnly').length;
+  coverage.httpTotal = payload.httpKeys;
+  coverage.mavlinkOnly = rows.filter((row) => row.status === 'mavlinkOnly').length;
   coverage.differing = rows.filter((row) => row.status === 'differ').length;
   renderCoverageStrips();
 
@@ -2137,8 +2168,9 @@ function renderMavlinkComparison(payload) {
     : '<tr><th>Field</th><th>Value</th></tr>';
   const body = document.createElement('tbody');
   shown.forEach((row) => {
+    const state = mavlinkRowState(row);
     const tr = document.createElement('tr');
-    tr.className = `mavlinkRow ${row.status}`;
+    tr.className = `mavlinkRow ${state}`;
     const key = document.createElement('td');
     key.className = 'mavlinkKey';
     key.textContent = row.key;
@@ -2150,8 +2182,8 @@ function renderMavlinkComparison(payload) {
       http.textContent = row.http;
       const status = document.createElement('td');
       status.className = 'mavlinkVerdict';
-      status.textContent = MAVLINK_STATUS_LABELS[row.status] || row.status;
-      status.dataset.state = row.status;
+      status.textContent = MAVLINK_STATUS_LABELS[state] || state;
+      status.dataset.state = state;
       tr.append(http, status);
     }
     body.append(tr);

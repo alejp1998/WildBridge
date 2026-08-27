@@ -1759,3 +1759,8 @@ pre {
 /* A read whose answer is streamed is covered, just not by a command — a third state, because
    calling it "no" said MAVLink could not do something it does continuously. */
 .publishCoverage[data-state="streamed"] { color: var(--info); font-weight: 500; }
+
+/* "Not reported yet" is a state of the aircraft, not a gap in the protocol; it should not read
+   like one. */
+.mavlinkVerdict[data-state="notYet"] { color: var(--dim); font-style: italic; }
+.mavlinkRow.notYet td { background: transparent; }
