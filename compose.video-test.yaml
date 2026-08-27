@@ -44,6 +44,18 @@ services:
       - TELEMETRY_PORT=${TELEMETRY_PORT:-8081}
       - LOG_DIR=/logs
       - PYTHONUNBUFFERED=1
+      # UDP port the MAVLink panel listens on. Deliberately not 14550 or 14551: a datagram goes
+      # to exactly one socket, so sharing a port with QGroundControl or the ROS drone nodes would
+      # make them compete and each see part of the stream.
+      - WB_WEBAPP_MAVLINK_PORT=${WB_WEBAPP_MAVLINK_PORT:-14552}
+      - WB_MAVLINK_PEER_PORT=${WB_MAVLINK_PEER_PORT:-14550}
+      # This image is ROS-based and runs on the host network, but the dashboard starts no ROS
+      # node. These keep it that way by construction: an isolated domain and discovery confined
+      # to loopback, so nothing here can ever join the fleet's DDS graph (domain 0, discovery
+      # across the subnet) and show up as a phantom participant.
+      - ROS_DOMAIN_ID=${VIDEO_GRID_ROS_DOMAIN_ID:-89}
+      - ROS_LOCALHOST_ONLY=1
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
     volumes:
       - ./GroundStation/video_test/logs:/logs
 
