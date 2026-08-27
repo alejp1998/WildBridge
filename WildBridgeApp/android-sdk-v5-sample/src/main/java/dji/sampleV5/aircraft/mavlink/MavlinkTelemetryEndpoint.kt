@@ -828,6 +828,14 @@ internal class MavlinkTelemetryEndpoint(
 
             // Offboard is what DJI calls virtual stick: the mode that accepts MANUAL_CONTROL.
             MavlinkFlightMode.OFFBOARD -> motion.enableOffboard()
+
+            // Mission mode is the sequencer, and DJI has no standing "mission" state to enter:
+            // the plan only exists while it flies. QGC's PX4 plugin sends SET_MODE(AUTO.MISSION)
+            // before MISSION_START when its Start button is pressed, so entering the mode has to
+            // begin the stored plan or the vehicle never leaves its pre-mission mode and QGC
+            // reports the mission cannot start. The sequencer is idempotent, so the MISSION_START
+            // that follows does not restart it.
+            MavlinkFlightMode.MISSION -> startStoredMission(0)
             else -> {
                 Log.d(TAG, "Refusing mode request ${requested.displayName}: no DJI equivalent")
                 CommandResult(MavlinkCommandOutcome.UNSUPPORTED)

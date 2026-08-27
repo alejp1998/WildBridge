@@ -73,6 +73,21 @@ internal data class MavlinkSnapshot(
     val manualOverrideActive: Boolean = false,
 
     /**
+     * An ARM command was accepted. DJI has no arming state, so without this the heartbeat never
+     * sets SAFETY_ARMED and a ground station's arm wait times out while the aircraft is already
+     * taking off. It is cleared by DISARM; real motor activity reports armed regardless.
+     */
+    val armedCommanded: Boolean = false,
+
+    /**
+     * The onboard mission sequencer is flying a plan. It moves the aircraft through virtual
+     * stick, which DJI reports as VIRTUAL_STICK — read as OFFBOARD — so the reported mode has to
+     * be told about the sequencer directly or a ground station that started a mission never sees
+     * the vehicle enter mission mode.
+     */
+    val missionActive: Boolean = false,
+
+    /**
      * Camera is recording. Reported as CAMERA_CAPTURE_STATUS so a ground station's record button
      * reflects what the aircraft is actually doing, including when recording was started from the
      * WildBridge UI or the RC rather than over MAVLink.

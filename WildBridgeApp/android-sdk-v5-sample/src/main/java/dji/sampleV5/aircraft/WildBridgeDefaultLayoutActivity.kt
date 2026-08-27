@@ -139,6 +139,7 @@ import dji.sdk.keyvalue.value.flightcontroller.FlightMode
 import dji.sdk.keyvalue.value.flightcontroller.LowBatteryRTHInfo
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotationMode
+import dji.sdk.keyvalue.value.gimbal.GimbalMode
 import dji.sdk.keyvalue.key.RemoteControllerKey
 import dji.sdk.keyvalue.value.product.ProductType
 import dji.v5.manager.datacenter.MediaDataCenter
@@ -421,6 +422,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * pattern of switching MAVLink instances on by parameter rather than by build.
      */
     private var mavlinkEndpoint: MavlinkTelemetryEndpoint? = null
+    private var mavlinkFtpServer: MavlinkFtpServer? = null
 
     /**
      * Single worker for shutter operations. One thread, so two rapid capture commands queue rather
@@ -597,6 +599,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private val satelliteCountKey: DJIKey<Int> = FlightControllerKey.KeyGPSSatelliteCount.create()
     private var gimbalAttitudeKey: DJIKey<Attitude> = GimbalKey.KeyGimbalAttitude.create()
     private var gimbalJointAttitudeKey: DJIKey<Attitude> = GimbalKey.KeyGimbalJointAttitude.create()
+    private var gimbalModeKey: DJIKey<GimbalMode> = GimbalKey.KeyGimbalMode.create()
     private val compassHeadKey: DJIKey<Double> = FlightControllerKey.KeyCompassHeading.create()
     private val altitudeKey: DJIKey<Double> = FlightControllerKey.KeyAltitude.create()
     private val homeLocationKey: DJIKey<LocationCoordinate2D> = FlightControllerKey.KeyHomeLocation.create()
@@ -1354,6 +1357,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         gimbalKey = GimbalKey.KeyRotateByAngle.create(ComponentIndexType.PORT_3)
         gimbalAttitudeKey = GimbalKey.KeyGimbalAttitude.create(ComponentIndexType.PORT_3)
         gimbalJointAttitudeKey = GimbalKey.KeyGimbalJointAttitude.create(ComponentIndexType.PORT_3)
+        gimbalModeKey = GimbalKey.KeyGimbalMode.create(ComponentIndexType.PORT_3)
         Log.i(TAG, "M400: rebound gimbal keys to PORT_3 (10s after first PORT_3 video frame)")
 
         // M400 is single-operator and this RC already owns gimbal authority, but the RC defaults to
@@ -3862,6 +3866,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             mavlinkEndpoint = null
             captureExecutor.shutdownNow()
             ftpExecutor.shutdownNow()
+            mavlinkFtpServer?.shutdown()
+            mavlinkFtpServer = null
             // Unregister the settings backup listener and stop its writer: the SharedPreferences
             // singleton otherwise keeps the listener (and the activity through it) alive, and the
             // executor would keep writing after destroy.
@@ -4003,6 +4009,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     @Volatile private var roiTarget: LocationCoordinate3D? = null
     private var roiTrackingRunnable: Runnable? = null
 
+    /** The gimbal mode before ROI tracking freed the yaw axis, restored when tracking stops. */
+    @Volatile private var roiPreviousGimbalMode: GimbalMode? = null
+
+    /**
+     * Set when a ground station's ARM command was accepted. DJI has no arming state — motors
+     * spin only when a takeoff actually runs — so the heartbeat otherwise never reports armed and
+     * QGroundControl's arm wait times out with "vehicle rejected arming" while the aircraft is
+     * already taking off. Cleared by a DISARM, and the armed flag also stands on real motor
+     * activity regardless of this.
+     */
+    @Volatile private var armedCommanded = false
+
     /**
      * Keep the camera on one position on the ground until told to stop.
      *
@@ -4021,6 +4039,25 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private fun startRoiTracking(latitudeDeg: Double, longitudeDeg: Double, altitudeM: Double) {
         roiTarget = LocationCoordinate3D(latitudeDeg, longitudeDeg, altitudeM)
         if (roiTrackingRunnable != null) return
+        // The camera owns the yaw axis while it tracks a point. In yaw-follow mode the aircraft's
+        // turns yank the lens toward the flight direction, so the follow mode and the ROI loop
+        // fight at the tracking rate — a gimbal that swings between looking ahead and looking at
+        // the target. Free yaw is what the loop expects, so the mode is switched before the loop
+        // starts and restored when it stops.
+        roiPreviousGimbalMode = KeyManager.getInstance().getValue(gimbalModeKey) ?: GimbalMode.YAW_FOLLOW
+        KeyManager.getInstance().setValue(
+            gimbalModeKey,
+            GimbalMode.FREE,
+            object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    Log.i(TAG, "Gimbal yaw freed for ROI tracking")
+                }
+
+                override fun onFailure(error: IDJIError) {
+                    Log.w(TAG, "Could not free gimbal yaw for ROI: ${error.description()}")
+                }
+            }
+        )
         val runnable = object : Runnable {
             override fun run() {
                 val target = roiTarget ?: return
@@ -4037,6 +4074,24 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         roiTarget = null
         roiTrackingRunnable?.let { mainHandler.removeCallbacks(it) }
         roiTrackingRunnable = null
+        // Give the yaw axis back to the aircraft: with no point to hold, the gimbal follows the
+        // nose again as it did before the ROI was set.
+        roiPreviousGimbalMode?.let { previous ->
+            roiPreviousGimbalMode = null
+            KeyManager.getInstance().setValue(
+                gimbalModeKey,
+                previous,
+                object : CommonCallbacks.CompletionCallback {
+                    override fun onSuccess() {
+                        Log.i(TAG, "Gimbal yaw follow restored")
+                    }
+
+                    override fun onFailure(error: IDJIError) {
+                        Log.w(TAG, "Could not restore gimbal yaw follow: ${error.description()}")
+                    }
+                }
+            )
+        }
         Log.i(TAG, "ROI tracking cleared")
     }
 
@@ -4347,6 +4402,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             flightMode = getFlightMode().name,
             motorsRunning = isFlyingKey.get(false),
             manualOverrideActive = DroneController.isManualOverrideActive,
+            armedCommanded = armedCommanded,
+            // The sequencer flies through virtual stick, so the mode DJI reports (OFFBOARD) would
+            // hide a mission that is actually under way; the heartbeat prefers MISSION instead.
+            missionActive = mavlinkMissionSink.isRunning,
             isRecording = isRecordingKey.get() ?: false,
 
             gimbalRollDeg = gimbalAttitude.roll,
@@ -5023,7 +5082,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 )
             }
             supersedeMission("orbit")
-            val seq = DroneController.orbit(
+            DroneController.orbit(
                 centreLatitude = latitudeDeg,
                 centreLongitude = longitudeDeg,
                 // As everywhere else on this surface, an unset altitude is the one being held.
@@ -5035,10 +5094,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 arcDegrees = arcDegrees,
                 faceCentre = faceCentre
             )
-            return CommandResult(
-                MavlinkCommandOutcome.ACCEPTED,
-                pending = PendingCommand(PendingKind.ORBIT, seq)
-            )
+            // Acknowledged immediately rather than held pending until the lap completes: a full
+            // orbit takes minutes, and QGroundControl's orbit tool re-issues DO_ORBIT as its
+            // parameters change — a pending ack makes it refuse with "Waiting on previous
+            // response to same command" for the whole lap. The orbit still finishes on its own;
+            // completion is reported on the telemetry stream, not by blocking the next command.
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun abortToPositionHold(): CommandResult {
@@ -5161,13 +5222,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         override fun arm(): CommandResult {
             // DJI has no arming: motors spin up when the takeoff command actually runs. QGC's
             // takeoff sequence arms right after NAV_TAKEOFF is accepted, so this is a gated no-op
-            // that keeps the sequence moving rather than an honest refusal that aborts it.
+            // that keeps the sequence moving rather than an honest refusal that aborts it. The
+            // heartbeat reports armed from [armedCommanded] so QGC's arm wait sees a result.
             mavlinkFlightGate()?.let { return it }
+            armedCommanded = true
+            Log.i(TAG, "Vehicle armed (commanded; DJI has no arming state)")
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun disarm(): CommandResult {
             mavlinkFlightGate()?.let { return it }
+            armedCommanded = false
+            Log.i(TAG, "Vehicle disarmed (commanded)")
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
     }
@@ -5246,6 +5312,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             if (DroneController.shouldRejectAutonomousCommand("mission")) {
                 return CommandResult(MavlinkCommandOutcome.DENIED)
             }
+            // Idempotent: QGC enters mission mode with SET_MODE(MISSION) and then sends
+            // MISSION_START, so a running plan must not be stopped and restarted by the second
+            // command of the pair.
+            if (running) return CommandResult(MavlinkCommandOutcome.ACCEPTED)
             stopMission()
             return when (executor) {
                 MissionExecutor.DJI_NATIVE -> startNative(items)
@@ -5491,6 +5561,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             }
             endpoint.start()
             mavlinkEndpoint = endpoint
+            mavlinkFtpServer = ftpServer
         }.onFailure { error ->
             Log.e(TAG, "Error starting MAVLink endpoint: ${error.message}", error)
         }

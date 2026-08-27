@@ -21,14 +21,31 @@ internal object MavlinkMessages {
     private const val DEG_TO_CDEG = 100.0
     private const val DEG_TO_RAD = Math.PI / 180.0
 
+    /**
+     * The mode to report for a snapshot: MISSION while the onboard sequencer is flying, else the
+     * mode DJI reports. The sequencer drives the aircraft through virtual stick, which DJI calls
+     * VIRTUAL_STICK — a ground station reading that as OFFBOARD would never see the vehicle in
+     * mission mode even though a mission is flying.
+     */
+    private fun modeOf(snapshot: MavlinkSnapshot): MavlinkFlightMode =
+        if (snapshot.missionActive) {
+            MavlinkFlightMode.MISSION
+        } else {
+            MavlinkFlightMode.fromDjiMode(snapshot.flightMode, snapshot.manualOverrideActive)
+        }
+
     /** custom_mode(u32), type(u8), autopilot(u8), base_mode(u8), system_status(u8), mavlink_version(u8) */
     fun heartbeat(snapshot: MavlinkSnapshot): ByteArray {
-        val mode = MavlinkFlightMode.fromDjiMode(snapshot.flightMode, snapshot.manualOverrideActive)
+        val mode = modeOf(snapshot)
 
         // Only flags backed by something real. GUIDED is reported when an autonomous mode is
         // actually flying the aircraft; MANUAL_INPUT when the pilot has the sticks.
         var baseMode = Mav.MODE_FLAG_CUSTOM_MODE_ENABLED
-        if (snapshot.motorsRunning) baseMode = baseMode or Mav.MODE_FLAG_SAFETY_ARMED
+        // Armed stands on real motor activity, or on an accepted ARM command — DJI has no
+        // arming state, so without the commanded arm a ground station's arm wait times out.
+        if (snapshot.motorsRunning || snapshot.armedCommanded) {
+            baseMode = baseMode or Mav.MODE_FLAG_SAFETY_ARMED
+        }
         if (mode.guided) baseMode = baseMode or Mav.MODE_FLAG_GUIDED_ENABLED
         if (mode.manualInput) baseMode = baseMode or Mav.MODE_FLAG_MANUAL_INPUT_ENABLED
         if (snapshot.satelliteCount > GPS_STABILIZED_SATELLITES) {
@@ -53,7 +70,7 @@ internal object MavlinkMessages {
 
     /** vtol_state(u8), landed_state(u8) */
     fun extendedSysState(snapshot: MavlinkSnapshot): ByteArray {
-        val mode = MavlinkFlightMode.fromDjiMode(snapshot.flightMode, snapshot.manualOverrideActive)
+        val mode = modeOf(snapshot)
         val landedState = when {
             !snapshot.motorsRunning -> Mav.LANDED_STATE_ON_GROUND
             mode == MavlinkFlightMode.LAND -> Mav.LANDED_STATE_LANDING

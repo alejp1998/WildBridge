@@ -5,6 +5,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -43,6 +44,22 @@ internal class MavlinkFtpServer(
      * download of the same bytes; the second open waits on the first one's result.
      */
     private val inflight = ConcurrentHashMap<String, CompletableFuture<ByteArray?>>()
+
+    /**
+     * The thread that actually pulls bytes off the camera. Deliberately separate from [executor]:
+     * an open blocks waiting on its download, so if the download ran on the same pool the open's
+     * thread would be unavailable to start it — two concurrent opens would exhaust the pool and
+     * deadlock. A single downloader serialises the camera (one fetch at a time is also the
+     * politest way to treat a slow SD-card interface).
+     */
+    private val downloadExecutor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "mavlink-ftp-download").apply { isDaemon = true }
+    }
+
+    /** Stop the download thread. The request [executor] is owned by the caller. */
+    fun shutdown() {
+        downloadExecutor.shutdownNow()
+    }
 
     /** Handle one request; [reply] may be invoked from a worker after a blocking media call. */
     fun handle(request: MavlinkFtp.Request, reply: (ByteArray) -> Unit) {
@@ -89,7 +106,7 @@ internal class MavlinkFtpServer(
     private fun downloadOnce(name: String): ByteArray? {
         val future = inflight.computeIfAbsent(name) {
             CompletableFuture<ByteArray?>().also { created ->
-                executor.execute { created.complete(files.readFileBytes(name)) }
+                downloadExecutor.execute { created.complete(files.readFileBytes(name)) }
             }
         }
         val bytes = try {
