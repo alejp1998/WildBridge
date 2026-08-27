@@ -151,6 +151,17 @@ object DroneController {
     private fun waypointPidOutputLimit(): Double = DroneControlProfiles.activeProfile().maxHorizontalSpeedMps
     private fun maxHorizontalAccelMps2(): Double = DroneControlProfiles.activeProfile().maxHorizontalAccelMps2
 
+    /** Metres per second of radius correction per metre of radius error, while orbiting. */
+    private const val ORBIT_RADIAL_GAIN = 0.5
+
+    /**
+     * Cap on the radius correction, so joining an orbit from outside it is a curve.
+     *
+     * Without a cap the correction is proportional to how far away the aircraft is, and an orbit
+     * commanded from a few hundred metres away would begin with a full-speed run at the centre.
+     */
+    private const val ORBIT_MAX_RADIAL_MPS = 3.0
+
     // Listener interface so the UI can react to automatic activation
     interface ManualOverrideListener {
         fun onManualOverrideActivated()
@@ -276,6 +287,9 @@ object DroneController {
     // "waypointReached" refers to the target it just commanded or a stale latched value from
     // the previous one. Incremented from the HTTP server thread, read from the telemetry thread.
     private val _waypointSeq = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var _isOrbitComplete = false
+    private val _orbitSeq = java.util.concurrent.atomic.AtomicLong(0)
+
     @Volatile private var _isYawReached = false
     // Same role as _waypointSeq, for gotoYaw — echoed in telemetry as "yawSeq".
     private val _yawSeq = java.util.concurrent.atomic.AtomicLong(0)
@@ -1406,6 +1420,157 @@ object DroneController {
         controlLoop.post(runnable)
         return seq
     }
+
+    /**
+     * CONTRACT: fly a circle around a fixed point, at a fixed radius and altitude.
+     *
+     * Two velocities, added: around the circle at [tangentialSpeedMps], and in or out to hold the
+     * radius. The radial term is what lets the orbit be commanded from anywhere — the aircraft
+     * curves onto the circle rather than flying to a point on it first — and it is capped, so
+     * joining from far outside is a sweep and not a dash at the centre.
+     *
+     * The arc travelled is accumulated tick by tick rather than compared against the starting
+     * bearing, because the aircraft passes its start angle once per lap: an absolute comparison
+     * cannot tell a finished lap from a fresh one, and would end a two-lap orbit at the first
+     * crossing. [arcDegrees] of zero means orbit until something else takes over, which is what a
+     * ground station means by an orbit with no limit.
+     *
+     * @param clockwise seen from above. MAVLink carries this as the sign of the radius.
+     * @param faceCentre keep the nose (and therefore a fixed camera) pointed at the centre. False
+     *   holds the heading the aircraft started with.
+     * @return the monotonic sequence id for this request, so an arrival can be told from a stale
+     *   latch belonging to the orbit before it.
+     */
+    @Suppress("LongParameterList")
+    fun orbit(
+        centreLatitude: Double,
+        centreLongitude: Double,
+        targetAltitude: Double,
+        radiusMeters: Double,
+        tangentialSpeedMps: Double,
+        clockwise: Boolean,
+        arcDegrees: Double,
+        faceCentre: Boolean
+    ): Long {
+        stopCurrentMission()
+        val loopId = startNewControlLoopSession()
+        val seq = _orbitSeq.incrementAndGet()
+        _isOrbitComplete = false
+
+        virtualStickVM?.enableVirtualStickAdvancedMode()
+        // The VM directly rather than enableVirtualStick(), which would cancel the session just
+        // started — the same reason the waypoint controllers do it this way.
+        virtualStickVM?.enableVirtualStick(object : CommonCallbacks.CompletionCallback {
+            override fun onSuccess() { /* no-op */ }
+            override fun onFailure(error: IDJIError) { /* "already enabled" is not an error */ }
+        })
+        virtualStickVM?.enableVirtualStickAdvancedMode()
+
+        val controlLoop = Handler(Looper.getMainLooper())
+        val updateInterval = 100L
+        val maxYawRate = maxYawRateDegS()
+        val yawPID = PID(yawPidKp(), 0.0, 0.0, updateInterval / 1000.0, -maxYawRate to maxYawRate)
+        // Captured once. Read every tick it would chase its own compass noise, and an orbit that
+        // is not facing the centre is meant to hold the heading it began with.
+        val initialHeading = getHeading()
+
+        var lastCommandedSpeed = 0.0
+        var lastTickMs = 0L
+        var travelledDeg = 0.0
+        var lastBearingDeg = Double.NaN
+
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!shouldControlLoopContinue(loopId)) {
+                    setStick(0F, 0F, 0F, 0F)
+                    return
+                }
+
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val dtSec = if (lastTickMs == 0L) updateInterval / 1000.0
+                else ((nowMs - lastTickMs) / 1000.0).coerceIn(0.02, 0.5)
+                lastTickMs = nowMs
+
+                val position = getLocation3D()
+                val heading = getHeading()
+
+                // Offset from the centre in metres. Flat-earth is right to well under a metre at
+                // any radius an orbit is flown at, and keeps the geometry readable.
+                val metresPerDegreeLat = 111320.0
+                val metresPerDegreeLon = 111320.0 * cos(Math.toRadians(position.latitude))
+                val northM = (position.latitude - centreLatitude) * metresPerDegreeLat
+                val eastM = (position.longitude - centreLongitude) * metresPerDegreeLon
+
+                val bearingFromCentre = OrbitControl.bearingFromCentreDeg(northM, eastM)
+                if (!lastBearingDeg.isNaN()) {
+                    travelledDeg += OrbitControl.angleStepDeg(lastBearingDeg, bearingFromCentre)
+                }
+                lastBearingDeg = bearingFromCentre
+
+                if (OrbitControl.isComplete(travelledDeg, arcDegrees)) {
+                    setStick(0F, 0F, 0F, 0F)
+                    _isOrbitComplete = true
+                    controlLoopEnabled = false
+                    disableVirtualStick()
+                    return
+                }
+
+                val velocity = OrbitControl.velocity(
+                    northM = northM,
+                    eastM = eastM,
+                    radiusM = radiusMeters,
+                    tangentialMps = tangentialSpeedMps,
+                    clockwise = clockwise,
+                    radialGain = ORBIT_RADIAL_GAIN,
+                    maxRadialMps = ORBIT_MAX_RADIAL_MPS
+                )
+                // Slew-limited like the waypoint controllers, so the first tick of an orbit
+                // commanded from a hover is a push rather than a step to full speed.
+                val speed = velocity.speedMps
+                    .coerceAtMost(lastCommandedSpeed + maxHorizontalAccelMps2() * dtSec)
+                    .coerceAtLeast(0.0)
+                lastCommandedSpeed = speed
+
+                // Negating the offset turns "bearing from the centre out to us" into "bearing
+                // from us in to the centre", which is where the nose goes.
+                val desiredHeading = if (faceCentre) {
+                    OrbitControl.bearingFromCentreDeg(-northM, -eastM)
+                } else {
+                    initialHeading
+                }
+                val angularVelocity = yawPID.update(
+                    normalizeAngle(desiredHeading - heading), dtSec
+                )
+
+                val body = WaypointControl.bodyVelocity(speed, velocity.directionDeg, heading)
+
+                // DJI SDK V5 quirk: in BODY frame the SDK's "pitch" field controls lateral
+                // movement and "roll" controls forward/backward, the inverse of what the names
+                // suggest. Confirmed empirically, and shared with both waypoint controllers.
+                val flightControlParam = VirtualStickFlightControlParam().apply {
+                    this.pitch = body.lateralSpeed
+                    this.roll = body.forwardSpeed
+                    this.yaw = angularVelocity
+                    this.verticalThrottle = targetAltitude
+                    this.verticalControlMode = VerticalControlMode.POSITION
+                    this.rollPitchControlMode = RollPitchControlMode.VELOCITY
+                    this.yawControlMode = YawControlMode.ANGULAR_VELOCITY
+                    this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
+                }
+                virtualStickVM?.sendVirtualStickAdvancedParam(flightControlParam)
+                controlLoop.postDelayed(this, updateInterval)
+            }
+        }
+
+        activeControlLoopHandler = controlLoop
+        activeControlLoopRunnable = runnable
+        controlLoop.post(runnable)
+        return seq
+    }
+
+    fun getOrbitSeq(): Long = _orbitSeq.get()
+
+    fun isOrbitComplete(): Boolean = _isOrbitComplete
 
     // === DJI Native Wayline (KMZ) flow ===
     // ---- DJI native KMZ wayline missions -------------------------------------

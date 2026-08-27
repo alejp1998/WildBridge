@@ -71,6 +71,7 @@ import dji.sampleV5.aircraft.edge.EdgeDetectionController
 import dji.sampleV5.aircraft.edge.EdgeDetectionController.EdgeDetectionMetrics
 import dji.sampleV5.aircraft.edge.EdgeDetectionConfig
 import dji.sampleV5.aircraft.controller.Payload
+import dji.sampleV5.aircraft.controller.RoiControl
 import dji.v5.ux.detection.DetectedTarget
 import dji.v5.ux.detection.DetectionOverlayView
 import dji.sampleV5.aircraft.logger.WildBridgeFlightLogger
@@ -82,6 +83,7 @@ import dji.sampleV5.aircraft.mavlink.MavlinkEndpointConfig
 import dji.sampleV5.aircraft.mavlink.MavlinkSnapshot
 import dji.sampleV5.aircraft.mavlink.CommandResult
 import dji.sampleV5.aircraft.mavlink.GimbalRotation
+import dji.sampleV5.aircraft.mavlink.Mav
 import dji.sampleV5.aircraft.mavlink.GimbalRotationMode
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandOutcome
 import dji.sampleV5.aircraft.mavlink.MavlinkCommandSink
@@ -235,6 +237,29 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
          * made, since no operator repositions an aircraft to within a centimetre of the equator.
          */
         private const val REPOSITION_COORD_EPSILON = 1e-7
+
+        /**
+         * How often the gimbal is re-aimed at a tracked point.
+         *
+         * Five times a second: fast enough that the picture follows rather than catches up, and
+         * slow enough that each relative rotation has finished before the next is asked for.
+         */
+        private const val ROI_TRACK_INTERVAL_MS = 200L
+
+        /** Below this the gimbal is left alone, so measurement noise does not make it hunt. */
+        private const val ROI_DEADBAND_DEG = 0.5
+
+        /** Largest single re-aim, so a target set behind the aircraft is a pan and not a whip. */
+        private const val ROI_MAX_STEP_DEG = 15.0
+
+        /**
+         * Smallest orbit worth flying.
+         *
+         * A radius near zero is a rotation in place wearing an orbit's clothes, and the radial
+         * correction would spend the whole time chasing the aircraft's own position noise across
+         * a circle smaller than the error in measuring it.
+         */
+        private const val MIN_ORBIT_RADIUS_M = 5.0
         private const val MISSION_POLL_MS = 200L
 
         /** The one parameter a ground station may write. See applyMavlinkParameter. */
@@ -3501,6 +3526,37 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         preferSdCardStorage(KeyManager.getInstance().getValue(cameraStorageInfosKey))
     }
 
+    /**
+     * Switch the camera between stills and video, from a plan's MAV_CMD_SET_CAMERA_MODE.
+     *
+     * MAV_CAMERA_MODE's survey mode is stills flown on a grid, which is a property of the flight
+     * rather than of the camera, so DJI has nothing separate to put it in and it maps to stills.
+     */
+    private fun setCameraMode(mavCameraMode: Int) {
+        val mode = when (mavCameraMode) {
+            Mav.CAMERA_MODE_VIDEO -> CameraMode.VIDEO_NORMAL
+            Mav.CAMERA_MODE_IMAGE, Mav.CAMERA_MODE_IMAGE_SURVEY -> CameraMode.PHOTO_NORMAL
+            else -> {
+                Log.w(TAG, "Unknown MAV_CAMERA_MODE $mavCameraMode; camera left as it is")
+                return
+            }
+        }
+        if (KeyManager.getInstance().getValue(cameraModeKey) == mode) return
+        KeyManager.getInstance().setValue(
+            cameraModeKey,
+            mode,
+            object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    Log.i(TAG, "Camera mode set to $mode by plan")
+                }
+
+                override fun onFailure(error: IDJIError) {
+                    Log.w(TAG, "Plan could not set camera mode: ${error.description()}")
+                }
+            }
+        )
+    }
+
     private fun setDefaultVideoMode() {
         val currentMode = KeyManager.getInstance().getValue(cameraModeKey)
         if (currentMode == CameraMode.VIDEO_NORMAL) {
@@ -3943,6 +3999,77 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private fun getLocation3D(): LocationCoordinate3D = location3DKey.get(LocationCoordinate3D(0.0, 0.0, .0))
     private fun getAltitude(): Double = altitudeKey.get(0.0)
     private fun getSatelliteCount(): Int = satelliteCountKey.get(-1)
+    /** The point the gimbal is tracking, or null when nothing is. */
+    @Volatile private var roiTarget: LocationCoordinate3D? = null
+    private var roiTrackingRunnable: Runnable? = null
+
+    /**
+     * Keep the camera on one position on the ground until told to stop.
+     *
+     * A repeating correction rather than a single aim, because the target is fixed and the
+     * aircraft is not: flying past a point changes both the bearing to it and the angle down to
+     * it continuously, so an ROI set once and left alone would only be correct at the instant it
+     * was set.
+     *
+     * Closed-loop on the gimbal's own reported joint angles, and commanded as a *relative*
+     * rotation rather than an absolute one. That is the deliberate part. Whether DJI's absolute
+     * gimbal yaw is referenced to north or to the aircraft heading is exactly the sort of
+     * question this project has twice had to settle by flying rather than by reading, and a
+     * relative rotation does not raise it: the desired and the measured angle are both joint
+     * angles, so their difference is a rotation the gimbal can simply be asked to make.
+     */
+    private fun startRoiTracking(latitudeDeg: Double, longitudeDeg: Double, altitudeM: Double) {
+        roiTarget = LocationCoordinate3D(latitudeDeg, longitudeDeg, altitudeM)
+        if (roiTrackingRunnable != null) return
+        val runnable = object : Runnable {
+            override fun run() {
+                val target = roiTarget ?: return
+                trackRoiOnce(target)
+                mainHandler.postDelayed(this, ROI_TRACK_INTERVAL_MS)
+            }
+        }
+        roiTrackingRunnable = runnable
+        mainHandler.post(runnable)
+        Log.i(TAG, "ROI tracking $latitudeDeg, $longitudeDeg at ${altitudeM}m")
+    }
+
+    private fun stopRoiTracking() {
+        roiTarget = null
+        roiTrackingRunnable?.let { mainHandler.removeCallbacks(it) }
+        roiTrackingRunnable = null
+        Log.i(TAG, "ROI tracking cleared")
+    }
+
+    /** One correction: where the gimbal should point, less where it reports pointing. */
+    private fun trackRoiOnce(target: LocationCoordinate3D) {
+        val position = getLocation3D()
+        // Before a fix there is no bearing to compute, and the aircraft's own position would
+        // read as the Gulf of Guinea. Waiting is the honest answer; the next tick tries again.
+        if (position.latitude == 0.0 && position.longitude == 0.0) return
+
+        val aim = RoiControl.aimAt(
+            bearingToRoiDeg = DroneController.calculateBearing(
+                position.latitude, position.longitude, target.latitude, target.longitude
+            ).toDouble(),
+            groundDistanceM = DroneController.calculateDistance(
+                target.latitude, target.longitude, position.latitude, position.longitude
+            ),
+            altitudeAboveRoiM = position.altitude - target.altitude,
+            headingDeg = getHeading(),
+            aircraftPitchDeg = getAttitude().pitch
+        )
+
+        val joint = getGimbalJointAttitude()
+        val pitchStep = RoiControl.step(
+            aim.pitchDeg - joint.pitch, ROI_DEADBAND_DEG, ROI_MAX_STEP_DEG
+        )
+        val yawStep = RoiControl.step(
+            RoiControl.normalizeAngle(aim.yawDeg - joint.yaw), ROI_DEADBAND_DEG, ROI_MAX_STEP_DEG
+        )
+        if (pitchStep == 0.0 && yawStep == 0.0) return
+        mavlinkCommandSink.nudgeGimbal(pitchStep, yawStep)
+    }
+
     private fun getGimbalAttitude(): Attitude = sanitisedAttitude(gimbalAttitudeKey.get())
     private fun getGimbalJointAttitude(): Attitude = sanitisedAttitude(gimbalJointAttitudeKey.get())
 
@@ -4442,6 +4569,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private val mavlinkCommandSink = object : MavlinkCommandSink {
 
         override fun setGimbal(rotation: GimbalRotation): CommandResult {
+            // An explicit aim ends the tracking. Otherwise the two fight at 5 Hz and the operator
+            // loses, which looks like a gimbal that ignores its commands rather than like a
+            // region of interest that is still set.
+            stopRoiTracking()
+            return rotateGimbal(rotation)
+        }
+
+        /** The aim itself, with no effect on tracking — what the ROI loop drives. */
+        private fun rotateGimbal(rotation: GimbalRotation): CommandResult {
             gimbalKey.action(
                 GimbalAngleRotation(
                     if (rotation.mode == GimbalRotationMode.ABSOLUTE) {
@@ -4464,10 +4600,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         }
 
         override fun setGimbalRelative(pitchDeg: Double, yawDeg: Double): CommandResult {
+            stopRoiTracking()
+            return nudgeGimbal(pitchDeg, yawDeg)
+        }
+
+        /** A relative nudge that leaves tracking alone, so the ROI loop can use it. */
+        fun nudgeGimbal(pitchDeg: Double, yawDeg: Double): CommandResult {
             // A zero delta on an axis means "leave it alone", which is what the ignore flags say
             // — sending zero as a relative angle would be the same thing, but saying it through
             // the flag is what keeps a two-axis nudge from fighting itself.
-            return setGimbal(
+            return rotateGimbal(
                 GimbalRotation(
                     mode = GimbalRotationMode.RELATIVE,
                     pitchDeg = pitchDeg,
@@ -4478,6 +4620,23 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     yawIgnored = yawDeg == 0.0
                 )
             )
+        }
+
+        override fun setRegionOfInterest(
+            latitudeDeg: Double,
+            longitudeDeg: Double,
+            altitudeM: Double
+        ): CommandResult {
+            if (!latitudeDeg.isFinite() || !longitudeDeg.isFinite()) {
+                return CommandResult(MavlinkCommandOutcome.DENIED, "ROI needs a real position")
+            }
+            startRoiTracking(latitudeDeg, longitudeDeg, altitudeM.takeIf { it.isFinite() } ?: 0.0)
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        override fun clearRegionOfInterest(): CommandResult {
+            stopRoiTracking()
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun measureLrf(): CommandResult {
@@ -4837,6 +4996,51 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             )
         }
 
+        @Suppress("LongParameterList")
+        override fun orbit(
+            latitudeDeg: Double,
+            longitudeDeg: Double,
+            altitudeMeters: Double,
+            radiusMeters: Double,
+            tangentialSpeedMps: Double,
+            clockwise: Boolean,
+            arcDegrees: Double,
+            faceCentre: Boolean
+        ): CommandResult {
+            mavlinkFlightGate()?.let { return it }
+            if (DroneController.shouldRejectAutonomousCommand("orbit")) {
+                return CommandResult(MavlinkCommandOutcome.DENIED)
+            }
+            if (!latitudeDeg.isFinite() || !longitudeDeg.isFinite()) {
+                return CommandResult(MavlinkCommandOutcome.DENIED, "Orbit needs a real centre")
+            }
+            // A radius of zero is a rotation in place dressed as an orbit, and the radial term
+            // would divide the aircraft's own position noise by nothing to correct it.
+            if (radiusMeters < MIN_ORBIT_RADIUS_M) {
+                return CommandResult(
+                    MavlinkCommandOutcome.DENIED,
+                    "Orbit radius must be at least $MIN_ORBIT_RADIUS_M m"
+                )
+            }
+            supersedeMission("orbit")
+            val seq = DroneController.orbit(
+                centreLatitude = latitudeDeg,
+                centreLongitude = longitudeDeg,
+                // As everywhere else on this surface, an unset altitude is the one being held.
+                targetAltitude = altitudeMeters.takeIf { it.isFinite() }
+                    ?: getLocation3D().altitude,
+                radiusMeters = radiusMeters,
+                tangentialSpeedMps = tangentialSpeedMps,
+                clockwise = clockwise,
+                arcDegrees = arcDegrees,
+                faceCentre = faceCentre
+            )
+            return CommandResult(
+                MavlinkCommandOutcome.ACCEPTED,
+                pending = PendingCommand(PendingKind.ORBIT, seq)
+            )
+        }
+
         override fun abortToPositionHold(): CommandResult {
             mavlinkFlightGate()?.let { return it }
             supersedeMission("abort")
@@ -4942,6 +5146,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     DroneController.getYawSeq() to DroneController.isYawReached()
                 PendingKind.ALTITUDE ->
                     DroneController.getAltitudeSeq() to DroneController.isAltitudeReached()
+                PendingKind.ORBIT ->
+                    DroneController.getOrbitSeq() to DroneController.isOrbitComplete()
             }
             return when {
                 // A newer command took over. Ordinary, not a failure: this is what re-issuing a
@@ -5081,8 +5287,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
          * arrival — the same reason the seq mechanism exists on the HTTP surface.
          */
         private fun startOnboard(items: List<MissionItem>, startIndex: Int): CommandResult {
-            val legs = items.withIndex().filter { it.value.isWaypoint }
-            if (legs.isEmpty()) {
+            val lastLegIndex = items.indexOfLast { it.isWaypoint }
+            if (lastLegIndex < 0) {
                 return CommandResult(MavlinkCommandOutcome.DENIED, "No waypoints in plan")
             }
             var speed = items.firstNotNullOfOrNull { it.speedMps }
@@ -5090,14 +5296,29 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
             running = true
             missionThread = thread(name = "MavlinkMission", start = true) {
-                for ((index, item) in legs) {
+                // Every item in order, not only the waypoints. Walking the waypoints alone meant
+                // a plan's camera and gimbal actions were carried through the upload and then
+                // silently dropped, so a survey flew the right path and photographed nothing.
+                for ((index, item) in items.withIndex()) {
                     if (!running) break
                     if (index < startIndex) continue
-                    // A speed change earlier in the plan applies to the legs that follow it.
-                    items.take(index).lastOrNull { it.isSpeedChange }?.speedMps?.let { speed = it }
+
+                    if (!item.isWaypoint) {
+                        // Actions take effect where they sit in the plan and do not block: their
+                        // whole purpose is to be in force for the legs that follow.
+                        item.speedMps?.let { speed = it }
+                        listener?.onItemStarted(index)
+                        if (!executePlanAction(item)) {
+                            listener?.onMissionFinished(false)
+                            running = false
+                            return@thread
+                        }
+                        listener?.onItemReached(index)
+                        continue
+                    }
 
                     listener?.onItemStarted(index)
-                    val seq = flyLeg(item, speed, isLast = index == legs.last().index)
+                    val seq = flyLeg(item, speed, isLast = index == lastLegIndex)
                     if (!awaitLeg(seq)) {
                         // Interrupted, overridden, or timed out — stop rather than skipping on.
                         listener?.onMissionFinished(false)
@@ -5110,6 +5331,59 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 running = false
             }
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        /**
+         * Carry out a plan item that is not a leg.
+         *
+         * Returns false only for the items that end the plan — a land or a return has nothing
+         * after it, and continuing to the next waypoint would fly away from a descent already
+         * under way. A payload action that fails is logged and the plan carries on: a camera that
+         * will not switch mode is a worse photograph, not a reason to abandon a survey mid-air.
+         */
+        private fun executePlanAction(item: MissionItem): Boolean {
+            when (item.command) {
+                Mav.CMD_SET_CAMERA_MODE -> setCameraMode(item.param2.toInt())
+                Mav.CMD_IMAGE_START_CAPTURE -> mavlinkCommandSink.captureImage()
+                Mav.CMD_VIDEO_START_CAPTURE -> mavlinkCommandSink.startVideoRecording()
+                Mav.CMD_VIDEO_STOP_CAPTURE -> mavlinkCommandSink.stopVideoRecording()
+                Mav.CMD_DO_GIMBAL_MANAGER_PITCHYAW -> mavlinkCommandSink.setGimbal(
+                    GimbalRotation(
+                        mode = GimbalRotationMode.ABSOLUTE,
+                        pitchDeg = item.param1.toDouble(),
+                        rollDeg = 0.0,
+                        yawDeg = item.param2.toDouble(),
+                        pitchIgnored = !item.param1.isFinite(),
+                        rollIgnored = true,
+                        yawIgnored = !item.param2.isFinite()
+                    )
+                )
+                Mav.CMD_DO_SET_ROI_LOCATION -> mavlinkCommandSink.setRegionOfInterest(
+                    item.latitudeDeg, item.longitudeDeg, item.altitudeM
+                )
+                Mav.CMD_DO_SET_ROI_NONE -> mavlinkCommandSink.clearRegionOfInterest()
+                Mav.CMD_DO_SET_ROI -> if (item.param1.toInt() == Mav.ROI_MODE_LOCATION) {
+                    mavlinkCommandSink.setRegionOfInterest(
+                        item.latitudeDeg, item.longitudeDeg, item.altitudeM
+                    )
+                } else {
+                    mavlinkCommandSink.clearRegionOfInterest()
+                }
+                Mav.CMD_NAV_TAKEOFF ->
+                    mavlinkMotionSink.takeoff(item.altitudeM.toFloat().takeIf { it > 0f })
+                Mav.CMD_NAV_LAND -> {
+                    mavlinkMotionSink.land()
+                    return false
+                }
+                Mav.CMD_NAV_RETURN_TO_LAUNCH -> {
+                    mavlinkMotionSink.returnToHome()
+                    return false
+                }
+                // A speed change has already been folded into the running speed above; there is
+                // nothing else to do with it.
+                else -> Log.d(TAG, "Plan item ${item.command} has no action")
+            }
+            return true
         }
 
         /**

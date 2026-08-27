@@ -58,6 +58,29 @@ internal interface MavlinkMotionSink {
     fun setYaw(yawDeg: Double): CommandResult
 
     /**
+     * Fly a circle around a point.
+     *
+     * @param clockwise seen from above. MAVLink carries the direction as the sign of the radius,
+     *   which is unpacked before it reaches here so that a negative radius cannot be flown as a
+     *   negative distance.
+     * @param arcDegrees how far around to go; zero means keep going until something supersedes
+     *   it, which is what a ground station means by an orbit with no limit.
+     * @param faceCentre keep the nose pointed at the centre rather than holding the current
+     *   heading — MAV_ORBIT_YAW_BEHAVIOUR, reduced to the two this airframe can tell apart.
+     */
+    @Suppress("LongParameterList")
+    fun orbit(
+        latitudeDeg: Double,
+        longitudeDeg: Double,
+        altitudeMeters: Double,
+        radiusMeters: Double,
+        tangentialSpeedMps: Double,
+        clockwise: Boolean,
+        arcDegrees: Double,
+        faceCentre: Boolean
+    ): CommandResult
+
+    /**
      * An arming request. DJI has no arm/disarm: motors spin up when a takeoff starts and stop
      * after touchdown. The request is acknowledged as a no-op (still behind the gate) so a ground
      * station's takeoff sequence does not abort on a refused arm.

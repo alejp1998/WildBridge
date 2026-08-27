@@ -1,6 +1,7 @@
 package dji.sampleV5.aircraft.mavlink
 
 import android.util.Log
+import kotlin.math.abs
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -690,6 +691,43 @@ internal class MavlinkTelemetryEndpoint(
                     groundSpeedMps = command.param1.toDouble()
                 ) ?: unsupported
                 Mav.CMD_CONDITION_YAW -> motionSink?.setYaw(command.param1.toDouble()) ?: unsupported
+
+                Mav.CMD_DO_ORBIT -> motionSink?.orbit(
+                    latitudeDeg = command.latitudeDeg,
+                    longitudeDeg = command.longitudeDeg,
+                    altitudeMeters = command.param7.toDouble(),
+                    // The direction lives in the sign of the radius, so it is unpacked here
+                    // rather than being carried onward as a negative distance.
+                    radiusMeters = abs(command.param1.toDouble()),
+                    clockwise = command.param1 >= 0f,
+                    // NaN asks for the airframe's own default rather than for no movement, which
+                    // is what a zero would be.
+                    tangentialSpeedMps = command.param2.toDouble()
+                        .takeIf { it.isFinite() && it > 0.0 } ?: ORBIT_DEFAULT_SPEED_MPS,
+                    // param4 is the arc in radians, and zero means orbit until superseded.
+                    arcDegrees = command.param4.toDouble()
+                        .takeIf { it.isFinite() && it > 0.0 }
+                        ?.let { Math.toDegrees(it) } ?: 0.0,
+                    faceCentre = command.param3.toInt() != Mav.ORBIT_YAW_HOLD_INITIAL
+                ) ?: unsupported
+
+                // The gimbal tracks the point; the airframe is not asked to turn, so this is a
+                // payload command and needs no flight gate.
+                Mav.CMD_DO_SET_ROI_LOCATION -> sink.setRegionOfInterest(
+                    command.latitudeDeg, command.longitudeDeg, command.param7.toDouble()
+                )
+                Mav.CMD_DO_SET_ROI_NONE -> sink.clearRegionOfInterest()
+                // The superseded form, still sent by some ground stations, with the position
+                // behind a mode selector.
+                Mav.CMD_DO_SET_ROI -> when (command.param1.toInt()) {
+                    Mav.ROI_MODE_LOCATION -> sink.setRegionOfInterest(
+                        command.latitudeDeg, command.longitudeDeg, command.param7.toDouble()
+                    )
+                    Mav.ROI_MODE_NONE -> sink.clearRegionOfInterest()
+                    // The other MAV_ROI modes name a target this aircraft cannot resolve — a
+                    // waypoint index, another vehicle — rather than a place.
+                    else -> CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
+                }
 
                 // param7 is the target altitude; param1 (rate) is DJI's to choose.
                 Mav.CMD_CONDITION_CHANGE_ALT ->
@@ -1396,6 +1434,16 @@ internal class MavlinkTelemetryEndpoint(
          * for the link.
          */
         private const val COMMAND_IN_PROGRESS_REPEAT_MS = 1_000L
+
+        /**
+         * Tangential speed for an orbit whose command did not name one.
+         *
+         * MAV_CMD_DO_ORBIT's velocity is documented as "NaN: vehicle configuration default", and
+         * QGroundControl leaves it unset. Slow, because an orbit is a command for looking at
+         * something rather than for covering ground, and because the radius correction has to
+         * stay authoritative against it.
+         */
+        private const val ORBIT_DEFAULT_SPEED_MPS = 3.0
 
         /** Gimbal pointing changes as fast as the operator moves it. */
         private const val GIMBAL_INTERVAL_MS = 200L

@@ -69,6 +69,23 @@ internal interface MavlinkCommandSink {
 
     /** Every string-valued setting a ground station may read, as name to current value. */
     fun textParameters(): List<Pair<String, String>>
+
+    /**
+     * Keep the camera pointed at a fixed position on the ground until told otherwise.
+     *
+     * On this interface rather than [MavlinkMotionSink] because it turns the gimbal and nothing
+     * else. Some autopilots satisfy a region of interest by yawing the airframe as well; an
+     * aircraft whose camera has its own two axes does not have to, and not doing so keeps the
+     * promise at the top of this file — that nothing here can move the aircraft — while letting
+     * an ROI be set on a build with flight motion switched off.
+     *
+     * @param altitudeM the point's height in the same reference the aircraft reports its own, so
+     *   the depression angle between them is a subtraction.
+     */
+    fun setRegionOfInterest(latitudeDeg: Double, longitudeDeg: Double, altitudeM: Double): CommandResult
+
+    /** Stop tracking, leaving the gimbal wherever it was last pointed. */
+    fun clearRegionOfInterest(): CommandResult
 }
 
 /**
@@ -81,7 +98,7 @@ internal interface MavlinkCommandSink {
 internal data class PendingCommand(val kind: PendingKind, val seq: Long)
 
 /** Which reach latch a [PendingCommand] is waiting on. */
-internal enum class PendingKind { WAYPOINT, YAW, ALTITUDE }
+internal enum class PendingKind { WAYPOINT, YAW, ALTITUDE, ORBIT }
 
 /** What a pending command is doing now. */
 internal enum class CommandProgress {

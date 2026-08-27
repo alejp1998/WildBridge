@@ -198,6 +198,15 @@ internal object Mav {
     const val CMD_VIDEO_STOP_CAPTURE = 2501
     const val CMD_DO_GIMBAL_MANAGER_PITCHYAW = 1000
 
+    /**
+     * Switch the camera between stills and video. param2 is MAV_CAMERA_MODE.
+     *
+     * Worth supporting mainly because QGroundControl puts one at the head of every plan whose
+     * Mission Settings name a camera action, as item #0 — so refusing it does not lose a camera
+     * mode, it fails the entire mission transfer before a single waypoint is read.
+     */
+    const val CMD_SET_CAMERA_MODE = 530
+
     // Flight-motion commands. None of these executes until wb_mav_0_allow_flight is true and the
     // authority / manual-override gates pass — see MavlinkMotionSink.
     const val CMD_NAV_RETURN_TO_LAUNCH = 20
@@ -214,6 +223,40 @@ internal object Mav {
     /** Standard payload release. WildBridge's drop port is a gripper in everything but name. */
     const val CMD_DO_GRIPPER = 211
     const val GRIPPER_ACTION_RELEASE = 0
+
+    /**
+     * Fly a circle around a point. param1 radius (signed for direction), param2 tangential
+     * velocity, param3 yaw behaviour, param4 the arc to fly in radians, param5/6/7 the centre.
+     */
+    const val CMD_DO_ORBIT = 34
+
+    /**
+     * MAV_ORBIT_YAW_BEHAVIOUR. Only the first two are distinguishable on this airframe: the
+     * aircraft either keeps its nose on the centre or holds the heading it started with.
+     * Uncontrolled and RC-controlled both leave the heading alone, which is the second of those,
+     * and a tangential nose is not offered because nothing here asks for it.
+     */
+    const val ORBIT_YAW_FACE_CENTRE = 0
+    const val ORBIT_YAW_HOLD_INITIAL = 1
+
+    /**
+     * Point the camera at a fixed position and keep it there — MAVLink's region of interest.
+     *
+     * Deliberately a payload command rather than a motion one. Some autopilots also yaw the
+     * airframe to satisfy an ROI; WildBridge turns only the gimbal, which is the honest reading
+     * for an aircraft whose camera has its own two axes, and it means an ROI can be set on a
+     * build with flight motion disabled entirely.
+     *
+     * [CMD_DO_SET_ROI] is the superseded form, still what some ground stations send, and it
+     * carries the same position in param5/6/7 behind a mode selector in param1.
+     */
+    const val CMD_DO_SET_ROI_LOCATION = 195
+    const val CMD_DO_SET_ROI_NONE = 197
+    const val CMD_DO_SET_ROI = 201
+
+    /** MAV_ROI_LOCATION, the only MAV_ROI mode that names a place. */
+    const val ROI_MODE_LOCATION = 3
+    const val ROI_MODE_NONE = 0
 
     /**
      * The two WildBridge-specific commands.
@@ -270,8 +313,16 @@ internal object Mav {
     const val VIDEO_STREAM_ENCODING_H264 = 1
     const val VIDEO_STREAM_STATUS_RUNNING = 1
 
-    /** CAMERA_MODE_VIDEO: WildBridge streams, it does not run a stills workflow. */
+    /**
+     * MAV_CAMERA_MODE. Reported in CAMERA_SETTINGS, and accepted from a plan's
+     * MAV_CMD_SET_CAMERA_MODE.
+     *
+     * Survey mode is stills flown on a grid, which is a property of the flight rather than of the
+     * camera, so DJI has nothing separate to put it in and it is treated as stills.
+     */
+    const val CAMERA_MODE_IMAGE = 0
     const val CAMERA_MODE_VIDEO = 1
+    const val CAMERA_MODE_IMAGE_SURVEY = 2
 
     /** STORAGE_STATUS_NOT_SUPPORTED: the DJI card is not exposed over MAVLink yet. */
     const val STORAGE_STATUS_NOT_SUPPORTED = 3

@@ -98,10 +98,30 @@ internal object MissionState {
  */
 internal class MavlinkMissionStore(private val maxItems: Int = MAX_ITEMS) {
 
-    /** Commands accepted in an uploaded plan. Anything else is refused per item. */
+    /**
+     * Commands accepted in an uploaded plan. Anything else is refused per item.
+     *
+     * Wider than the set the sequencer flies, and deliberately so. A mission upload is
+     * all-or-nothing: one refused item fails the whole transfer, and QGroundControl reports it as
+     * "Mission transfer failed" with the item number, not as a plan that mostly worked. So the
+     * set has to cover what a ground station actually puts in a plan rather than only what an
+     * aircraft strictly needs — a takeoff at the start, a return at the end, and the camera
+     * actions QGC writes into item #0 whenever Mission Settings names one.
+     */
     private val supportedCommands = setOf(
         Mav.CMD_NAV_WAYPOINT,
-        Mav.CMD_DO_CHANGE_SPEED
+        Mav.CMD_NAV_TAKEOFF,
+        Mav.CMD_NAV_LAND,
+        Mav.CMD_NAV_RETURN_TO_LAUNCH,
+        Mav.CMD_DO_CHANGE_SPEED,
+        Mav.CMD_SET_CAMERA_MODE,
+        Mav.CMD_IMAGE_START_CAPTURE,
+        Mav.CMD_VIDEO_START_CAPTURE,
+        Mav.CMD_VIDEO_STOP_CAPTURE,
+        Mav.CMD_DO_GIMBAL_MANAGER_PITCHYAW,
+        Mav.CMD_DO_SET_ROI_LOCATION,
+        Mav.CMD_DO_SET_ROI_NONE,
+        Mav.CMD_DO_SET_ROI
     )
 
     private val items = mutableListOf<MissionItem>()
