@@ -109,7 +109,6 @@
                 android:background="@null"
                 android:gravity="center_vertical"
                 android:padding="5dp" />
-                android:textColor="@color/black" />
             <RadioButton
                 android:buttonTint="@color/blue"
                 android:text="RemoteController"
@@ -119,7 +118,6 @@
                 android:background="@null"
                 android:gravity="center_vertical"
                 android:padding="5dp" />
-                android:textColor="@color/black" />
         </RadioGroup>
 
         <include

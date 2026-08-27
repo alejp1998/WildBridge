@@ -64,6 +64,7 @@ import android.os.BatteryManager
 import android.os.HandlerThread
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import dji.sampleV5.aircraft.controller.ControlAuthority
 import dji.sampleV5.aircraft.controller.DroneController
 import dji.sampleV5.aircraft.edge.EdgeDetectionController
@@ -1578,7 +1579,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private fun configurePhonePreviewTransform(preview: TextureView, sourceWidth: Int, sourceHeight: Int) {
         val viewWidth = preview.width.toFloat().takeIf { it > 0f } ?: return
         val viewHeight = preview.height.toFloat().takeIf { it > 0f } ?: return
-        val rotation = display?.rotation ?: Surface.ROTATION_0
+        // Context.getDisplay() is API 30+; ContextCompat.getDisplayOrDefault returns null
+        // below that (no crash on API 24-29 devices, which lint flagged as a NewApi crash risk).
+        val rotation = ContextCompat.getDisplayOrDefault(this)?.rotation ?: Surface.ROTATION_0
         val matrix = Matrix()
         val viewRect = RectF(0f, 0f, viewWidth, viewHeight)
         val centerX = viewRect.centerX()
