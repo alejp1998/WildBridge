@@ -629,7 +629,7 @@
                 android:layout_marginTop="6dp"
                 android:gravity="center"
                 android:maxWidth="280dp"
-                android:text="Motors off, GPS/camera quiet. Wake it manually: move BOTH sticks down &amp; inwards (towards each other) — motors will spin at ground idle."
+                android:text="Motors off, GPS/camera quiet. Wake it manually: move BOTH sticks down &amp; inwards (towards each other) to leave idle mode — repeat the gesture once out of idle to spin the motors."
                 android:textColor="#FFFFFFFF"
                 android:textSize="12sp" />
 

@@ -57,6 +57,13 @@
       <entry value="2" name="WILDBRIDGE_USER_1_RELEASE_MANUAL_OVERRIDE">
         <description>Release the RC manual-override latch and resume autonomous control.</description>
       </entry>
+      <entry value="3" name="WILDBRIDGE_USER_1_RELEASE_SAFETY">
+        <description>
+          Return command authority to the Pilot. Only a frame signed with the Safety Computer's
+          key is honoured; the Pilot cannot release safety. MAVLink counterpart of HTTP
+          /releaseSafetyControl.
+        </description>
+      </entry>
     </enum>
     <enum name="WILDBRIDGE_USER_2_SELECTOR">
       <description>

@@ -619,6 +619,8 @@ internal class MavlinkTelemetryEndpoint(
                         sink.setGimbalRelative(command.param2.toDouble(), command.param3.toDouble())
                     Mav.USER1_RELEASE_MANUAL_OVERRIDE ->
                         motionSink?.releaseManualOverride() ?: unsupported
+                    Mav.USER1_RELEASE_SAFETY ->
+                        motionSink?.releaseSafetyControl() ?: unsupported
                     else -> CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
                 }
 

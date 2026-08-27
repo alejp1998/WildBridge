@@ -26,6 +26,7 @@ from wildbridge_groundstation.transport import (
     UNSUPPORTED_PREFIX,
     USER1_GIMBAL_RELATIVE,
     USER1_RELEASE_MANUAL_OVERRIDE,
+    USER1_RELEASE_SAFETY,
     USER2_CAPTURE_TEMPERATURE,
     USER2_CAPTURE_THERMAL_IMAGE,
     USER2_LRF_MEASURE,
@@ -435,6 +436,7 @@ def test_the_user_commands_are_told_apart_by_their_selector():
         "/send/captureTemperature": (CMD_USER_2, USER2_CAPTURE_TEMPERATURE),
         "/send/captureThermalImage": (CMD_USER_2, USER2_CAPTURE_THERMAL_IMAGE),
         "/send/deactivateManualOverride": (CMD_USER_1, USER1_RELEASE_MANUAL_OVERRIDE),
+        "/releaseSafetyControl": (CMD_USER_1, USER1_RELEASE_SAFETY),
         "/send/gimbal/rel_pitch": (CMD_USER_1, USER1_GIMBAL_RELATIVE),
     }
     for endpoint, (expected_command, selector) in cases.items():
@@ -442,6 +444,13 @@ def test_the_user_commands_are_told_apart_by_their_selector():
         decoded = _decode(channel._frame_command(command, params))
         assert decoded.command == expected_command, endpoint
         assert decoded.param1 == pytest.approx(selector), endpoint
+
+
+def test_safety_release_is_now_a_mavlink_command_not_http_only():
+    """Tier 3: the signed release is the counterpart of the signed seizure."""
+    channel = MavlinkCommandChannel("127.0.0.1")
+    assert channel.supports("/releaseSafetyControl")
+    assert "/releaseSafetyControl" not in HTTP_ONLY_BY_DESIGN
 
 
 def test_an_accepted_thermal_capture_reports_captured_without_a_descriptor():

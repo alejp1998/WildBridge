@@ -70,10 +70,6 @@ HTTP_ONLY_BY_DESIGN: dict[str, str] = {
     "/send/autoSensing/stop": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
     "/send/listMedia": "Media listing walks the SD card; MAVLink FTP is the planned replacement.",
     "/send/downloadMediaByName": "Media download streams a file off the SD card; MAVLink FTP is the planned replacement.",
-    "/releaseSafetyControl": (
-        "Safety hand-back is HTTP-token based today; a signed MAVLink form is planned once "
-        "signing is exercised."
-    ),
 }
 
 
@@ -735,6 +731,7 @@ PX4_MODE_OFFBOARD = 6 << 16
 #: USER_1 / USER_2 selectors, carried in param1. Kept in step with Mav in MavlinkProtocol.kt.
 USER1_GIMBAL_RELATIVE = 1.0
 USER1_RELEASE_MANUAL_OVERRIDE = 2.0
+USER1_RELEASE_SAFETY = 3.0
 USER2_LRF_MEASURE = 1.0
 USER2_CAPTURE_TEMPERATURE = 2.0
 USER2_CAPTURE_THERMAL_IMAGE = 3.0
@@ -914,6 +911,14 @@ def _goto_altitude(payload: str) -> tuple[int, list[float]]:
 @_register("/send/deactivateManualOverride")
 def _release_override(_payload: str) -> tuple[int, list[float]]:
     return CMD_USER_1, [USER1_RELEASE_MANUAL_OVERRIDE, 0, 0, 0, 0, 0, 0]
+
+
+@_register("/releaseSafetyControl")
+def _release_safety(_payload: str) -> tuple[int, list[float]]:
+    # USER1_RELEASE_SAFETY: the signed counterpart of seizing control. The aircraft refuses it
+    # unless the frame is signed with the Safety Computer's key, so this only works for a
+    # signing-enabled ground station.
+    return CMD_USER_1, [USER1_RELEASE_SAFETY, 0, 0, 0, 0, 0, 0]
 
 
 @_register("/send/gimbal/rel_pitch")

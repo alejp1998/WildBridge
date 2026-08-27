@@ -85,6 +85,16 @@ internal interface MavlinkMotionSink {
     fun releaseManualOverride(): CommandResult
 
     /**
+     * Return command authority to the Pilot.
+     *
+     * Only a frame signed with the Safety Computer's key may do this — the same authority that
+     * seized control — so this is the MAVLink counterpart of HTTP's /releaseSafetyControl.
+     * Deliberately not behind the flight gate: it is the operation that undoes a seizure, so it
+     * must be reachable precisely while the Safety Computer holds control.
+     */
+    fun releaseSafetyControl(): CommandResult
+
+    /**
      * How a pending command is getting on.
      *
      * Polled rather than pushed because the underlying controller signals arrival by setting a

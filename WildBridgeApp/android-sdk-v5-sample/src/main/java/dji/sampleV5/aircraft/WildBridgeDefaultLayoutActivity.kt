@@ -4801,6 +4801,28 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
+        override fun releaseSafetyControl(): CommandResult {
+            // Deliberately not behind the flight gate: this is the operation that returns
+            // authority to the Pilot, so it must be reachable precisely while the Safety
+            // Computer holds control (the gate would refuse everything once SAFETY seized it).
+            // Only a frame signed with the configured key may release — an unsigned frame is
+            // the Pilot, and the Pilot cannot release safety. HTTP's /releaseSafetyControl has
+            // the same rule, enforced with its X-Safety-Token header instead.
+            val source = if (mavlinkEndpoint?.isTrustedOrigin == true) {
+                ControlAuthority.Source.SAFETY
+            } else {
+                ControlAuthority.Source.PILOT
+            }
+            return if (ControlAuthority.releaseSafetyControl(source)) {
+                CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            } else {
+                CommandResult(
+                    MavlinkCommandOutcome.DENIED,
+                    "Only the Safety Computer can release safety control"
+                )
+            }
+        }
+
         /**
          * Whether the movement with this seq has arrived.
          *
