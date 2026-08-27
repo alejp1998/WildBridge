@@ -9,7 +9,6 @@ const publishTargets = document.querySelector('#publishTargets');
 const publishGrid = document.querySelector('#publishGrid');
 const publishFilter = document.querySelector('#publishFilter');
 const publishHttpOnly = document.querySelector('#publishHttpOnly');
-const publishSummary = document.querySelector('#publishSummary');
 const settingsGrid = document.querySelector('#settingsGrid');
 const tileTemplate = document.querySelector('#tileTemplate');
 // Per-drone payload capabilities, from the phone's /config: name -> { hasThermal }.
@@ -1337,6 +1336,97 @@ async function loadMavlinkCoverage() {
   }
 }
 
+// One coverage model for both tabs.
+//
+// They previously each showed a tile labelled "HTTP only" counting different things — endpoints
+// on one, telemetry fields on the other — so the two tabs appeared to contradict each other.
+// Every number here carries its unit, and both tabs render the same strip.
+const coverage = { commands: 0, commandsTotal: 0, fields: 0, fieldsTotal: 0, differing: null };
+
+function renderCoverageStrips() {
+  document.querySelectorAll('.coverageStrip').forEach((strip) => {
+    // A fact with nothing behind it yet is worse than no fact: "0/0" reads as a finding.
+    const parts = [];
+    if (coverage.commandsTotal) {
+      parts.push(coverageFact(`${coverage.commands}/${coverage.commandsTotal}`, 'commands on MAVLink'));
+    }
+    if (coverage.fieldsTotal) {
+      parts.push(coverageFact(`${coverage.fields}/${coverage.fieldsTotal}`, 'telemetry fields on MAVLink'));
+    }
+    if (coverage.differing !== null) {
+      parts.push(coverageFact(
+        `${coverage.differing}`,
+        coverage.differing === 1 ? 'field disagrees with HTTP' : 'fields disagree with HTTP',
+        coverage.differing ? 'warn' : 'good',
+      ));
+    }
+    strip.replaceChildren(...parts);
+  });
+}
+
+function coverageFact(value, label, tone) {
+  const item = document.createElement('div');
+  item.className = `coverageFact${tone ? ` ${tone}` : ''}`;
+  const strong = document.createElement('strong');
+  strong.textContent = value;
+  const span = document.createElement('span');
+  span.textContent = label;
+  item.append(strong, span);
+  return item;
+}
+
+function renderHttpPublishCatalog() {
+  // A table, not thirty cards each wrapping a code block. The catalogue is reference material
+  // and reference material is scanned, so density and alignment matter more than decoration.
+  const table = document.createElement('table');
+  table.className = 'publishTable';
+  table.innerHTML =
+    '<thead><tr><th>Endpoint</th><th>Body</th><th>What it does</th><th>MAVLink</th></tr></thead>';
+  const body = document.createElement('tbody');
+
+  for (const [groupTitle, , commands] of publishCatalog) {
+    const groupRow = document.createElement('tr');
+    groupRow.className = 'publishGroup';
+    const cell = document.createElement('td');
+    cell.colSpan = 4;
+    cell.textContent = groupTitle.replace(/^HTTP\s+/, '');
+    groupRow.append(cell);
+    body.append(groupRow);
+
+    for (const [title, method, endpoint, commandBody, commandDescription] of commands) {
+      const onMavlink = mavlinkCoveredEndpoints.has(endpoint);
+      const row = document.createElement('tr');
+      row.className = 'publishItem';
+      row.dataset.coverage = onMavlink ? 'both' : 'httpOnly';
+      row.dataset.search = `${title} ${endpoint} ${commandDescription}`.toLowerCase();
+
+      const path = document.createElement('td');
+      path.className = 'publishPath';
+      path.innerHTML =
+        `<span class="publishMethod">${escapeHtml(method)}</span><code>${escapeHtml(endpoint)}</code>`;
+
+      const bodyCell = document.createElement('td');
+      bodyCell.className = 'publishBody';
+      bodyCell.textContent = commandBody || '—';
+
+      const what = document.createElement('td');
+      what.className = 'publishWhat';
+      what.textContent = commandDescription;
+
+      const mav = document.createElement('td');
+      mav.className = 'publishCoverage';
+      mav.textContent = onMavlink ? 'yes' : 'no';
+      mav.dataset.state = onMavlink ? 'yes' : 'no';
+
+      row.append(path, bodyCell, what, mav);
+      body.append(row);
+    }
+  }
+  table.append(body);
+  publishGrid.replaceChildren(table);
+  applyPublishFilter();
+}
+
 function renderPublishCatalog() {
   if (publishGrid.childElementCount) return;
   renderHttpPublishCatalog();
@@ -1349,65 +1439,26 @@ function renderPublishCatalog() {
 function applyPublishFilter() {
   const needle = (publishFilter.value || '').trim().toLowerCase();
   const httpOnly = publishHttpOnly.checked;
-  let shown = 0;
-  publishGrid.querySelectorAll('.publishItem').forEach((item) => {
-    const matchesText = !needle || item.dataset.search.includes(needle);
-    const matchesCoverage = !httpOnly || item.dataset.coverage === 'httpOnly';
-    const visible = matchesText && matchesCoverage;
-    item.hidden = !visible;
-    if (visible) shown += 1;
+  publishGrid.querySelectorAll('.publishItem').forEach((row) => {
+    const matchesText = !needle || row.dataset.search.includes(needle);
+    const matchesCoverage = !httpOnly || row.dataset.coverage === 'httpOnly';
+    row.hidden = !(matchesText && matchesCoverage);
   });
-  // A card whose every endpoint is filtered out is noise, not structure.
-  publishGrid.querySelectorAll('.publishCard').forEach((card) => {
-    card.hidden = !card.querySelector('.publishItem:not([hidden])');
-  });
-  updatePublishSummary(shown);
-}
-
-function updatePublishSummary(shown) {
-  const items = Array.from(publishGrid.querySelectorAll('.publishItem'));
-  const covered = items.filter((item) => item.dataset.coverage === 'both').length;
-  publishSummary.replaceChildren(
-    publishStat(`${items.length}`, 'endpoints'),
-    publishStat(`${covered}`, 'also on MAVLink', covered ? 'good' : undefined),
-    publishStat(`${items.length - covered}`, 'HTTP only'),
-    publishStat(`${shown}`, 'shown'),
-  );
-}
-
-function publishStat(value, label, tone) {
-  const cell = document.createElement('div');
-  cell.className = `mavlinkStat${tone ? ` ${tone}` : ''}`;
-  const big = document.createElement('strong');
-  big.textContent = value;
-  const small = document.createElement('span');
-  small.textContent = label;
-  cell.append(big, small);
-  return cell;
-}
-
-function renderHttpPublishCatalog() {
-  for (const [groupTitle, description, commands] of publishCatalog) {
-    const card = document.createElement('section');
-    card.className = 'publishCard';
-    card.innerHTML = `<div class="publishCardHeader"><div><h3>${escapeHtml(groupTitle)}</h3><p>${escapeHtml(description)}</p></div><span class="publishChannel">HTTP</span></div><div class="publishCardBody"></div>`;
-    const body = card.querySelector('.publishCardBody');
-    for (const [title, method, endpoint, commandBody, commandDescription] of commands) {
-      const item = document.createElement('article');
-      item.className = 'publishItem';
-      const onMavlink = mavlinkCoveredEndpoints.has(endpoint);
-      item.dataset.coverage = onMavlink ? 'both' : 'httpOnly';
-      item.dataset.search = `${title} ${endpoint} ${commandDescription}`.toLowerCase();
-      const requestLine = method === 'GET' ? `${method} http://DRONE_IP:8080${endpoint}` : `${method} http://DRONE_IP:8080${endpoint}\nBody: ${commandBody || '(empty)'}`;
-      const chip = mavlinkCoveredEndpoints.size
-        ? `<span class="coverageChip ${onMavlink ? 'both' : 'httpOnly'}">${onMavlink ? 'also on MAVLink' : 'HTTP only'}</span>`
-        : '';
-      item.innerHTML = `<div class="publishItemHeader"><h4>${escapeHtml(title)}</h4><span class="publishMeta">${escapeHtml(method)} ${escapeHtml(endpoint)}</span>${chip}</div><p class="publishDescription">${escapeHtml(commandDescription)}</p><pre class="publishCode">${escapeHtml(requestLine)}</pre>`;
-      body.appendChild(item);
+  // A group heading with nothing under it is noise.
+  publishGrid.querySelectorAll('.publishGroup').forEach((heading) => {
+    let sibling = heading.nextElementSibling;
+    let visible = false;
+    while (sibling && !sibling.classList.contains('publishGroup')) {
+      if (!sibling.hidden) visible = true;
+      sibling = sibling.nextElementSibling;
     }
-    publishGrid.appendChild(card);
-  }
-  applyPublishFilter();
+    heading.hidden = !visible;
+  });
+
+  const items = Array.from(publishGrid.querySelectorAll('.publishItem'));
+  coverage.commandsTotal = items.length;
+  coverage.commands = items.filter((row) => row.dataset.coverage === 'both').length;
+  renderCoverageStrips();
 }
 
 function renderHealthSummary(root, health) {
@@ -1966,7 +2017,6 @@ guideModal.addEventListener('click', (event) => { if (event.target === guideModa
 const mavlinkTarget = document.querySelector('#mavlinkTarget');
 const mavlinkDiffOnly = document.querySelector('#mavlinkDiffOnly');
 const mavlinkRefresh = document.querySelector('#mavlinkRefresh');
-const mavlinkSummary = document.querySelector('#mavlinkSummary');
 const mavlinkCompare = document.querySelector('#mavlinkCompare');
 let mavlinkTimer = null;
 
@@ -2017,16 +2067,14 @@ async function loadMavlinkComparison() {
   const name = mavlinkTarget.value;
   if (!name) {
     mavlinkCompare.replaceChildren(mavlinkEmptyState('Pick a drone to compare the two transports.'));
-    mavlinkSummary.replaceChildren();
-    return;
+      return;
   }
   try {
     const response = await fetch(`/api/drones/${encodeURIComponent(name)}/mavlink`);
     const payload = await response.json();
     if (!response.ok) {
       mavlinkCompare.replaceChildren(mavlinkEmptyState(payload.error || 'Comparison unavailable.'));
-      mavlinkSummary.replaceChildren();
-      return;
+          return;
     }
     renderMavlinkComparison(payload);
   } catch (error) {
@@ -2043,32 +2091,26 @@ function mavlinkEmptyState(text) {
 
 function renderMavlinkComparison(payload) {
   const rows = payload.rows || [];
-  const crossCheck = mavlinkDiffOnly.checked;
-  // What MAVLink actually reports is the subject; anything HTTP-only is absent from this wire
-  // and belongs in the cross-check, not in a list of what the aircraft is telling us.
+  const compare = mavlinkDiffOnly.checked;
   const reported = rows.filter((row) => row.status !== 'httpOnly');
-  const differing = rows.filter((row) => row.status === 'differ').length;
-  const missing = rows.filter((row) => row.status === 'httpOnly').length;
 
-  mavlinkSummary.replaceChildren(
-    mavlinkStat(`${payload.mavlinkKeys}`, 'fields reported'),
-    mavlinkStat(`${payload.httpKeys}`, 'fields on HTTP'),
-    mavlinkStat(`${missing}`, 'HTTP only', missing ? undefined : 'good'),
-    mavlinkStat(`${differing}`, 'disagreeing', differing ? 'warn' : 'good'),
-  );
+  coverage.fields = payload.mavlinkKeys;
+  coverage.fieldsTotal = payload.httpKeys;
+  coverage.differing = rows.filter((row) => row.status === 'differ').length;
+  renderCoverageStrips();
 
-  const shown = crossCheck ? rows : reported;
+  const shown = compare ? rows : reported;
   if (!shown.length) {
-    mavlinkCompare.replaceChildren(mavlinkEmptyState('Nothing reported yet — waiting for telemetry.'));
+    mavlinkCompare.replaceChildren(mavlinkEmptyState('Waiting for telemetry.'));
     return;
   }
 
   const table = document.createElement('table');
   table.className = 'mavlinkTable';
   const head = document.createElement('thead');
-  head.innerHTML = crossCheck
+  head.innerHTML = compare
     ? '<tr><th>Field</th><th>MAVLink</th><th>HTTP</th><th></th></tr>'
-    : '<tr><th>Field</th><th>Value</th><th></th></tr>';
+    : '<tr><th>Field</th><th>Value</th></tr>';
   const body = document.createElement('tbody');
   shown.forEach((row) => {
     const tr = document.createElement('tr');
@@ -2079,36 +2121,19 @@ function renderMavlinkComparison(payload) {
     const mav = document.createElement('td');
     mav.textContent = row.mavlink;
     tr.append(key, mav);
-    if (crossCheck) {
+    if (compare) {
       const http = document.createElement('td');
       http.textContent = row.http;
-      tr.append(http);
+      const status = document.createElement('td');
+      status.className = 'mavlinkVerdict';
+      status.textContent = MAVLINK_STATUS_LABELS[row.status] || row.status;
+      status.dataset.state = row.status;
+      tr.append(http, status);
     }
-    const status = document.createElement('td');
-    // Only worth a chip when it says something: in the plain view every row is a field MAVLink
-    // reports, and labelling each one "matches HTTP" is noise rather than information.
-    if (crossCheck || row.status === 'differ') {
-      const chip = document.createElement('span');
-      chip.className = `mavlinkChip ${row.status}`;
-      chip.textContent = MAVLINK_STATUS_LABELS[row.status] || row.status;
-      status.append(chip);
-    }
-    tr.append(status);
     body.append(tr);
   });
   table.append(head, body);
   mavlinkCompare.replaceChildren(table);
-}
-
-function mavlinkStat(value, label, tone) {
-  const cell = document.createElement('div');
-  cell.className = `mavlinkStat${tone ? ` ${tone}` : ''}`;
-  const big = document.createElement('strong');
-  big.textContent = value;
-  const small = document.createElement('span');
-  small.textContent = label;
-  cell.append(big, small);
-  return cell;
 }
 
 function startMavlinkPolling() {

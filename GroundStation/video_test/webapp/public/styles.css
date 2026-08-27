@@ -1584,216 +1584,174 @@ pre {
   background-color: var(--info);
 }
 
-/* ---- MAVLink vs HTTP comparison ---------------------------------------------------------- */
-/* Reuses the panel vocabulary the other tabs use; only the comparison table is new. Colour is
-   doing real work here: a row's status is the whole point of the view, so it is encoded in a
-   left edge as well as a chip, and readable before any text is. */
-.mavlinkShell {
+
+/* ---- HTTP and MAVLink tabs ---------------------------------------------------------------
+   Both are reference surfaces: scanned, not read. Density and alignment carry the design, and
+   the only colour is the one piece of state worth seeing at a glance — whether an endpoint or a
+   field exists on the other wire. */
+
+.publishShell, .mavlinkShell {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-height: 0;
   flex: 1;
 }
-.mavlinkControls {
+.publishControls, .mavlinkControls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
-.mavlinkControls label {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.mavlinkControls select {
+.publishControls input[type="search"], .mavlinkControls select {
   background: var(--sunken);
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 5px 8px;
+  padding: 5px 9px;
   font: inherit;
   font-size: 12px;
 }
-.mavlinkToggle {
+.publishControls input[type="search"] { min-width: 170px; }
+.publishToggle, .mavlinkToggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  text-transform: none;
-  letter-spacing: 0;
   font-size: 12px;
-  font-weight: 500;
   color: var(--muted);
+  white-space: nowrap;
 }
-.mavlinkSummary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 10px;
-}
-.mavlinkStat {
+
+/* One coverage line, identical on both tabs, every number carrying its unit. */
+.coverageStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 10px 14px;
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
-.mavlinkStat strong {
-  font-size: 22px;
+.coverageFact { display: flex; align-items: baseline; gap: 7px; }
+.coverageFact strong {
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
-  line-height: 1;
+  color: var(--text);
 }
-.mavlinkStat span {
-  font-size: 10px;
-  letter-spacing: 0.04em;
+.coverageFact span { font-size: 12px; color: var(--muted); }
+.coverageFact.good strong { color: var(--good); }
+.coverageFact.warn strong { color: var(--warn); }
+
+/* The MAVLink capability summary: a definition list, not six boxes of prose. */
+.protocolList {
+  margin: 0;
+  display: grid;
+  /* Wide enough that the descriptions read in full. A truncated reference line is worse than
+     no line at all, because it looks like information while withholding the half that matters. */
+  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  gap: 2px 28px;
+}
+.protocolList > div {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.protocolList dt {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--muted);
+  padding-top: 1px;
 }
-.mavlinkStat.good strong { color: var(--good); }
-.mavlinkStat.warn strong { color: var(--warn); }
-.mavlinkCompare {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
+.protocolList dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
-.mavlinkCompare .emptyState { margin: 0; }
-.mavlinkTable {
+
+/* Shared table treatment. */
+.publishGrid, .mavlinkCompare { flex: 1; min-height: 0; overflow: auto; }
+.publishTable, .mavlinkTable {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
-.mavlinkTable th {
+.publishTable th, .mavlinkTable th {
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--panel);
   text-align: left;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.publishTable td, .mavlinkTable td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.publishGroup td {
+  background: var(--sunken);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
   padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
 }
-.mavlinkTable td {
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
-  vertical-align: top;
-  font-variant-numeric: tabular-nums;
+.publishPath { white-space: nowrap; }
+.publishMethod {
+  display: inline-block;
+  min-width: 34px;
+  margin-right: 7px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--dim);
 }
+.publishPath code { font-size: 12px; color: var(--text); }
+.publishBody {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 190px;
+  word-break: break-word;
+}
+.publishWhat { color: var(--muted); line-height: 1.45; }
+.publishCoverage {
+  text-align: right;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+.publishCoverage[data-state="yes"] { color: var(--good); }
+.publishCoverage[data-state="no"] { color: var(--warn); }
+.publishItem[hidden], .publishGroup[hidden] { display: none; }
+
 .mavlinkKey {
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   color: var(--text);
   white-space: nowrap;
 }
-.mavlinkRow { border-left: 3px solid transparent; }
-.mavlinkRow.differ { border-left-color: var(--warn); background: rgb(251 191 36 / 6%); }
-.mavlinkRow.httpOnly { border-left-color: var(--dim); }
-.mavlinkRow.mavlinkOnly { border-left-color: var(--info); }
-.mavlinkChip {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-.mavlinkChip.agree { background: rgb(52 211 153 / 14%); color: var(--good); }
-.mavlinkChip.differ { background: rgb(251 191 36 / 16%); color: var(--warn); }
-.mavlinkChip.httpOnly { background: rgb(255 255 255 / 6%); color: var(--dim); }
-.mavlinkChip.mavlinkOnly { background: rgb(96 165 250 / 14%); color: var(--info); }
-
-/* ---- HTTP catalogue: filtering and MAVLink coverage --------------------------------------- */
-.publishControls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.publishControls input[type="search"] {
-  background: var(--sunken);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font: inherit;
-  font-size: 12px;
-  min-width: 200px;
-}
-.publishToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
+.mavlinkTable td:nth-child(2), .mavlinkTable td:nth-child(3) {
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
-.publishSummary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 10px;
-  margin-bottom: 4px;
-}
-/* The one piece of state worth seeing without reading: whether this endpoint still needs HTTP. */
-.coverageChip {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-  margin-left: auto;
-}
-.coverageChip.both { background: rgb(52 211 153 / 14%); color: var(--good); }
-.coverageChip.httpOnly { background: rgb(251 191 36 / 16%); color: var(--warn); }
-.publishItem[hidden], .publishCard[hidden] { display: none; }
-
-/* ---- MAVLink: protocol surface ------------------------------------------------------------ */
-/* Documentation, not instrumentation: these describe what the interface offers, so they read as
-   prose cards rather than as the metric tiles below them. */
-.mavlinkProtocol h3,
-.mavlinkSectionHead {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 8px;
-}
-.mavlinkSectionHead { margin-top: 4px; }
-.protocolGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 10px;
-  margin-bottom: 4px;
-}
-.protocolCard {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-}
-.protocolCard h4 {
-  margin: 0 0 5px;
-  font-size: 13px;
-  color: var(--text);
-}
-.protocolCard p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-.protocolCard code {
-  font-size: 11px;
-  color: var(--text);
-}
-/* In the plain view every row is something MAVLink reports, so only a disagreement earns colour. */
-.mavlinkRow.agree, .mavlinkRow.mavlinkOnly { border-left-color: transparent; }
-
-/* The coverage chip must not be pushed off the edge of a narrow card. */
-.publishItemHeader { flex-wrap: wrap; row-gap: 4px; }
-.coverageChip { flex: 0 0 auto; }
+.mavlinkVerdict { text-align: right; white-space: nowrap; font-size: 11px; }
+.mavlinkVerdict[data-state="differ"] { color: var(--warn); font-weight: 600; }
+.mavlinkVerdict[data-state="agree"] { color: var(--dim); }
+.mavlinkVerdict[data-state="httpOnly"], .mavlinkVerdict[data-state="mavlinkOnly"] { color: var(--dim); }
+.mavlinkRow.differ td { background: rgb(251 191 36 / 7%); }
+.mavlinkCompare .emptyState, .publishGrid .emptyState { margin: 0; }
