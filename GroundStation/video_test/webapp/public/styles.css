@@ -1750,3 +1750,50 @@ pre {
 .coverageChip.both { background: rgb(52 211 153 / 14%); color: var(--good); }
 .coverageChip.httpOnly { background: rgb(251 191 36 / 16%); color: var(--warn); }
 .publishItem[hidden], .publishCard[hidden] { display: none; }
+
+/* ---- MAVLink: protocol surface ------------------------------------------------------------ */
+/* Documentation, not instrumentation: these describe what the interface offers, so they read as
+   prose cards rather than as the metric tiles below them. */
+.mavlinkProtocol h3,
+.mavlinkSectionHead {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.mavlinkSectionHead { margin-top: 4px; }
+.protocolGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.protocolCard {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.protocolCard h4 {
+  margin: 0 0 5px;
+  font-size: 13px;
+  color: var(--text);
+}
+.protocolCard p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.protocolCard code {
+  font-size: 11px;
+  color: var(--text);
+}
+/* In the plain view every row is something MAVLink reports, so only a disagreement earns colour. */
+.mavlinkRow.agree, .mavlinkRow.mavlinkOnly { border-left-color: transparent; }
+
+/* The coverage chip must not be pushed off the edge of a narrow card. */
+.publishItemHeader { flex-wrap: wrap; row-gap: 4px; }
+.coverageChip { flex: 0 0 auto; }

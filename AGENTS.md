@@ -17,7 +17,7 @@ WildBridge is an open-source Android ground-station app (Kotlin + DJI Mobile SDK
 1. Preserve unrelated worktree changes. Read `git status` and the relevant diff before editing a modified file; never reset or overwrite user work.
 2. Run checks from the repository root for Python (see Quality Gates), and from `WildBridgeApp/android-sdk-v5-as/` for Gradle work. The persistent terminal keeps its working directory — be explicit about which root a command belongs to.
 3. Start from the failing behavior, owning abstraction, nearby test, or exact log entry. Avoid broad refactors until a focused check proves the controlling path.
-4. GroundStation Python: keep pure helpers extracted before touching ROS/MAVLink/socket-bound behavior. Do not hide missing dependencies behind conditional imports or `try/except` import fallbacks (except documented cross-container cases).
+4. GroundStation Python: keep pure helpers extracted before touching ROS/MAVLink/socket-bound behavior. When changing anything on the MAVLink wire, check it against the HTTP surface with the dashboard's MAVLink tab — every defect in that work so far has been a frame that decoded cleanly and meant the wrong thing, which no compiler or linter sees. Do not hide missing dependencies behind conditional imports or `try/except` import fallbacks (except documented cross-container cases).
 5. Make the smallest coherent change, run the narrowest relevant test immediately, then widen validation in proportion to risk.
 6. Keep code, comments, and documentation in English.
 
@@ -68,7 +68,8 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 |------|---------|
 | `WildBridgeApp/android-sdk-v5-as/` | Android build root (`:sample`, `:uxsdk`); WildBridge additions in `webrtc/`, `formation/`, `controller/`, `server/`, `logger/` packages |
 | `WildBridgeApp/android-sdk-v5-sample/` | App source (`dji.sampleV5.aircraft`), navigation graph, WildBridgeDefaultLayoutActivity |
-| `GroundStation/Python/wildbridge_groundstation/` | Shared Python helper package (dji_client, dji_helpers, mavlink_helpers) |
+| `GroundStation/Python/wildbridge_groundstation/` | Shared Python helper package (dji_client, dji_helpers, mavlink_helpers, transport) |
+| `GroundStation/mavlink/wildbridge.xml` | The WildBridge MAVLink dialect. Source of truth for `WILDBRIDGE_STATUS`; regenerate with mavgen and update the struct, size and CRC_EXTRA in `transport.py` together |
 | `GroundStation/Python/djiInterfaceSafety.py` | Safety-authority handling for the two-computer model |
 | `GroundStation/ROS/dji_controller/` | ROS package wrapping DJI control |
 | `GroundStation/ROS/drone_videofeed/` | ROS package for video feed |

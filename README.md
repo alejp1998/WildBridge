@@ -32,6 +32,7 @@ Each drone connects to its RC via DJI OcuSync (2.4/5 GHz). The RC connects to th
 
 - **Real-time Telemetry**: TCP socket streaming (port 8081) — continuous JSON with 25+ flight state fields, pushed on a configurable interval (default ~2 Hz)
 - **HTTP Command Interface**: RESTful API (port 8080) for full drone control
+- **MAVLink 2 Interface**: the aircraft presented as a MAVLink vehicle (port 14550) — telemetry, commands, missions, parameters, camera and gimbal, read-only FTP, and packet signing — so QGroundControl, MAVSDK and `pymavlink` fly it with no plugin
 - **Live Video Streaming**: WebRTC video publishing by WHIP to MediaMTX, with browser and dashboard playback through WHEP
 - **GroundStation Video Dashboard**: Docker Compose stack with MediaMTX and a browser UI for multi-drone video monitoring, health diagnostics, telemetry, and charts
 - **Navigation Modes**: two on-device PID waypoint controllers (nose-forward and hold-heading), DJI native KMZ waypoint missions, and direct Virtual Stick (AVS)
@@ -45,6 +46,7 @@ Each drone connects to its RC via DJI OcuSync (2.4/5 GHz). The RC connects to th
 - **Auto-Sensing Detection**: on-device target detection with start/stop control and detected targets streamed in telemetry
 - **Multi-drone Coordination**: Multiple concurrent drones over a single LAN
 - **Auto-Discovery**: UDP broadcast discovery (port 30000), UDP multicast discovery, mDNS/Bonjour, subnet scanning
+- **Selectable Transport**: the Python ground station and the ROS nodes talk HTTP or MAVLink from one environment variable (`WB_TRANSPORT`), with the same telemetry keys either way
 - **ROS 2 Integration**: Complete ROS 2 Humble package with 45+ published topics
 - **Docker Deployment**: ROS 2 container plus a MediaMTX/video-test stack for video and connection testing
 
@@ -260,28 +262,35 @@ Settings can be viewed and changed for each drone from the **Settings** tab: it 
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoTestTab.png" width="100%"></td>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/HealthTab.png" width="100%"></td>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/VideoChartsTab.png" width="100%"></td>
-    <td align="center" width="25%"><img src="WildBridgeReadmePics/TelemetryTab.png" width="100%"></td>
+    <td align="center" width="33%"><img src="WildBridgeReadmePics/VideoTestTab.png" width="100%"></td>
+    <td align="center" width="33%"><img src="WildBridgeReadmePics/HealthTab.png" width="100%"></td>
+    <td align="center" width="33%"><img src="WildBridgeReadmePics/VideoChartsTab.png" width="100%"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Video</b><br>Live WHIP/WHEP tiles per drone with quick FPS/loss/telemetry stats</sub></td>
     <td align="center"><sub><b>Health</b><br>Correlated phone/sender/MediaMTX/browser diagnostics, worst symptom first</sub></td>
     <td align="center"><sub><b>Video Charts</b><br>Decoded FPS, bitrate, packet loss, and jitter over time</sub></td>
-    <td align="center"><sub><b>Telemetry</b><br>Full nested live state tree per drone</sub></td>
   </tr>
-  <tr><td colspan="4">&nbsp;</td></tr>
+  <tr><td colspan="3">&nbsp;</td></tr>
   <tr>
+    <td align="center"><img src="WildBridgeReadmePics/TelemetryTab.png" width="100%"></td>
     <td align="center"><img src="WildBridgeReadmePics/TelemetryChartsTab.png" width="100%"></td>
     <td align="center"><img src="WildBridgeReadmePics/SettingsTab.png" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Telemetry</b><br>Full nested live state tree per drone</sub></td>
+    <td align="center"><sub><b>Telemetry Charts</b><br>Battery, satellites, altitude, and Wi-Fi RSSI over time</sub></td>
+    <td align="center"><sub><b>Settings</b><br>View and change DJI/app settings per drone over HTTP</sub></td>
+  </tr>
+  <tr><td colspan="3">&nbsp;</td></tr>
+  <tr>
     <td align="center"><img src="WildBridgeReadmePics/PublishTab.png" width="100%"></td>
+    <td align="center"><img src="WildBridgeReadmePics/MavlinkTab.png" width="100%"></td>
     <td align="center"><img src="WildBridgeReadmePics/RosTab.png" width="100%"></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Telemetry Charts</b><br>Battery, satellites, altitude, and Wi-Fi RSSI over time</sub></td>
-    <td align="center"><sub><b>Settings</b><br>View and change DJI/app settings per drone over HTTP</sub></td>
-    <td align="center"><sub><b>Publish</b><br>Full phone HTTP command catalog for manual testing</sub></td>
+    <td align="center"><sub><b>HTTP</b><br>The full <code>/send/</code> catalogue, each entry marked if it also has a MAVLink form</sub></td>
+    <td align="center"><sub><b>MAVLink</b><br>What the aircraft reports and accepts as a MAVLink 2 vehicle, with an HTTP cross-check</sub></td>
     <td align="center"><sub><b>ROS</b><br>Per-drone ROS topic liveness and rates from ros-monitor</sub></td>
   </tr>
 </table>
@@ -522,13 +531,13 @@ safety.requestReleaseSafetyControl()           # hand authority back to the Pilo
 
 ---
 
-### MAVLink 2 Telemetry (UDP — Port 14550)
+### MAVLink 2 Interface (UDP — Port 14550)
 
-WildBridge can stream its telemetry as **MAVLink 2**, so a stock ground station — QGroundControl, MAVSDK, `pymavlink` — sees the aircraft with no plugin and no configuration file.
+WildBridge presents each aircraft as a **MAVLink 2 vehicle**, so a stock ground station — QGroundControl, MAVSDK, `pymavlink` — connects, sees telemetry and video, and flies it with no plugin and no configuration file.
 
-This surface is **read-only**: it streams telemetry and nothing more. No command can reach the aircraft over MAVLink, so enabling it cannot change how the drone flies. Commands still go over HTTP on port 8080.
+This is a full control surface, not a telemetry feed. Every command the ROS ground station uses has a MAVLink form, and so does every `/send/set*` setting. The HTTP surface on port 8080 still exists and is unchanged; the two are kept in step deliberately, and the dashboard's **MAVLink** tab reads both at once so a disagreement between them is visible rather than inferred.
 
-**Disabled by default.** Following PX4's pattern of switching MAVLink instances on by parameter rather than by build, the endpoint is configured through preferences in `WildBridgePrefs`:
+**Disabled by default.** Following PX4's pattern of switching MAVLink instances on by parameter rather than by build:
 
 | Preference | Type | Default | Meaning |
 |------------|------|---------|---------|
@@ -536,28 +545,44 @@ This surface is **read-only**: it streams telemetry and nothing more. No command
 | `wb_mav_0_host` | string | *(empty)* | Ground-station address. Empty means broadcast on the subnet |
 | `wb_mav_0_port` | int | `14550` | Port to send to and listen on |
 | `wb_mav_0_mode` | string | `normal` | Stream profile: `normal` or `minimal` |
-| `wb_mav_0_sysid` | int | `1` | MAVLink system id — one per aircraft, as a GCS distinguishes vehicles |
+| `wb_mav_0_sysid` | int | `1` | MAVLink system id — one per aircraft |
+| `wb_mav_0_allow_flight` | bool | `false` | Allow commands that move the aircraft |
+| `wb_mav_0_signing_key` | string | *(empty)* | 64 hex characters shared with the Safety Computer |
+| `wb_mission_exec` | string | `onboard` | Who flies an uploaded plan: `onboard` or `dji_native` |
 
-With no host configured the endpoint broadcasts, and it also learns the address of any ground station that sends to it first — so in the common case QGroundControl simply finds the aircraft on its default UDP listener.
+Flight commands are gated twice: `wb_mav_0_allow_flight` must be on, and the command must pass the same `ControlAuthority` check the HTTP surface uses. Anything that would fly the aircraft somewhere new is refused while the pilot holds the sticks; land, return and abort stay available, because those are the recovery actions.
 
-**Streamed messages and rates:**
+#### Protocols implemented
 
-| Message | Rate | Carries |
-|---------|------|---------|
-| `HEARTBEAT` | 1 Hz | Mode, armed state, system status |
-| `SYS_STATUS` | 1 Hz | Sensor health, battery percentage |
-| `BATTERY_STATUS` | 1 Hz | Battery percentage and `time_remaining` |
-| `HOME_POSITION` | 0.5 Hz | Home point |
-| `GLOBAL_POSITION_INT` | 5 Hz | Position, altitude AMSL and AGL, velocity, heading |
-| `GPS_RAW_INT` | 5 Hz | Fix type and satellite count |
-| `VFR_HUD` | 5 Hz | Ground speed, altitude, climb rate, heading |
-| `ATTITUDE` | 10 Hz | Roll, pitch, yaw in radians |
-| `AUTOPILOT_VERSION` | 0.2 Hz | Capability flags |
-| `STATUSTEXT` | on events | Human-readable messages |
+| Microservice | What works |
+|---|---|
+| **Telemetry** | Heartbeat, attitude, position, GPS, battery, VFR HUD, extended system state, home position, current mode, mission progress, gimbal attitude, rangefinder distance |
+| **Command** | Take-off (with altitude), land, return, reposition, yaw, altitude, stick input, arm/disarm, camera, gimbal, payload release |
+| **Mission** | Upload and download handshake, `MISSION_START`, progress and arrival reports. Per-waypoint hold time, acceptance radius and pass-through honoured |
+| **Parameter** | `PARAM_SET` for numeric settings; `PARAM_EXT_SET` for string settings such as the drone name, video source and MediaMTX address |
+| **Camera / Gimbal** | Camera information, settings, capture status, video stream information; gimbal attitude and pitch/yaw control |
+| **File transfer** | Read-only MAVLink FTP for listing and reading the SD card |
+| **Signing** | MAVLink 2 packet signing identifies the Safety Computer, mirroring `X-Safety-Token` on the HTTP surface |
 
-**What it deliberately does not claim.** WildBridge reports `MAV_AUTOPILOT_INVALID`, not PX4 or ArduPilot — it is a component that speaks MAVLink, not a flight stack, and reporting otherwise would make a ground station render another stack's mode names for a DJI aircraft. Values DJI does not provide are sent using MAVLink's documented "unknown" conventions rather than plausible-looking zeros: GPS HDOP/VDOP are `UINT16_MAX`, battery cell voltages `UINT16_MAX`, battery temperature `INT16_MAX`, current `-1`. The armed flag comes from motors-running, since DJI has no arm/disarm concept — deriving it from flight mode would report armed on the ground.
+#### Two conventions worth knowing
 
-**Verify without QGroundControl:**
+**Heading, per waypoint.** `NAV_WAYPOINT.param4` is `NaN` for "use the vehicle's own heading mode" and a value for "hold this heading". That is exactly the difference between WildBridge's two waypoint controllers, so one plan can mix them, and `DO_REPOSITION` reads it the same way. No custom mission item was needed.
+
+**Arrival, per waypoint.** `param1` (hold time), `param2` (acceptance radius) and `param3` (pass through) come from the plan, because only the plan knows which leg is the last one. A leg marked pass-through is flown through; the final one settles.
+
+#### Running more than one ground station
+
+A UDP datagram goes to exactly one socket, so each ground station needs its own listen port; the aircraft fans telemetry out to every station it has heard from.
+
+| | Listens | Sends to aircraft |
+|---|---|---|
+| QGroundControl | 14550 | 14550 |
+| ROS drone nodes (`WB_MAVLINK_PORT`) | 14551 | 14550 |
+| Dashboard MAVLink tab (`WB_WEBAPP_MAVLINK_PORT`) | 14552 | 14550 |
+
+A fleet needs one port per aircraft for the same reason.
+
+#### Verify without QGroundControl
 
 ```bash
 pip install pymavlink
@@ -566,7 +591,9 @@ python GroundStation/Python/mavlink_listen.py --summary 5
 
 It prints the first instance of each message with decoded values, then a rate summary, and reports malformed frames loudly as `BAD_DATA`. It never transmits.
 
-**Connect QGroundControl:** it listens on UDP 14550 by default and adds a link automatically on receiving traffic. If the RC and the ground station are on the same LAN, enabling `wb_mav_0_enabled` is all that is required.
+**Connect QGroundControl:** it listens on UDP 14550 by default and adds a link on receiving traffic. If the RC and the ground station share a LAN, enabling `wb_mav_0_enabled` is all that is required.
+
+WildBridge reports `MAV_AUTOPILOT_PX4`. It does not run PX4 — the claim exists because QGroundControl only enables its Fly View action buttons for firmware plugins that declare guided-mode capability, and its generic plugin declares none. Values DJI does not provide use MAVLink's documented "unknown" conventions rather than plausible-looking zeros.
 
 ---
 
