@@ -1325,12 +1325,28 @@ function renderPublishTargets(state) {
 // Endpoints that also have a MAVLink form, from the transport's own tables. Empty until the
 // first fetch, which is fine: the catalogue renders without coverage and gains it a moment later.
 let mavlinkCoveredEndpoints = new Set();
+let mavlinkStreamedFields = new Set();
+
+// Read-only endpoints, and the telemetry field that carries the same answer on MAVLink.
+//
+// MAVLink streams state rather than answering polls, so these have no command form and never
+// will. Marking them simply absent said "MAVLink cannot do this" when the truth is "MAVLink does
+// this a different way" -- and for the override latch it was on the wire the whole time.
+const READ_ENDPOINT_FIELDS = {
+  '/get/isManualOverrideActive': 'isManualOverrideActive',
+  '/get/autoSensing/status': 'autoSensingActive',
+  '/get/autoSensing/targets': 'detectedTargets',
+  '/config': 'droneName',
+};
 
 async function loadMavlinkCoverage() {
   try {
     const response = await fetch('/api/mavlink-coverage');
     const payload = await response.json();
-    if (payload.available) mavlinkCoveredEndpoints = new Set(payload.endpoints);
+    if (payload.available) {
+      mavlinkCoveredEndpoints = new Set(payload.endpoints);
+      mavlinkStreamedFields = new Set(payload.streamed || []);
+    }
   } catch {
     // The catalogue is still useful without it; every entry simply shows no coverage chip.
   }
@@ -1394,10 +1410,15 @@ function renderHttpPublishCatalog() {
     body.append(groupRow);
 
     for (const [title, method, endpoint, commandBody, commandDescription] of commands) {
-      const onMavlink = mavlinkCoveredEndpoints.has(endpoint);
+      const readField = READ_ENDPOINT_FIELDS[endpoint];
+      const state = mavlinkCoveredEndpoints.has(endpoint)
+        ? 'yes'
+        : readField && mavlinkStreamedFields.has(readField)
+          ? 'streamed'
+          : 'no';
       const row = document.createElement('tr');
       row.className = 'publishItem';
-      row.dataset.coverage = onMavlink ? 'both' : 'httpOnly';
+      row.dataset.coverage = state === 'no' ? 'httpOnly' : 'both';
       row.dataset.search = `${title} ${endpoint} ${commandDescription}`.toLowerCase();
 
       const path = document.createElement('td');
@@ -1415,8 +1436,11 @@ function renderHttpPublishCatalog() {
 
       const mav = document.createElement('td');
       mav.className = 'publishCoverage';
-      mav.textContent = onMavlink ? 'yes' : 'no';
-      mav.dataset.state = onMavlink ? 'yes' : 'no';
+      mav.dataset.state = state;
+      mav.textContent = state === 'streamed' ? 'streamed' : state;
+      if (state === 'streamed') {
+        mav.title = `No command needed — ${readField} is on the MAVLink telemetry stream.`;
+      }
 
       row.append(path, bodyCell, what, mav);
       body.append(row);

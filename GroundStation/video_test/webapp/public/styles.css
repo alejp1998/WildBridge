@@ -1755,3 +1755,7 @@ pre {
 .mavlinkVerdict[data-state="httpOnly"], .mavlinkVerdict[data-state="mavlinkOnly"] { color: var(--dim); }
 .mavlinkRow.differ td { background: rgb(251 191 36 / 7%); }
 .mavlinkCompare .emptyState, .publishGrid .emptyState { margin: 0; }
+
+/* A read whose answer is streamed is covered, just not by a command — a third state, because
+   calling it "no" said MAVLink could not do something it does continuously. */
+.publishCoverage[data-state="streamed"] { color: var(--info); font-weight: 500; }

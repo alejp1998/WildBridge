@@ -166,10 +166,46 @@ def mavlink_coverage():
     would drift the moment an endpoint was mapped.
     """
     try:
-        from wildbridge_groundstation.transport import _COMMAND_MAP, _SPECIAL_SENDERS
+        from wildbridge_groundstation.transport import (
+            _COMMAND_MAP,
+            _SPECIAL_SENDERS,
+            _TELEMETRY_HANDLERS,
+            decode_wildbridge_status,
+        )
     except ImportError:
-        return {"available": False, "endpoints": []}
-    return {"available": True, "endpoints": sorted(set(_COMMAND_MAP) | set(_SPECIAL_SENDERS))}
+        return {"available": False, "endpoints": [], "streamed": []}
+
+    # Reads are not commands. MAVLink streams state rather than answering a poll, so an endpoint
+    # that only reports something is covered when its value is on the telemetry stream -- not by
+    # inventing a command to ask for it. Reporting those as simply absent conflated "we cannot do
+    # this" with "we do this a different way".
+    streamed = set(decode_wildbridge_status(bytes(75)))
+    streamed |= {
+        "location",
+        "altitude",
+        "attitude",
+        "speed",
+        "heading",
+        "batteryLevel",
+        "satelliteCount",
+        "flightMode",
+        "isRecording",
+        "zoomRatio",
+        "homeLocation",
+        "remainingFlightTime",
+        "waypointReached",
+        "waypointSeq",
+        "gimbalAttitude",
+        "gimbalJointAttitude",
+        "lrfDistance",
+        "distanceToHome",
+    }
+    streamed |= set(_TELEMETRY_HANDLERS)
+    return {
+        "available": True,
+        "endpoints": sorted(set(_COMMAND_MAP) | set(_SPECIAL_SENDERS)),
+        "streamed": sorted(k for k in streamed if not k.startswith("_")),
+    }
 
 
 def make_drone(name, ip=None):
