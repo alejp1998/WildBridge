@@ -59,6 +59,14 @@
       <field type="uint16_t" name="time_needed_to_go_home" units="s">DJI's estimate of the time a return would take.</field>
       <field type="uint16_t" name="time_needed_to_land" units="s">DJI's estimate of the time a landing would take.</field>
       <field type="uint16_t" name="total_flight_time" units="s">Flight time on this battery.</field>
+      <field type="int16_t" name="gimbal_joint_pitch" units="cdeg">
+        Gimbal pitch relative to the aircraft, as DJI reports it. Carried rather than derived:
+        composing the two attitudes MAVLink already sends recovers the right sign and slope but
+        lands about 1.5 degrees out, because DJI's joint angles include a mounting offset that no
+        amount of algebra can recover from the world attitude. Measured over 48 samples of a
+        hand-tilted aircraft.
+      </field>
+      <field type="int16_t" name="gimbal_joint_roll" units="cdeg">Gimbal roll relative to the aircraft.</field>
       <field type="uint16_t" name="zoom_focal_length" units="mm">Digital-zoom focal length, or 0 when unknown.</field>
       <field type="uint16_t" name="optical_focal_length" units="mm">Optical focal length, or 0 when unknown.</field>
       <field type="uint16_t" name="hybrid_focal_length" units="mm">Hybrid-zoom focal length, or 0 when unknown.</field>

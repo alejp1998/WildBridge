@@ -59,7 +59,7 @@ internal object MavlinkCrc {
         MavlinkMsgId.GIMBAL_DEVICE_ATTITUDE_STATUS to 137,
         MavlinkMsgId.DISTANCE_SENSOR to 85,
         // Generated from wildbridge.xml with pymavlink's mavgen, not computed by hand.
-        MavlinkMsgId.WILDBRIDGE_STATUS to 135,
+        MavlinkMsgId.WILDBRIDGE_STATUS to 216,
         MavlinkMsgId.PARAM_REQUEST_LIST to 159,
         MavlinkMsgId.MISSION_REQUEST_LIST to 132
     )

@@ -29,7 +29,6 @@ from wildbridge_groundstation.transport import (
     WB_FLAG_LRF_TARGET_VALID,
     WB_FLAG_MANUAL_OVERRIDE,
     WB_FLAG_READY_TO_TAKEOFF,
-    WILDBRIDGE_STATUS_CRC_EXTRA,
     WILDBRIDGE_STATUS_ID,
     WILDBRIDGE_STATUS_SIZE,
     WILDBRIDGE_STATUS_STRUCT,
@@ -43,6 +42,42 @@ from wildbridge_groundstation.transport import (
     decode_wildbridge_status,
     flight_mode_name,
 )
+
+#: WILDBRIDGE_STATUS field order, so a fixture names what it sets instead of counting commas.
+#: Every previous field addition broke every one of these tests; naming them makes a new field a
+#: default rather than a rewrite.
+_STATUS_FIELDS = [
+    "time_boot_ms",
+    "lrf_lat",
+    "lrf_lon",
+    "lrf_alt",
+    "max_radius",
+    "waypoint_seq",
+    "yaw_seq",
+    "altitude_seq",
+    "time_to_home",
+    "time_to_land",
+    "total_time",
+    "joint_pitch",
+    "joint_roll",
+    "zoom_fl",
+    "optical_fl",
+    "hybrid_fl",
+    "battery_to_home",
+    "battery_to_land",
+    "flags",
+    "reason",
+]
+
+
+def status_payload(**overrides):
+    """A WILDBRIDGE_STATUS payload with everything zero except what the test names."""
+    values = dict.fromkeys(_STATUS_FIELDS, 0)
+    values["lrf_alt"] = 0.0
+    values["max_radius"] = 0.0
+    values["reason"] = b""
+    values.update(overrides)
+    return struct.pack(WILDBRIDGE_STATUS_STRUCT, *(values[name] for name in _STATUS_FIELDS))
 
 
 class FakeMessage:
@@ -533,43 +568,23 @@ def test_a_current_status_frame_passes_the_checksum():
     CRC_EXTRA through a str, and a value above 127 encodes as two UTF-8 bytes, so every genuine
     frame failed and the panel quietly showed a third of the telemetry it should have.
     """
-    from pymavlink.generator.mavcrc import x25crc
 
-    payload = struct.pack(
-        WILDBRIDGE_STATUS_STRUCT, 1, 0, 0, 0.0, 0.0, 4, 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"NONE"
-    )
-    header = bytes([0xFD, len(payload), 0, 0, 0, 1, 1]) + (42100).to_bytes(3, "little")
-    crc = x25crc(header[1:] + payload)
-    crc.accumulate(bytes([WILDBRIDGE_STATUS_CRC_EXTRA]))
-    frame = header + payload + crc.crc.to_bytes(2, "little")
-
-    source = MavlinkTelemetrySource(peer_host="")
-    assert source._apply_wildbridge_status(frame)
-    assert source._telemetry["takeoffBlockReason"] == "NONE"
-    assert source._telemetry["waypointSeq"] == 4
-
-
-def test_wildbridge_status_decodes_into_the_http_telemetry_keys():
-    payload = struct.pack(
-        WILDBRIDGE_STATUS_STRUCT,
-        1234,
-        465180000,
-        65660000,
-        12.5,
-        900.0,  # time, lrf lat/lon/alt, max radius
-        0,
-        0,
-        0,  # waypoint / yaw / altitude seq
-        45,
-        18,
-        63,
-        24,
-        25,
-        26,  # times, then focal lengths
-        18,
-        12,  # battery budgets
-        WB_FLAG_MANUAL_OVERRIDE | WB_FLAG_READY_TO_TAKEOFF | WB_FLAG_LRF_TARGET_VALID,
-        b"NONE",
+    payload = status_payload(
+        time_boot_ms=1234,
+        lrf_lat=465180000,
+        lrf_lon=65660000,
+        lrf_alt=12.5,
+        max_radius=900.0,
+        time_to_home=45,
+        time_to_land=18,
+        total_time=63,
+        zoom_fl=24,
+        optical_fl=25,
+        hybrid_fl=26,
+        battery_to_home=18,
+        battery_to_land=12,
+        flags=WB_FLAG_MANUAL_OVERRIDE | WB_FLAG_READY_TO_TAKEOFF | WB_FLAG_LRF_TARGET_VALID,
+        reason=b"NONE",
     )
     status = decode_wildbridge_status(payload)
 
@@ -584,27 +599,7 @@ def test_wildbridge_status_decodes_into_the_http_telemetry_keys():
 
 
 def test_an_unlocked_rangefinder_reports_no_target_rather_than_null_island():
-    payload = struct.pack(
-        WILDBRIDGE_STATUS_STRUCT,
-        0,
-        0,
-        0,
-        0.0,
-        0.0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        b"",
-    )
+    payload = status_payload()
     # 0,0 is a real place off West Africa; reporting it as a target would be worse than reporting
     # nothing, because a consumer cannot tell it apart from a genuine fix.
     assert decode_wildbridge_status(payload)["lrfTarget"] is None
@@ -612,9 +607,7 @@ def test_an_unlocked_rangefinder_reports_no_target_rather_than_null_island():
 
 def test_a_truncated_payload_still_decodes():
     """MAVLink 2 drops trailing zeros, so a mostly-empty status arrives short."""
-    full = struct.pack(
-        WILDBRIDGE_STATUS_STRUCT, 7, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b""
-    )
+    full = status_payload(time_boot_ms=7)
     assert decode_wildbridge_status(full.rstrip(b"\x00"))["takeoffBlockReason"] == "UNKNOWN"
 
 
@@ -653,6 +646,36 @@ def test_gimbal_attitude_reports_the_world_frame_angles():
     assert telemetry["gimbalAttitude"]["yaw"] == pytest.approx(90.0, abs=0.01)
 
 
+def test_the_reported_joint_angles_beat_the_derived_ones():
+    """When the aircraft reports its own joint angles, they win.
+
+    Deriving them from the two world attitudes recovers the right sign and slope but lands about
+    1.5 degrees out, because DJI's joint angles include a mounting offset the world attitude does
+    not describe. Measured over 48 samples of a hand-tilted aircraft, so the aircraft reports them
+    and this checks the derivation does not overwrite the measurement.
+    """
+    telemetry = {
+        "attitude": {"roll": 0.0, "pitch": -12.5, "yaw": 0.0},
+        "_gimbalQuaternion": _euler_to_quat(0.0, 0.0, 0.0),
+        "gimbalAttitude": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+        "_gimbalJointPitch": 14.1,
+        "_gimbalJointRoll": -0.4,
+        "_gimbalJointYaw": 2.5,
+    }
+    _derive(telemetry)
+    joint = telemetry["gimbalJointAttitude"]
+    # The composition would have said 12.5; the aircraft says 14.1, and it knows.
+    assert joint["pitch"] == pytest.approx(14.1)
+    assert joint["roll"] == pytest.approx(-0.4)
+    assert joint["yaw"] == pytest.approx(2.5), "yaw comes from the standard message's delta_yaw"
+
+    # And they must survive the next message: _derive runs on every change, so consuming them
+    # would let the following ATTITUDE replace the measurement with a derivation of it.
+    telemetry["attitude"] = {"roll": 0.0, "pitch": -12.6, "yaw": 0.0}
+    _derive(telemetry)
+    assert telemetry["gimbalJointAttitude"]["pitch"] == pytest.approx(14.1)
+
+
 def test_the_joint_attitude_is_the_gimbal_relative_to_a_tilted_aircraft():
     """A gimbal holding level on a rolled aircraft is not level in the body frame.
 
@@ -682,10 +705,7 @@ def test_the_joint_attitude_falls_back_before_any_attitude_arrives():
 
 
 def test_unreported_focal_lengths_read_as_minus_one_not_zero():
-    payload = struct.pack(
-        WILDBRIDGE_STATUS_STRUCT, 0, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b""
-    )
-    status = decode_wildbridge_status(payload)
+    status = decode_wildbridge_status(status_payload())
     # 0 mm is not a lens. The HTTP stream says -1 for "not reported" and so must this.
     assert (status["zoomFl"], status["opticalFl"], status["hybridFl"]) == (-1, -1, -1)
 

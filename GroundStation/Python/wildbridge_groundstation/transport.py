@@ -275,6 +275,9 @@ def _from_gimbal_attitude(telemetry: dict[str, Any], msg: Any) -> bool:
     roll, pitch, yaw = _quat_to_euler_deg(quaternion)
     telemetry["gimbalAttitude"] = {"roll": roll, "pitch": pitch, "yaw": yaw}
     telemetry["_gimbalQuaternion"] = quaternion
+    delta_yaw = getattr(msg, "delta_yaw", None)
+    if delta_yaw is not None and not math.isnan(delta_yaw):
+        telemetry["_gimbalJointYaw"] = math.degrees(delta_yaw)
     return True
 
 
@@ -315,8 +318,8 @@ _TELEMETRY_HANDLERS: dict[str, Callable[[dict[str, Any], Any], bool]] = {
 WILDBRIDGE_STATUS_ID = 42100
 #: mavgen's unpacker format for WILDBRIDGE_STATUS, copied from the generated dialect rather than
 #: worked out by hand, and pinned by a test that regenerates it from the XML.
-WILDBRIDGE_STATUS_STRUCT = "<IiiffIIIHHHHHHBBB24s"
-WILDBRIDGE_STATUS_SIZE = 71
+WILDBRIDGE_STATUS_STRUCT = "<IiiffIIIHHHhhHHHBBB24s"
+WILDBRIDGE_STATUS_SIZE = 75
 
 WB_FLAG_MANUAL_OVERRIDE = 1
 WB_FLAG_READY_TO_TAKEOFF = 2
@@ -343,6 +346,8 @@ def decode_wildbridge_status(payload: bytes) -> dict[str, Any]:
         time_to_home,
         time_to_land,
         total_time,
+        joint_pitch,
+        joint_roll,
         zoom_fl,
         optical_fl,
         hybrid_fl,
@@ -362,6 +367,12 @@ def decode_wildbridge_status(payload: bytes) -> dict[str, Any]:
         "timeNeededToGoHome": time_to_home,
         "timeNeededToLand": time_to_land,
         "totalTime": total_time,
+        # DJI's own joint angles, not a derivation. Composing the two attitudes MAVLink already
+        # carries recovers the right sign and slope but lands ~1.5 degrees out, because the joint
+        # angles include a mounting offset the world attitude does not describe -- measured over a
+        # hand-tilted sweep of a real aircraft.
+        "_gimbalJointPitch": joint_pitch / 100.0,
+        "_gimbalJointRoll": joint_roll / 100.0,
         # The wire uses 0 for "the payload does not report this"; the HTTP stream uses -1, and
         # a consumer switching wires should not see a focal length appear out of nowhere.
         "zoomFl": zoom_fl or -1,
@@ -411,34 +422,46 @@ def _derive(telemetry: dict[str, Any]) -> None:
         telemetry.setdefault("distanceToHome", 0.0)
 
 
-#: Sign of the derived joint attitude relative to DJI's convention.
+#: Sign of the derived joint attitude, for an aircraft that does not report its own.
 #:
-#: The composition below is the gimbal's rotation expressed in the aircraft's frame, which is
-#: what "joint angle" means. Whether DJI reports that or its negation is *not established*: the
-#: one comparison available was taken from two samples a few seconds apart on a stationary
-#: aircraft, which is not evidence of a sign. So this stays +1 -- the mathematically derived
-#: value -- rather than carrying a negation justified by a mismatched pair of readings.
-#:
-#: Settling it takes one flight: tilt the aircraft, read gimbalJointAttitude on both wires at the
-#: same instant, and if they are mirrored, flip this to -1.0. It is a single constant precisely so
-#: that is a one-line change rather than an archaeology exercise.
+#: Settled by measurement rather than left open: a hand-tilted sweep of a real aircraft, 48
+#: samples with the gimbal stabilising, fitted DJI's pitch against this composition at a slope of
+#: +1.03. The sign is positive, and what remains is a constant offset of about 1.5 degrees, which
+#: is why the aircraft now reports its joint angles directly and this is only a fallback.
 GIMBAL_JOINT_SIGN = 1.0
 
 
 def _derive_gimbal_joint(telemetry: dict[str, Any]) -> None:
-    """Recover the gimbal's angle relative to the aircraft from two world-frame attitudes.
+    """Assemble the gimbal's attitude relative to the aircraft.
 
-    DJI reports both, MAVLink's gimbal message carries only the world-frame one, and the
-    difference is a rotation rather than a subtraction: q_joint = q_body^-1 * q_world. Composing
-    them is exact, where subtracting the euler angles is only correct while the aircraft is
-    close to level -- which is precisely when it does not matter.
+    Two messages carry the halves. WILDBRIDGE_STATUS reports the pitch and roll DJI itself
+    reports, because composing the two world attitudes recovers the right sign and slope but
+    lands about 1.5 degrees out -- the joint angles include a mounting offset the world attitude
+    does not describe. The standard gimbal message carries the yaw as delta_yaw, which is exactly
+    what that field means, so there is no reason to duplicate it.
+
+    The composition below stays as a fallback for an aircraft that reports neither.
     """
+    # Read, not popped. This runs after every message that changes anything, so consuming the
+    # reported values meant the next ATTITUDE arriving replaced a measurement with the derivation
+    # of it -- the panel showed 0.1 where the aircraft had plainly said 1.6.
+    pitch = telemetry.get("_gimbalJointPitch")
+    roll = telemetry.get("_gimbalJointRoll")
+    yaw = telemetry.get("_gimbalJointYaw")
+
+    if pitch is not None and roll is not None:
+        telemetry["gimbalJointAttitude"] = {
+            "roll": roll,
+            "pitch": pitch,
+            "yaw": yaw if yaw is not None else 0.0,
+        }
+        return
+
     quaternion = telemetry.get("_gimbalQuaternion")
     attitude = telemetry.get("attitude")
     if quaternion is None:
         return
     if not attitude:
-        # No aircraft attitude yet; the gimbal's own attitude is the best available answer.
         telemetry["gimbalJointAttitude"] = dict(telemetry.get("gimbalAttitude", {}))
         return
 
@@ -447,11 +470,13 @@ def _derive_gimbal_joint(telemetry: dict[str, Any]) -> None:
         float(attitude.get("pitch", 0.0)),
         float(attitude.get("yaw", 0.0)),
     )
-    roll, pitch, yaw = _quat_to_euler_deg(_quat_mul(_quat_conjugate(body), quaternion))
+    derived_roll, derived_pitch, derived_yaw = _quat_to_euler_deg(
+        _quat_mul(_quat_conjugate(body), quaternion)
+    )
     telemetry["gimbalJointAttitude"] = {
-        "roll": roll * GIMBAL_JOINT_SIGN,
-        "pitch": pitch * GIMBAL_JOINT_SIGN,
-        "yaw": yaw * GIMBAL_JOINT_SIGN,
+        "roll": derived_roll * GIMBAL_JOINT_SIGN,
+        "pitch": derived_pitch * GIMBAL_JOINT_SIGN,
+        "yaw": yaw if yaw is not None else derived_yaw * GIMBAL_JOINT_SIGN,
     }
 
 
@@ -1008,7 +1033,7 @@ SETTING_PARAM_ENDPOINTS = {
 
 #: CRC_EXTRA for WILDBRIDGE_STATUS, from wildbridge.xml. Changes whenever the fields do, which is
 #: what lets a frame from a mismatched build be recognised rather than misread.
-WILDBRIDGE_STATUS_CRC_EXTRA = 135
+WILDBRIDGE_STATUS_CRC_EXTRA = 216
 
 
 def _checksum_ok(data: bytes) -> bool:

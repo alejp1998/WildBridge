@@ -230,6 +230,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
          * source, the MediaMTX address — have no honest float encoding. Those stay on HTTP until
          * they earn a proper home, rather than being smuggled through as magic numbers.
          */
+        /** Beyond this, a reported gimbal angle is DJI's unset marker rather than a direction. */
+        private const val MAX_PLAUSIBLE_GIMBAL_DEG = 200.0
+
         private const val PARAM_RTH_ALTITUDE = "WB_RTH_ALT"
         private const val PARAM_MAX_HEIGHT = "WB_MAX_HEIGHT"
         private const val PARAM_MAX_DISTANCE = "WB_MAX_DIST"
@@ -3804,8 +3807,24 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private fun getLocation3D(): LocationCoordinate3D = location3DKey.get(LocationCoordinate3D(0.0, 0.0, .0))
     private fun getAltitude(): Double = altitudeKey.get(0.0)
     private fun getSatelliteCount(): Int = satelliteCountKey.get(-1)
-    private fun getGimbalAttitude(): Attitude = gimbalAttitudeKey.get(Attitude(0.0, 0.0, 0.0))
-    private fun getGimbalJointAttitude(): Attitude = gimbalJointAttitudeKey.get(Attitude(0.0, 0.0, 0.0))
+    private fun getGimbalAttitude(): Attitude = sanitisedAttitude(gimbalAttitudeKey.get())
+    private fun getGimbalJointAttitude(): Attitude = sanitisedAttitude(gimbalJointAttitudeKey.get())
+
+    /**
+     * A gimbal attitude with DJI's unset marker replaced by zero.
+     *
+     * When the gimbal saturates -- the aircraft tilted past what it can compensate for -- DJI
+     * reports 6553.5 on the affected axis, which is 65535/10 and not an angle. Publishing it
+     * unchanged put a 6553-degree pitch on the telemetry stream, where anything reading it as a
+     * number took it seriously. A sweep of the aircraft by hand produced it in 23 of 91 samples,
+     * so this is the normal case at the edges of travel rather than a rare fault.
+     */
+    private fun sanitisedAttitude(attitude: Attitude?): Attitude {
+        if (attitude == null) return Attitude(0.0, 0.0, 0.0)
+        fun axis(value: Double?): Double =
+            if (value == null || kotlin.math.abs(value) > MAX_PLAUSIBLE_GIMBAL_DEG) 0.0 else value
+        return Attitude(axis(attitude.pitch), axis(attitude.roll), axis(attitude.yaw))
+    }
     private fun getHeading(): Double = compassHeadKey.get(0.0)
     private fun getHomeLocation(): LocationCoordinate2D = homeLocationKey.get(LocationCoordinate2D())
     private fun getSpeed(): Velocity3D = flightSpeedKey.get(Velocity3D(0.0, 0.0, 0.0))
@@ -4036,6 +4055,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         val attitude = getAttitude()
         val altitudeAgl = getAltitude()
         val gimbalAttitude = getGimbalAttitude()
+        val gimbalJoint = getGimbalJointAttitude()
         val goHomeInfo = goHomeAssessmentProcessor.value
         val lrfTarget = lrfTargetLocation
 
@@ -4069,7 +4089,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             gimbalRollDeg = gimbalAttitude.roll,
             gimbalPitchDeg = gimbalAttitude.pitch,
             gimbalYawDeg = gimbalAttitude.yaw,
-            gimbalJointYawDeg = getGimbalJointAttitude().yaw,
+            gimbalJointPitchDeg = gimbalJoint.pitch,
+            gimbalJointRollDeg = gimbalJoint.roll,
+            gimbalJointYawDeg = gimbalJoint.yaw,
             zoomFocalLengthMm = getCameraZoomFocalLength(),
             opticalFocalLengthMm = getCameraOpticalFocalLength(),
             hybridFocalLengthMm = getCameraHybridFocalLength(),

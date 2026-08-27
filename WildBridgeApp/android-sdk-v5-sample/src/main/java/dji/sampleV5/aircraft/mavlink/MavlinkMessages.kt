@@ -510,6 +510,8 @@ internal object MavlinkMessages {
             .u16(snapshot.timeNeededToGoHomeS.coerceIn(0, 0xFFFF))
             .u16(snapshot.timeNeededToLandS.coerceIn(0, 0xFFFF))
             .u16(snapshot.totalFlightTimeS.coerceIn(0, 0xFFFF))
+            .i16(degToCentidegrees(snapshot.gimbalJointPitchDeg))
+            .i16(degToCentidegrees(snapshot.gimbalJointRollDeg))
             .u16(snapshot.zoomFocalLengthMm.coerceIn(0, 0xFFFF))
             .u16(snapshot.opticalFocalLengthMm.coerceIn(0, 0xFFFF))
             .u16(snapshot.hybridFocalLengthMm.coerceIn(0, 0xFFFF))
@@ -519,6 +521,10 @@ internal object MavlinkMessages {
             .chars(snapshot.takeoffBlockReason, TAKEOFF_REASON_LENGTH)
             .build()
     }
+
+    /** Degrees to centidegrees, clamped to the int16 the wire field is. */
+    private fun degToCentidegrees(degrees: Double): Int =
+        (degrees * 100).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
 
     /** ZYX euler angles in degrees to a MAVLink attitude quaternion. */
     private fun eulerToQuaternion(

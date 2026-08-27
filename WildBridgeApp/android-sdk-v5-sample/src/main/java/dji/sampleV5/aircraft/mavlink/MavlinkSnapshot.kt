@@ -71,7 +71,16 @@ internal data class MavlinkSnapshot(
     val gimbalPitchDeg: Double = 0.0,
     val gimbalYawDeg: Double = 0.0,
 
-    /** Gimbal yaw relative to the aircraft body, degrees. DJI calls this the joint angle. */
+    /**
+     * Gimbal attitude relative to the aircraft body, degrees. DJI calls these the joint angles.
+     *
+     * Reported rather than left to be derived. Composing the world attitude with the aircraft's
+     * recovers the right sign and slope, but sits about 1.5 degrees off what DJI reports --
+     * measured over a hand-tilted sweep -- because the joint angles carry a mounting offset the
+     * world attitude does not describe.
+     */
+    val gimbalJointPitchDeg: Double = 0.0,
+    val gimbalJointRollDeg: Double = 0.0,
     val gimbalJointYawDeg: Double = 0.0,
 
     /** Focal lengths in millimetres, or 0 when the payload does not report them. */
