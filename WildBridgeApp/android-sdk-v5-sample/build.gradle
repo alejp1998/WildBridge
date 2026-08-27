@@ -1,6 +1,11 @@
 apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android'
-apply plugin: 'kotlin-kapt'
+
+kotlin {
+    compilerOptions {
+        // jvmTarget defaults to android.compileOptions.targetCompatibility (1.8).
+        freeCompilerArgs.add("-jvm-default=no-compatibility")
+    }
+}
 
 android {
     def wildBridgeRepoRoot = rootProject.projectDir.parentFile.parentFile
@@ -44,15 +49,15 @@ android {
     def gmapApiKey = resolveSecret("GMAP_API_KEY")
     def maplibreToken = resolveSecret("MAPLIBRE_TOKEN")
 
-    namespace 'dji.sampleV5.aircraft'
-    compileSdkVersion Integer.parseInt(project.ANDROID_COMPILE_SDK_VERSION)
+    namespace = 'dji.sampleV5.aircraft'
+    compileSdk = Integer.parseInt(project.ANDROID_COMPILE_SDK_VERSION)
 
     defaultConfig {
-        applicationId "com.dji.sampleV5.aircraft"
-        minSdkVersion Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
-        targetSdkVersion Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
-        versionCode 1
-        versionName "1.0"
+        applicationId = "com.dji.sampleV5.aircraft"
+        minSdk = Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
+        targetSdk = Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
+        versionCode = 1
+        versionName = "1.0"
         buildConfigField 'String', 'WILDBRIDGE_BUILD_TIME', "\"${wildBridgeBuildTime}\""
         buildConfigField 'String', 'WILDBRIDGE_GIT_SHA', "\"${wildBridgeGitSha}\""
         buildConfigField 'String', 'WILDBRIDGE_GIT_STATE', "\"${wildBridgeGitDirty}\""
@@ -93,20 +98,22 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled true
-            shrinkResources false
+            minifyEnabled = true
+            shrinkResources = false
             //signingConfig signingConfigs.release
         }
         debug {
-            minifyEnabled false
-            shrinkResources false
+            minifyEnabled = false
+            shrinkResources = false
             //signingConfig signingConfigs.release
         }
     }
 
-    applicationVariants.all { variant ->
-        variant.outputs.all {
-            outputFileName = "sample-${variant.name}.apk"
+    androidComponents {
+        onVariants(selector().all()) { variant ->
+            variant.outputs.forEach { output ->
+                output.outputFileName.set("sample-${variant.name}.apk")
+            }
         }
     }
 
@@ -115,16 +122,16 @@ android {
         // which conflicts with other libraries — keep only one copy
         pickFirst 'lib/arm64-v8a/libc++_shared.so'
         pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        // DJI SDK ships uncompressed .so files; AGP 9 requires this via packagingOptions
+        // instead of android:extractNativeLibs in the manifest.
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-
-    kotlinOptions {
-        jvmTarget = "1.8"
-        freeCompilerArgs += ["-jvm-default=no-compatibility"]
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
 
     // Disable lint
@@ -196,7 +203,6 @@ dependencies {
     implementation deps.rx3Kt
     implementation deps.dom
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
-    kapt deps.glidecompiler
     implementation deps.lynx
 
     // WebSocket library for formation control

@@ -44,8 +44,7 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true"
-        android:extractNativeLibs="true"
-        tools:replace="android:extractNativeLibs,android:usesCleartextTraffic"
+        tools:replace="android:usesCleartextTraffic"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
 
         <meta-data

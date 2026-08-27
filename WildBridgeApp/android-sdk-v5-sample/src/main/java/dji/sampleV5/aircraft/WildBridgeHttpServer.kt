@@ -580,7 +580,10 @@ internal class SimpleHttpServer(
             isRunning = false
             runCatching {
                 serverSocket?.close()
-                executor.shutdown()
+                serverSocket = null
+                // Interrupt, don't just drain: a worker blocked in readLine() on a stale client
+                // would otherwise keep the server (and its host activity) alive past destroy.
+                executor.shutdownNow()
             }.onFailure { error ->
                 Log.e("SimpleHttpServer", "Error stopping server: ${error.message}", error)
             }

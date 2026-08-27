@@ -3836,6 +3836,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             webRTCStreamer?.listener = null
             stopActiveStreaming()
             discoveryManager.stopDiscoveryServer()
+            // Must stop the HTTP server, not just drop the reference: its accept thread and
+            // worker pool hold this activity via the command handler. Without stop() the
+            // threads keep the destroyed activity alive forever (LeakCanary: recurring
+            // WildBridgeDefaultLayoutActivity + MediaVM leaks via SimpleHttpServer).
+            httpServer?.stop()
             httpServer = null
             telemetryServer = null
             webRTCStreamer = null

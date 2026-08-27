@@ -1,27 +1,26 @@
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
-apply plugin: 'kotlin-kapt'
+
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-jvm-default=no-compatibility")
+    }
+}
 
 android {
     namespace 'dji.v5.ux'
-    compileSdkVersion Integer.parseInt(project.ANDROID_COMPILE_SDK_VERSION)
+    compileSdk = Integer.parseInt(project.ANDROID_COMPILE_SDK_VERSION)
 
-    resourcePrefix "uxsdk_"
+    resourcePrefix = "uxsdk_"
     defaultConfig {
-        minSdkVersion Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
-        targetSdkVersion Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
-        versionCode 1
-        versionName "1.0"
+        minSdk = Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
+        targetSdk = Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
+        versionCode = 1
+        versionName = "1.0"
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-
-    kotlinOptions{
-        jvmTarget = "1.8"
-        freeCompilerArgs += ["-jvm-default=no-compatibility"]
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
 
     lintOptions {
@@ -31,6 +30,7 @@ android {
 
     buildFeatures {
         viewBinding true
+        buildConfig true
     }
 }
 

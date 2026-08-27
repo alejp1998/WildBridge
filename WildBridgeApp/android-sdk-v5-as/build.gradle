@@ -5,15 +5,15 @@ buildscript {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://maven.fabric.io/public' }
-        maven { url 'https://plugins.gradle.org/m2/' }
-        maven { url 'https://dl.bintray.com/kotlin/kotlin-eap' }
+        maven { url = 'https://maven.fabric.io/public' }
+        maven { url = 'https://plugins.gradle.org/m2/' }
+        maven { url = 'https://dl.bintray.com/kotlin/kotlin-eap' }
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.13.2'
+        classpath 'com.android.tools.build:gradle:9.3.2'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$KOTLIN_VERSION"
-        classpath 'com.diffplug.spotless:spotless-plugin-gradle:7.0.4'
+        classpath 'com.diffplug.spotless:spotless-plugin-gradle:8.10.0'
         classpath 'io.gitlab.arturbosch.detekt:detekt-gradle-plugin:1.23.8'
     }
 }
@@ -24,14 +24,14 @@ apply plugin: 'io.gitlab.arturbosch.detekt'
 allprojects {
     repositories {
         maven {
-            url REPO_MAVEN2
+            url = REPO_MAVEN2
         }
         google()
         mavenCentral()
         maven {
-            url KOTLIN_MAVEN
+            url = KOTLIN_MAVEN
         }
-        maven { url JITPACK_MAVEN_URL }
+        maven { url = JITPACK_MAVEN_URL }
         repositories {
             flatDir {
                 dirs new File(rootProject.projectDir.getAbsolutePath() + '/libs')
@@ -95,10 +95,10 @@ tasks.register('detektWildBridge', detektTaskClass) {
     setSource(files(sampleJavaSource))
     include wildBridgeSourceIncludes
     reports {
-        html.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.html"))
-        xml.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.xml"))
-        txt.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.txt"))
-        sarif.outputLocation.set(file("$buildDir/reports/detekt/wildbridge.sarif"))
+        html.outputLocation.set(new File("$buildDir/reports/detekt/wildbridge.html"))
+        xml.outputLocation.set(new File("$buildDir/reports/detekt/wildbridge.xml"))
+        txt.outputLocation.set(new File("$buildDir/reports/detekt/wildbridge.txt"))
+        sarif.outputLocation.set(new File("$buildDir/reports/detekt/wildbridge.sarif"))
     }
 }
 
@@ -113,10 +113,10 @@ tasks.register('detektDji', detektTaskClass) {
     include '**/*.kt'
     exclude wildBridgeSourceIncludes
     reports {
-        html.outputLocation.set(file("$buildDir/reports/detekt/dji.html"))
-        xml.outputLocation.set(file("$buildDir/reports/detekt/dji.xml"))
-        txt.outputLocation.set(file("$buildDir/reports/detekt/dji.txt"))
-        sarif.outputLocation.set(file("$buildDir/reports/detekt/dji.sarif"))
+        html.outputLocation.set(new File("$buildDir/reports/detekt/dji.html"))
+        xml.outputLocation.set(new File("$buildDir/reports/detekt/dji.xml"))
+        txt.outputLocation.set(new File("$buildDir/reports/detekt/dji.txt"))
+        sarif.outputLocation.set(new File("$buildDir/reports/detekt/dji.sarif"))
     }
 }
 
