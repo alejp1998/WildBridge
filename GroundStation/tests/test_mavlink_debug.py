@@ -85,6 +85,21 @@ def test_fields_on_one_wire_are_reported_not_compared():
     assert next(r["status"] for r in rows if r["key"] == "onlyOnMavlink") == "mavlinkOnly"
 
 
+def test_a_redundant_http_twin_does_not_read_as_http_only():
+    """HTTP reports battery under two names; MAVLink uses one.
+
+    The value is the same 36% on both wires, so the HTTP-only twin must fold into the shared
+    batteryLevel row rather than surface as a field MAVLink is missing.
+    """
+    pairs = [
+        ({"batteryLevel": 36, "remainingCharge": 36}, {"batteryLevel": 36}),
+    ]
+    rows = _rows(pairs)
+    battery = next(row for row in rows if row["key"] == "batteryLevel")
+    assert battery["status"] == "agree"
+    assert all(row["key"] != "remainingCharge" for row in rows)
+
+
 def test_disagreements_sort_first():
     pairs = [
         (

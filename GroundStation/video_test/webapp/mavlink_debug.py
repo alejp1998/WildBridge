@@ -27,6 +27,13 @@ IDLE_TIMEOUT_S = 120.0
 #: Fields where a small numeric difference is sampling noise rather than disagreement.
 NUMERIC_TOLERANCE = 1.0
 
+#: Keys that name the same value on the two wires. The comparison is the project's gap-finder,
+#: so a value HTTP reports twice under two names must not read as a field MAVLink is missing.
+KEY_ALIASES = {
+    # HTTP reports battery as both batteryLevel and remainingCharge; MAVLink uses batteryLevel.
+    "remainingCharge": "batteryLevel",
+}
+
 #: How many (HTTP, MAVLink) pairs each comparison samples, and the pause between them.
 #:
 #: Each wire is a cache of its latest frame, updated at its own message rate, so a single read is
@@ -93,10 +100,10 @@ def _rows(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, 
         for key, value in http.items():
             if not key.startswith("_"):
                 # Working state the transport keeps for itself, not telemetry.
-                http_by_key.setdefault(key, []).append(value)
+                http_by_key.setdefault(KEY_ALIASES.get(key, key), []).append(value)
         for key, value in mavlink.items():
             if not key.startswith("_"):
-                mavlink_by_key.setdefault(key, []).append(value)
+                mavlink_by_key.setdefault(KEY_ALIASES.get(key, key), []).append(value)
 
     rows = []
     for key in sorted(set(http_by_key) | set(mavlink_by_key)):
