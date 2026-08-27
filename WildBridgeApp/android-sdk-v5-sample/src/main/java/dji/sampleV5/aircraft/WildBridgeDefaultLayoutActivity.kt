@@ -572,10 +572,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     // the telemetry shows flightMode=UNKNOWN, satelliteCount=-1, no camera frames.
     // The signature (UNKNOWN mode + no GPS) only appears in the true quiet state, so a short
     // debounce is safe — just enough to survive a transient frame loss.
-    private val idleDetectDebounceMs = 5_000L
+    // Short enough that the idle notice does not feel laggy, long enough that a transient
+    // flight-mode blip does not flash it.
+    private val idleDetectDebounceMs = 1_500L
     @Volatile private var cachedFlightMode: FlightMode = FlightMode.UNKNOWN
     @Volatile private var cachedSatelliteCount = -1
     @Volatile private var idleDetectArmed = false
+    @Volatile private var idleOverlayVisible = false
     private val showIdleOverlayRunnable = Runnable { onIdleDetectDebounceElapsed() }
 
 
@@ -1476,6 +1479,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             maxTemp
         }.onFailure { Log.e(TAG_THERMAL, "[capture read] error: ${it.message}", it) }.getOrNull()
     }
+
+    override fun hasThermalCamera(): Boolean = runCatching {
+        // The same key the temperature read uses: it resolves only when a thermal lens is
+        // actually present, so this is the honest "would Temp/Thermal do anything" probe.
+        CameraKey.KeyThermalGlobalMaxTemperature
+            .createCamera(thermalCameraIndex(), CameraLensType.CAMERA_LENS_THERMAL)
+            .get() != null
+    }.getOrDefault(false)
     // ==================== End Thermal max-temperature readout ====================
 
     private fun setupAircraftConnectionListener() {
@@ -2931,9 +2942,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
     /**
      * Detects the aircraft sitting idle on the ground (motors off, connected, not airborne)
-     * and offers to exit the low-power / eco state by starting the motors at ground idle
-     * (the programmatic equivalent of the manual both-sticks-down-and-inwards gesture).
-     * The overlay is delayed by [idleDetectDebounceMs] so transient states never flash it.
+     * and shows a notice telling the pilot to wake it with the manual both-sticks-down-and-
+     * inwards gesture (there is no reliable app-side motor-start on every airframe). The overlay
+     * is delayed by [idleDetectDebounceMs] so transient states never flash it.
      */
     private fun setupAircraftIdleMonitor() {
         cachedFlightMode = KeyManager.getInstance().getValue(flightModeKey) ?: FlightMode.UNKNOWN
@@ -2946,7 +2957,6 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 reevaluateAircraftIdle()
             }
         }
-        findViewById<Button>(R.id.button_exit_idle_mode)?.setOnClickListener { confirmExitIdleMode() }
         reevaluateAircraftIdle()
     }
 
@@ -2962,11 +2972,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
     private fun reevaluateAircraftIdle() {
         val isIdle = isAircraftIdle()
-        if (isIdle && !idleDetectArmed) {
+        if (isIdle && !idleDetectArmed && !idleOverlayVisible) {
             idleDetectArmed = true
             Log.i(TAG, "Aircraft idle candidate (${idleStateSummary()}) — arming $idleDetectDebounceMs ms debounce")
             mainHandler.postDelayed(showIdleOverlayRunnable, idleDetectDebounceMs)
-        } else if (!isIdle && idleDetectArmed) {
+        } else if (!isIdle) {
+            // Hide whenever the aircraft leaves the idle signature, even if the debounce already
+            // fired — otherwise a brief false idle would leave the overlay stuck on screen. The
+            // overlay re-arms on the next idle, so a recurring idle shows again.
             idleDetectArmed = false
             mainHandler.removeCallbacks(showIdleOverlayRunnable)
             showIdleOverlay(false)
@@ -2983,79 +2996,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     }
 
     private fun showIdleOverlay(visible: Boolean) {
+        idleOverlayVisible = visible
         findViewById<View>(R.id.aircraft_idle_overlay)?.let { overlay ->
             overlay.visibility = if (visible) View.VISIBLE else View.GONE
         }
-    }
-
-    private fun confirmExitIdleMode() {
-        AlertDialog.Builder(this)
-            .setTitle("Exit idle mode?")
-            .setMessage(
-                "Starting the motors wakes the aircraft. VERIFY: flat safe surface, " +
-                    "propellers clear of people/objects, nobody holding it. " +
-                    "Motors will spin on confirm."
-            )
-            .setPositiveButton("WAKE UP") { _, _ -> performExitIdleMode() }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun performExitIdleMode() {
-        KeyManager.getInstance()
-            .performAction(
-                KeyTools.createKey(FlightControllerKey.KeyTurnOnTheMotor),
-                object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
-                    override fun onSuccess(result: EmptyMsg?) {
-                        mainHandler.post {
-                            Toast.makeText(
-                                this@WildBridgeDefaultLayoutActivity,
-                                "Motors started — idle mode exited",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                        Log.i(TAG, "Aircraft idle mode exited (motors started)")
-                    }
-
-                    override fun onFailure(error: IDJIError) {
-                        val code = error.errorCode()
-                        val hint = error.hint()
-                        if (code?.contains("REQUEST_HANDLER_NOT_FOUND") == true) {
-                            // This aircraft's flight controller has no app-side motor-start action
-                            // (verified on M400: FLIGHTCONTROLLER.TurnOnTheMotor:-1). The only MSDK
-                            // path that spins motors is takeoff, which must not fire from a "wake
-                            // up" button — so guide the manual CSC gesture instead.
-                            val guidance =
-                                "This aircraft doesn't support app-controlled motor start. " +
-                                    "Wake it manually: move BOTH sticks down and inwards (towards " +
-                                    "each other) — motors will spin at ground idle."
-                            mainHandler.post {
-                                Toast.makeText(
-                                    this@WildBridgeDefaultLayoutActivity,
-                                    guidance,
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                            Log.w(TAG, "Motor-start action unsupported ($code) — guiding manual wake")
-                        } else {
-                            val message =
-                                "Could not start motors (code=$code${if (hint.isNullOrEmpty()) "" else " — $hint"})"
-                            mainHandler.post {
-                                Toast.makeText(
-                                    this@WildBridgeDefaultLayoutActivity,
-                                    message,
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                            Log.e(
-                                TAG,
-                                "Failed to start motors — code=$code inner=${error.innerCode()} " +
-                                    "hint=$hint desc=${error.description()}"
-                            )
-                        }
-                    }
-                }
-            )
     }
 
     private fun setupTelemetryListeners() {
@@ -4529,6 +4473,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 MavlinkCommandOutcome.ACCEPTED,
                 resultValue = (maxTemp * 100).toInt()
             )
+        }
+
+        override fun captureThermalImage(): CommandResult {
+            // The descriptor names the per-lens files the shutter stored; downloads stay on the
+            // media surface (by name), exactly as they do over HTTP. Only the shutter is commanded
+            // here — there is no room for the descriptor in an ack.
+            val descriptor = Payload.captureThermal(mediaVM)
+                ?: return CommandResult(
+                    MavlinkCommandOutcome.FAILED, "Thermal capture produced no file"
+                )
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED, detail = descriptor)
         }
 
         override fun dropPayload(): CommandResult {

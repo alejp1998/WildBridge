@@ -213,7 +213,7 @@ internal object Mav {
      * the user range. A ground station that does not know WildBridge simply never sends them.
      *
      * USER_1 is payload aiming (relative gimbal, releasing the manual-override latch).
-     * USER_2 is payload sensing (laser rangefinder, spot temperature).
+     * USER_2 is payload sensing (laser rangefinder, spot temperature, thermal shutter).
      */
     /** MAV_DISTANCE_SENSOR_LASER. */
     const val DISTANCE_SENSOR_TYPE_LASER = 0
@@ -231,6 +231,7 @@ internal object Mav {
     /** USER_2 selectors, in param1. */
     const val USER2_LRF_MEASURE = 1f
     const val USER2_CAPTURE_TEMPERATURE = 2f
+    const val USER2_CAPTURE_THERMAL_IMAGE = 3f
 
     const val RESULT_FAILED = 4
 

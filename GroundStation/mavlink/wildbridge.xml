@@ -44,6 +44,35 @@
         <description>The aircraft is at the altitude identified by altitude_seq.</description>
       </entry>
     </enum>
+    <enum name="WILDBRIDGE_USER_1_SELECTOR">
+      <description>
+        param1 selector on MAV_CMD_USER_1 (31010). WildBridge uses the standard user-command
+        range for payload operations that have no named MAV_CMD, keeping this dialect's own
+        command ids free; the selector tells the aircraft which operation is meant. A ground
+        station that does not know WildBridge still sees a well-formed user command.
+      </description>
+      <entry value="1" name="WILDBRIDGE_USER_1_GIMBAL_RELATIVE">
+        <description>Nudge the gimbal by a delta: param2 pitch, param3 yaw (degrees).</description>
+      </entry>
+      <entry value="2" name="WILDBRIDGE_USER_1_RELEASE_MANUAL_OVERRIDE">
+        <description>Release the RC manual-override latch and resume autonomous control.</description>
+      </entry>
+    </enum>
+    <enum name="WILDBRIDGE_USER_2_SELECTOR">
+      <description>
+        param1 selector on MAV_CMD_USER_2 (31011). Payload sensing operations, for the same
+        reason as WILDBRIDGE_USER_1_SELECTOR.
+      </description>
+      <entry value="1" name="WILDBRIDGE_USER_2_LRF_MEASURE">
+        <description>Fire the laser rangefinder once; the reading surfaces on the telemetry stream.</description>
+      </entry>
+      <entry value="2" name="WILDBRIDGE_USER_2_CAPTURE_TEMPERATURE">
+        <description>Read the thermal spot temperature; result_param2 carries hundredths of a degree.</description>
+      </entry>
+      <entry value="3" name="WILDBRIDGE_USER_2_CAPTURE_THERMAL_IMAGE">
+        <description>Trip one shutter on the thermal payload, storing thermal R-JPEG plus wide/zoom when enabled.</description>
+      </entry>
+    </enum>
   </enums>
   <messages>
     <message id="42100" name="WILDBRIDGE_STATUS">

@@ -333,6 +333,7 @@ code {
 
 .grid {
   display: grid;
+  flex: 1;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   grid-auto-rows: max-content;
   align-content: start;
@@ -342,7 +343,25 @@ code {
   padding-right: 4px;
 }
 
-.grid[data-active="1"] { grid-template-columns: minmax(360px, 960px); justify-content: center; }
+/* A single video should fill the available space and scale to fit rather than
+   overflow its row (the fixed 16/9 wrap would otherwise push a scrollbar in). */
+.grid[data-active="1"] {
+  grid-template-columns: minmax(360px, 960px);
+  grid-auto-rows: 1fr;
+  justify-content: center;
+}
+
+.grid[data-active="1"] .tile {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.grid[data-active="1"] .videoWrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  aspect-ratio: auto;
+}
 .grid[data-active="2"] { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
 .grid[data-active="3"] { grid-template-columns: repeat(3, minmax(280px, 1fr)); }
 .grid[data-active="4"] { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
@@ -901,6 +920,34 @@ dd {
   color: var(--text);
   word-break: break-all;
 }
+
+.tileCaptureRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.tileCaptureRow .captureStatus {
+  flex: 1 1 auto;
+}
+.captureButtons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.captureBtn {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+.captureStatus {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+.captureStatus.ok { color: var(--good-2); }
+.captureStatus.err { color: var(--bad); }
 
 .publishGrid {
   flex: 1;

@@ -12,6 +12,9 @@ const publishHttpOnly = document.querySelector('#publishHttpOnly');
 const publishSummary = document.querySelector('#publishSummary');
 const settingsGrid = document.querySelector('#settingsGrid');
 const tileTemplate = document.querySelector('#tileTemplate');
+// Per-drone payload capabilities, from the phone's /config: name -> { hasThermal }.
+// Empty until the first successful fetch; the capture buttons stay disabled meanwhile.
+const droneCapabilities = new Map();
 const droneModal = document.querySelector('#droneModal');
 const modalCloseBtn = document.querySelector('#modalCloseBtn');
 const modalTitle = document.querySelector('#modalTitle');
@@ -124,6 +127,9 @@ const publishCatalog = [
     ['Camera Zoom', 'POST', '/send/camera/zoom', '2.0', 'Sets the camera zoom ratio directly, subject to the aircraft/camera zoom limits.'],
     ['Start Recording', 'POST', '/send/camera/startRecording', '', 'Starts camera recording on the aircraft payload.'],
     ['Stop Recording', 'POST', '/send/camera/stopRecording', '', 'Stops camera recording on the aircraft payload.'],
+    ['Capture Photo', 'POST', '/send/capture', '', 'Trips one shutter on the payload and stores to the SD card; the file is fetched later by name.'],
+    ['Capture Temperature', 'POST', '/send/captureTemperature', '', 'Reads the thermal spot temperature synchronously; no shutter, nothing stored.'],
+    ['Capture Thermal Image', 'POST', '/send/captureThermalImage', '', 'Trips one shutter on the thermal payload, storing thermal R-JPEG plus wide/zoom when enabled.'],
   ]],
   ['HTTP Waypoint And Mission', 'Higher-level navigation routes for single-waypoint and multi-waypoint movement. These commands carry coordinates in the request body, so check units before publishing from scripts.', [
     ['Goto Waypoint', 'POST', '/send/gotoWP', '55.6761,12.5683,35', 'Single lat,lon,alt waypoint command in decimal degrees and meters.'],
@@ -1011,11 +1017,44 @@ function renderVideoTiles(state) {
           openDroneModal(drone.name);
         }
       });
+      // One-shot camera test controls (photo/temp/thermal), proxied through the server to the
+      // phone's HTTP surface. Per tile, because the video wall is where a pilot looks.
+      const tileBody = tile.querySelector('.tileBody');
+      const captureRow = document.createElement('div');
+      captureRow.className = 'tileCaptureRow';
+      const captureButtons = document.createElement('span');
+      captureButtons.className = 'captureButtons';
+      const captureStatus = document.createElement('span');
+      captureStatus.className = 'captureStatus';
+      captureStatus.setAttribute('data-role', 'captureStatus');
+      for (const [action, label, tip] of [
+        ['photo', 'Photo', 'Trip one shutter on the payload'],
+        ['temperature', 'Temp', 'Read the thermal spot temperature'],
+        ['thermal', 'Thermal', 'Trip one shutter on the thermal payload'],
+      ]) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settingsApply captureBtn';
+        btn.textContent = label;
+        btn.dataset.action = action;
+        btn.dataset.tip = tip;
+        btn.title = tip;
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          captureOnDrone(drone.name, action, btn, captureStatus);
+        });
+        captureButtons.appendChild(btn);
+      }
+      captureRow.append(captureButtons, captureStatus);
+      tileBody.appendChild(captureRow);
+
       grid.appendChild(tile);
       player = new WhepPlayer(drone, tile);
       players.set(drone.name, player);
     }
     player.drone = drone;
+    updateCaptureButtons(drone, player.tile);
+    if (drone.ip && !droneCapabilities.has(drone.name)) refreshDroneCapabilities(drone, player.tile);
     player.tile.classList.toggle('ignored', !!drone.ignored);
     updateText(player.tile.querySelector('.ip'), drone.ip || 'no ip');
     const ignoreButton = player.tile.querySelector('.ignoreBtn');
@@ -1037,6 +1076,64 @@ function renderVideoTiles(state) {
         player.setStatus('awaiting relay…', drone.telemetryConnected ? 'status-warn' : 'status-bad');
       }
     }
+  }
+}
+
+async function captureOnDrone(name, action, btn, status) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  status.textContent = 'sending\u2026';
+  status.classList.remove('ok', 'err');
+  try {
+    const resp = await fetch(`/api/drones/${encodeURIComponent(name)}/capture/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const data = await resp.json();
+    const ok = resp.ok && data.ok;
+    status.textContent = ok ? (data.message || 'ok') : (data.error || `HTTP ${resp.status}`);
+    status.classList.add(ok ? 'ok' : 'err');
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+    status.classList.add('err');
+  } finally {
+    const current = getDrone(name);
+    if (current) updateCaptureButtons(current, btn.closest('.tile'));
+  }
+}
+
+// Capture buttons are gated on what the drone actually has: Photo needs a reachable phone
+// (every payload has a camera), Temp/Thermal additionally need a thermal lens, which the
+// phone reports in /config. Before that config arrives the thermal buttons stay disabled.
+function updateCaptureButtons(drone, tile) {
+  if (!tile) return;
+  const cap = droneCapabilities.get(drone.name);
+  tile.querySelectorAll('.captureBtn').forEach((btn) => {
+    const action = btn.dataset.action;
+    const needsThermal = action === 'temperature' || action === 'thermal';
+    if (needsThermal) {
+      const has = !!(cap && cap.hasThermal);
+      btn.disabled = !(drone.ip && has);
+      btn.title = has ? (btn.dataset.tip || '') : (cap ? 'No thermal payload detected' : 'Checking payload…');
+    } else {
+      btn.disabled = !drone.ip;
+      btn.title = btn.dataset.tip || '';
+    }
+  });
+}
+
+async function refreshDroneCapabilities(drone, tile) {
+  try {
+    const resp = await fetch(`/api/drones/${encodeURIComponent(drone.name)}/config`);
+    const data = await resp.json();
+    if (resp.ok && data.ok && data.config) {
+      droneCapabilities.set(drone.name, { hasThermal: !!data.config.hasThermal });
+      const current = getDrone(drone.name) || drone;
+      updateCaptureButtons(current, tile);
+    }
+  } catch {
+    // Capability stays unknown; the thermal buttons remain disabled until a later attempt.
   }
 }
 

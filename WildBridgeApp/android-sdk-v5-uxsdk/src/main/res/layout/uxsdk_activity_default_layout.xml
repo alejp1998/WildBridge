@@ -628,7 +628,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:gravity="center"
-                android:text="Motors off, GPS/camera quiet. Wake it manually (sticks down &amp; inwards) or below."
+                android:maxWidth="280dp"
+                android:text="Motors off, GPS/camera quiet. Wake it manually: move BOTH sticks down &amp; inwards (towards each other) — motors will spin at ground idle."
                 android:textColor="#FFFFFFFF"
                 android:textSize="12sp" />
 
@@ -641,17 +642,6 @@
                 android:textColor="#FFFF5252"
                 android:textSize="12sp"
                 android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/button_exit_idle_mode"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:minHeight="40dp"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:text="WAKE UP (START MOTORS)"
-                android:textSize="13sp" />
         </LinearLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>

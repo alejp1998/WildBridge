@@ -88,6 +88,9 @@ internal interface WildBridgeCommandHost {
     fun classifyCommandSource(presentedToken: String?): ControlAuthority.Source
     fun readThermalMaxTempNow(): Double?
 
+    /** Whether the connected payload has a thermal camera (spot temp + thermal shutter work). */
+    fun hasThermalCamera(): Boolean
+
     /** Keep the AutoSensing toggle in the UI in step with a command-driven change. */
     fun setAutoSensingSwitchChecked(checked: Boolean)
 }
@@ -627,6 +630,7 @@ internal class SimpleHttpServer(
         }
 
         private val jsonEndpoints = setOf(
+            "/send/capture",
             "/send/captureTemperature",
             "/send/captureThermalImage",
             "/send/listMedia"
@@ -645,10 +649,11 @@ internal class SimpleHttpServer(
         /**
          * Endpoints that answer with their own JSON rather than the plain-text command response.
          *
-         * Camera capture is two-step: capture trips one shutter and returns a descriptor naming the
-         * per-lens filenames the payload stored; the files stay on the card and are fetched by name
-         * via /send/downloadMediaByName. The temperature read takes no shutter and downloads
-         * nothing — it reads the hottest point on the thermal feed synchronously.
+         * Photo capture trips one shutter and reports the file it produced. Thermal capture is
+         * two-step: it returns a descriptor naming the per-lens filenames the payload stored; the
+         * files stay on the card and are fetched by name via /send/downloadMediaByName. The
+         * temperature read takes no shutter and downloads nothing — it reads the hottest point on
+         * the thermal feed synchronously.
          *
          * Returns null when the request is not one of these. Like every /send/ command these are
          * behind the authority latch, so the Pilot cannot drive the payload while Safety holds control.
@@ -664,6 +669,15 @@ internal class SimpleHttpServer(
                 return "{\"error\":\"REJECTED: Safety Computer is in control.\"}"
             }
             return when (request.uri) {
+                "/send/capture" -> {
+                    // Airframe-agnostic photo path: one shutter, whichever lens it came from.
+                    val file = Payload.capturePhoto(host.mediaVM)
+                    if (file != null) {
+                        "{\"captured\":true,\"file\":\"${file.fileName}\"}"
+                    } else {
+                        "{\"error\":\"Failed to capture photo\"}"
+                    }
+                }
                 "/send/captureTemperature" -> {
                     val maxTemp = host.readThermalMaxTempNow()
                     "{\"thermalMaxTemp\":${maxTemp ?: "null"}}"
@@ -754,7 +768,8 @@ internal class SimpleHttpServer(
                 "/config" -> {
                     val deviceIp = NetworkUtils.getDeviceIpAddress() ?: "unknown"
                     """{"droneName":"${host.droneName}","ipAddress":"$deviceIp","httpPort":$HTTP_PORT,""" +
-                        """"telemetryPort":$TELEMETRY_PORT,"videoMode":"whip"}"""
+                        """"telemetryPort":$TELEMETRY_PORT,"videoMode":"whip",""" +
+                        """"hasThermal":${host.hasThermalCamera()}}"""
                 }
                 "/config/settings" -> host.readSettingsJson()
                 else -> "Use POST for commands. Telemetry available on port $TELEMETRY_PORT. " +

@@ -48,6 +48,14 @@ RC_ACTIONS = {
     "/rcPairing/stop": "/send/rcPairing/stop",
 }
 
+# One-shot camera actions (no value body): trip a shutter or read the thermal spot, so the
+# dashboard can test pic-taking without a separate client.
+CAPTURE_ACTIONS = {
+    "/capture/photo": "/send/capture",
+    "/capture/temperature": "/send/captureTemperature",
+    "/capture/thermal": "/send/captureThermalImage",
+}
+
 
 def _coerce_setting_value(key, coerce, value):
     """Coerce a webapp setting value to the phone payload; raises ValueError on bad input."""
@@ -735,6 +743,28 @@ class Handler(SimpleHTTPRequestHandler):
             drone = drones.get(name)
             return drone.get("ip") if drone else None
 
+    def handle_config_get(self, path):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) != 4:  # /api/drones/<name>/config
+            self.send_error(404)
+            return
+        name = unquote(parts[2])
+        ip = self._drone_ip(name)
+        if not ip:
+            self.send_json(400, {"error": "Drone IP not available (not discovered yet)"})
+            return
+        try:
+            req = urllib.request.Request(f"http://{ip}:{DRONE_HTTP_PORT}/config")
+            with _open_url(req, 3) as resp:
+                raw = resp.read().decode("utf-8")
+            try:
+                config = json.loads(raw)
+            except json.JSONDecodeError:
+                config = {"raw": raw}
+            self.send_json(200, {"ok": True, "config": config})
+        except Exception as exc:
+            self.send_json(502, {"error": f"Failed to read config from phone: {exc!s}"})
+
     def handle_settings_get(self, path):
         parts = [part for part in path.split("/") if part]
         if len(parts) != 4:  # /api/drones/<name>/settings
@@ -799,9 +829,19 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_rc_action_post(self, path):
         """POST /api/drones/<name>/rcPairing/start|stop -> phone action endpoint."""
+        self._forward_phone_action(path, RC_ACTIONS)
+
+    def handle_capture_action_post(self, path):
+        """POST /api/drones/<name>/capture/photo|temperature|thermal -> phone capture endpoint."""
+        # Photo capture trips a shutter and waits for the file to land; the phone's own capture
+        # machinery budgets roughly 40s for that, so the proxy must not give up at the 3s default.
+        self._forward_phone_action(path, CAPTURE_ACTIONS, timeout=50.0)
+
+    def _forward_phone_action(self, path, actions, timeout=3.0):
+        """Forward a no-body POST to one of the phone's plain action endpoints."""
         action = None
         name = None
-        for suffix, phone_path in RC_ACTIONS.items():
+        for suffix, phone_path in actions.items():
             if path.endswith(suffix):
                 action = phone_path
                 name = path[: -len(suffix)].rstrip("/").rsplit("/", 1)[-1]
@@ -820,7 +860,7 @@ class Handler(SimpleHTTPRequestHandler):
                 method="POST",
                 headers={"Content-Type": "text/plain"},
             )
-            with _open_url(req, 3) as resp:
+            with _open_url(req, timeout) as resp:
                 reply = resp.read().decode("utf-8")
             self.send_json(200, {"ok": True, "action": action, "message": reply})
         except Exception as exc:
@@ -881,6 +921,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         suffixed = {
             "/mavlink": self.handle_mavlink_get,
+            "/config": self.handle_config_get,
             "/settings": self.handle_settings_get,
         }
         if path.startswith("/api/drones/"):
@@ -945,6 +986,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.handle_streaming_mode_post
         if any(path.endswith(action) for action in RC_ACTIONS):
             return self.handle_rc_action_post
+        if any(path.endswith(action) for action in CAPTURE_ACTIONS):
+            return self.handle_capture_action_post
         if "/settings/" in path:
             return self.handle_settings_post
         return None

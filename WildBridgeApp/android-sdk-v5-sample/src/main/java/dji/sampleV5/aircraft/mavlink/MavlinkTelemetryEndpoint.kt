@@ -625,6 +625,7 @@ internal class MavlinkTelemetryEndpoint(
                 Mav.CMD_USER_2 -> when (command.param1) {
                     Mav.USER2_LRF_MEASURE -> sink.measureLrf()
                     Mav.USER2_CAPTURE_TEMPERATURE -> sink.captureTemperature()
+                    Mav.USER2_CAPTURE_THERMAL_IMAGE -> sink.captureThermalImage()
                     else -> CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
                 }
 

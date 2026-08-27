@@ -17,6 +17,8 @@ from wildbridge_groundstation.transport import (
     COMP_ID_AUTOPILOT1,
     DEFAULT_MAVLINK_PORT,
     GRIPPER_ACTION_RELEASE,
+    HTTP_ONLY_BY_DESIGN,
+    MAV_RESULT_CANCELLED,
     MAV_RESULT_IN_PROGRESS,
     PARAM_EXT_TYPE_CUSTOM,
     PX4_MODE_OFFBOARD,
@@ -25,6 +27,7 @@ from wildbridge_groundstation.transport import (
     USER1_GIMBAL_RELATIVE,
     USER1_RELEASE_MANUAL_OVERRIDE,
     USER2_CAPTURE_TEMPERATURE,
+    USER2_CAPTURE_THERMAL_IMAGE,
     USER2_LRF_MEASURE,
     WB_FLAG_LRF_TARGET_VALID,
     WB_FLAG_MANUAL_OVERRIDE,
@@ -420,11 +423,12 @@ def test_entering_stick_control_asks_for_offboard():
     assert decoded.param2 == PX4_MODE_OFFBOARD
 
 
-def test_the_two_user_commands_are_told_apart_by_their_selector():
+def test_the_user_commands_are_told_apart_by_their_selector():
     channel = MavlinkCommandChannel("127.0.0.1")
     cases = {
         "/send/lrf/measure": (CMD_USER_2, USER2_LRF_MEASURE),
         "/send/captureTemperature": (CMD_USER_2, USER2_CAPTURE_TEMPERATURE),
+        "/send/captureThermalImage": (CMD_USER_2, USER2_CAPTURE_THERMAL_IMAGE),
         "/send/deactivateManualOverride": (CMD_USER_1, USER1_RELEASE_MANUAL_OVERRIDE),
         "/send/gimbal/rel_pitch": (CMD_USER_1, USER1_GIMBAL_RELATIVE),
     }
@@ -433,6 +437,39 @@ def test_the_two_user_commands_are_told_apart_by_their_selector():
         decoded = _decode(channel._frame_command(command, params))
         assert decoded.command == expected_command, endpoint
         assert decoded.param1 == pytest.approx(selector), endpoint
+
+
+def test_an_accepted_thermal_capture_reports_captured_without_a_descriptor():
+    """The HTTP route returns a JSON descriptor of the stored files; MAVLink has no room in the
+    ack, so an accepted shutter is reported plainly -- the files are fetched by name later."""
+    channel = MavlinkCommandChannel("127.0.0.1")
+    channel._socket = _FakeSocket([_ack_frame(CMD_USER_2, 0)])  # MAV_RESULT_ACCEPTED
+    reply = channel.send("/send/captureThermalImage", "", timeout=1.0)
+    assert reply == '{"captured": true}'
+
+
+def test_a_superseded_first_ack_is_bookkeeping_not_a_refusal():
+    """A ground station that re-issues a goto every second must not see the old leg as a failure."""
+    channel = MavlinkCommandChannel("127.0.0.1")
+    channel._socket = _FakeSocket([_ack_frame(CMD_DO_REPOSITION, MAV_RESULT_CANCELLED)])
+    reply = channel.send("/send/gotoWaypointHoldHeading", "46.518,6.566,30,90,5", timeout=1.0)
+    assert reply.startswith("SUPERSEDED")
+
+
+def test_http_only_endpoints_are_intentionally_absent_and_reasoned():
+    """The registry pins that these are HTTP-only by design, not by accident."""
+    channel = MavlinkCommandChannel("127.0.0.1")
+    assert HTTP_ONLY_BY_DESIGN, "the registry must not be empty"
+    for endpoint, reason in HTTP_ONLY_BY_DESIGN.items():
+        assert not channel.supports(endpoint), (
+            f"{endpoint} gained a MAVLink form without a registry update"
+        )
+        assert reason, f"{endpoint} needs a reason for being HTTP-only"
+    # And they must not be silently re-added to the command map either.
+    covered = set(_COMMAND_MAP) | set(_SPECIAL_SENDERS)
+    assert not (set(HTTP_ONLY_BY_DESIGN) & covered), (
+        "an HTTP-only endpoint leaked into the MAVLink map"
+    )
 
 
 def test_a_relative_gimbal_nudge_moves_only_the_axis_it_names():

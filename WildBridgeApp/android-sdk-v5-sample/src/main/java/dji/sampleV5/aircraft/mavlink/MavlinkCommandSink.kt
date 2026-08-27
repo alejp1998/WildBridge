@@ -41,6 +41,9 @@ internal interface MavlinkCommandSink {
     /** Read the thermal spot temperature. No shutter, nothing stored. */
     fun captureTemperature(): CommandResult
 
+    /** Trip one shutter on the thermal payload, storing thermal R-JPEG plus wide/zoom when enabled. */
+    fun captureThermalImage(): CommandResult
+
     /** Release the payload. The one command here that moves something off the aircraft. */
     fun dropPayload(): CommandResult
 

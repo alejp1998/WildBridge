@@ -55,6 +55,26 @@ GCS_HEARTBEAT_PERIOD_S = 1.0
 #: through the same path a rejection from the aircraft would.
 UNSUPPORTED_PREFIX = "REJECTED: no MAVLink equivalent for"
 
+#: Endpoints that are deliberately HTTP-only. Absence from ``_COMMAND_MAP`` is the mechanism; this
+#: registry makes the reason visible to a reviewer and pins it with a test, so a future change
+#: cannot silently turn one of these into "unsupported by accident".
+HTTP_ONLY_BY_DESIGN: dict[str, str] = {
+    "/send/rcPairing/start": (
+        "RC pairing is a hardware handshake between the remote and the aircraft; no MAVLink form."
+    ),
+    "/send/rcPairing/stop": (
+        "RC pairing is a hardware handshake between the remote and the aircraft; no MAVLink form."
+    ),
+    "/send/autoSensing/start": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
+    "/send/autoSensing/stop": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
+    "/send/listMedia": "Media listing walks the SD card; MAVLink FTP is the planned replacement.",
+    "/send/downloadMediaByName": "Media download streams a file off the SD card; MAVLink FTP is the planned replacement.",
+    "/releaseSafetyControl": (
+        "Safety hand-back is HTTP-token based today; a signed MAVLink form is planned once "
+        "signing is exercised."
+    ),
+}
+
 
 def mavlink_port_from_env(environ: dict[str, str] | None = None) -> int:
     """UDP port this ground station listens on, from ``WB_MAVLINK_PORT``.
@@ -716,11 +736,13 @@ USER1_GIMBAL_RELATIVE = 1.0
 USER1_RELEASE_MANUAL_OVERRIDE = 2.0
 USER2_LRF_MEASURE = 1.0
 USER2_CAPTURE_TEMPERATURE = 2.0
+USER2_CAPTURE_THERMAL_IMAGE = 3.0
 
 GRIPPER_ACTION_RELEASE = 0
 
 MAV_RESULT_ACCEPTED = 0
 MAV_RESULT_IN_PROGRESS = 5
+MAV_RESULT_CANCELLED = 6
 
 #: MAV_PARAM_EXT_TYPE_CUSTOM: the value is an opaque byte string.
 PARAM_EXT_TYPE_CUSTOM = 11
@@ -915,6 +937,11 @@ def _lrf_measure(_payload: str) -> tuple[int, list[float]]:
 @_register("/send/captureTemperature")
 def _capture_temperature(_payload: str) -> tuple[int, list[float]]:
     return CMD_USER_2, [USER2_CAPTURE_TEMPERATURE, 0, 0, 0, 0, 0, 0]
+
+
+@_register("/send/captureThermalImage")
+def _capture_thermal_image(_payload: str) -> tuple[int, list[float]]:
+    return CMD_USER_2, [USER2_CAPTURE_THERMAL_IMAGE, 0, 0, 0, 0, 0, 0]
 
 
 @_register("/send/drop")
@@ -1117,6 +1144,35 @@ class _FrameSink:
         self.buf += data
 
 
+def _json_endpoint_reply(endpoint: str, result: int | None, value: int) -> str | None:
+    """Render the JSON-shaped endpoints the same way the HTTP surface does.
+
+    The LRF and thermal reads answer with JSON over HTTP, so their ack render keeps that shape.
+    Returns None when [endpoint] is not one of these, letting the generic ack renderer continue.
+    """
+    if endpoint == "/send/lrf/measure":
+        if result != MAV_RESULT_ACCEPTED:
+            return '{"distance": null, "target": null, "state": null}'
+        # The geo-referenced target arrives on the telemetry stream as lrfTarget, exactly as
+        # it does over HTTP; the ack carries only the distance.
+        return f'{{"distance": {value / 100.0}, "target": null, "state": "NORMAL"}}'
+
+    if endpoint == "/send/captureTemperature":
+        if result != MAV_RESULT_ACCEPTED:
+            return '{"thermalMaxTemp": null}'
+        return f'{{"thermalMaxTemp": {value / 100.0}}}'
+
+    if endpoint == "/send/captureThermalImage":
+        # Over HTTP this returns a JSON descriptor naming the stored per-lens files. MAVLink
+        # has no room for that in an ack, so an accepted shutter is reported without it -- the
+        # files are still fetched by name over the media surface.
+        if result != MAV_RESULT_ACCEPTED:
+            return f'{{"error": "REJECTED: thermal capture returned MAV_RESULT {result or 0}"}}'
+        return '{"captured": true}'
+
+    return None
+
+
 class MavlinkCommandChannel:
     """Sends commands to the aircraft as MAVLink and waits for the COMMAND_ACK.
 
@@ -1190,22 +1246,19 @@ class MavlinkCommandChannel:
 
     def _render(self, endpoint: str, command: int, result: int | None, value: int) -> str:
         """Turn a COMMAND_ACK into the text this endpoint returns over HTTP."""
-        if endpoint == "/send/lrf/measure":
-            if result != MAV_RESULT_ACCEPTED:
-                return '{"distance": null, "target": null, "state": null}'
-            # The geo-referenced target arrives on the telemetry stream as lrfTarget, exactly as
-            # it does over HTTP; the ack carries only the distance.
-            return f'{{"distance": {value / 100.0}, "target": null, "state": "NORMAL"}}'
-
-        if endpoint == "/send/captureTemperature":
-            if result != MAV_RESULT_ACCEPTED:
-                return '{"thermalMaxTemp": null}'
-            return f'{{"thermalMaxTemp": {value / 100.0}}}'
+        json_body = _json_endpoint_reply(endpoint, result, value)
+        if json_body is not None:
+            return json_body
 
         if result is None:
             # No ack arrived. Reported rather than assumed: a caller that waits on a reach latch
             # would otherwise sit there believing a command it never confirmed.
             return f"REJECTED: no COMMAND_ACK for {endpoint}"
+
+        if result == MAV_RESULT_CANCELLED:
+            # A newer command took over before this one finished. A ground station that re-issues
+            # a goto every second expects the superseded leg, so this is bookkeeping, not failure.
+            return f"SUPERSEDED: {endpoint} superseded by a newer command"
 
         if result != MAV_RESULT_ACCEPTED:
             return f"REJECTED: {endpoint} returned MAV_RESULT {result}"
