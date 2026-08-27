@@ -4017,6 +4017,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * source. Deriving it from the flight mode, as the ground-station helper currently does,
      * reports armed while the aircraft is sitting on the ground.
      */
+    /**
+     * Whether a home point is somewhere rather than the SDK's unset value.
+     *
+     * Deliberately not the same question as [isHomeSet], which is a latch meaning "home was
+     * recorded on this flight". DJI knows where home is well before that closes, and the check
+     * that matters for arithmetic is whether the numbers are a place at all.
+     */
+    private fun hasRealHomeCoordinates(latitude: Double, longitude: Double): Boolean =
+        (latitude != 0.0 || longitude != 0.0) &&
+            latitude in -90.0..90.0 &&
+            longitude in -180.0..180.0
+
     private fun buildMavlinkSnapshot(): MavlinkSnapshot {
         val location = getLocation3D()
         val homeLocation = getHomeLocation()
@@ -4937,10 +4949,20 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         telemetryCoordinator.batteryLevel = getBatteryLevel()
         telemetryCoordinator.satelliteCount = getSatelliteCount()
         telemetryCoordinator.homeLocation = homeLocation
-        telemetryCoordinator.distanceToHome = DroneController.calculateDistance(
-            location.latitude, location.longitude,
-            homeLocation.latitude, homeLocation.longitude
-        )
+        // Zero until home is a real place. DJI reports (0, 0) before it has a home point, and
+        // that is a real spot in the Atlantic: measuring to it produced a confident 2,559 km
+        // from a stationary aircraft, which is worse than reporting nothing because it looks
+        // like an answer.
+        telemetryCoordinator.distanceToHome = if (
+            hasRealHomeCoordinates(homeLocation.latitude, homeLocation.longitude)
+        ) {
+            DroneController.calculateDistance(
+                location.latitude, location.longitude,
+                homeLocation.latitude, homeLocation.longitude
+            )
+        } else {
+            0.0
+        }
         telemetryCoordinator.waypointReached = DroneController.isWaypointReached()
         telemetryCoordinator.intermediaryWaypointReached = DroneController.isIntermediaryWaypointReached()
         telemetryCoordinator.yawReached = DroneController.isYawReached()
