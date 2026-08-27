@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+<resources xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <style name="full_screen_theme" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowFullscreen">true</item>
@@ -21,7 +23,8 @@
         <item name="android:windowActionBar">false</item>
     </style>
 
-    <style name="main_fragment_btn">
+    <!-- autoSize text attributes are API 26+; on API 24-25 they are silently ignored (no crash). -->
+    <style name="main_fragment_btn" tools:targetApi="26">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">match_parent</item>
         <item name="android:layout_marginStart">3dp</item>
