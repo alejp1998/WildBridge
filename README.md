@@ -595,6 +595,20 @@ It prints the first instance of each message with decoded values, then a rate su
 
 WildBridge reports `MAV_AUTOPILOT_PX4`. It does not run PX4 — the claim exists because QGroundControl only enables its Fly View action buttons for firmware plugins that declare guided-mode capability, and its generic plugin declares none. Values DJI does not provide use MAVLink's documented "unknown" conventions rather than plausible-looking zeros.
 
+#### Field testing
+
+[`FIELD_TEST.md`](FIELD_TEST.md) is the procedure for verifying all of this against a real aircraft. The ground half runs itself:
+
+```bash
+cd GroundStation/Python
+PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP>                    # listens only
+PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP> --phase ground     # parameter writes
+PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP> --phase payload --move
+PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP> --phase flight --fly
+```
+
+Checks are grouped by what they can move, and the script will not cross a group boundary without being told to: it sends nothing at all by default, needs `--move` before the gimbal or camera responds, and only prints the flight list under `--fly`.
+
 ---
 
 ### Video Streaming
