@@ -28,6 +28,8 @@ internal data class MavlinkEndpointConfig(
      * second mission protocol: MAVLink has one, and a ground station has no way to pick an
      * executor, so the choice belongs in a parameter.
      */
+    /** Signing key as hex, or empty when signing is not configured. */
+    val signingKeyHex: String = "",
     val missionExecutor: MissionExecutor = MissionExecutor.ONBOARD
 ) {
     /**
@@ -59,5 +61,13 @@ internal data class MavlinkEndpointConfig(
 
         /** Master switch for flight motion; false means every motion command is refused. */
         const val PREF_ALLOW_FLIGHT = "wb_mav_0_allow_flight"
+
+        /**
+         * 64 hex characters of MAVLink 2 signing key, shared with the Safety Computer.
+         *
+         * Absent means signing is not configured and every caller is the Pilot, which is how the
+         * endpoint behaved before signing existed.
+         */
+        const val PREF_SIGNING_KEY = "wb_mav_0_signing_key"
     }
 }

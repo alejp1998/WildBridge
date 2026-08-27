@@ -92,6 +92,13 @@ object DroneController {
     const val WP_ACCEPT_ALTITUDE_M = 0.5    // vertical error in meters
     const val WP_ACCEPT_YAW_DEG = 4.0       // yaw error in degrees
 
+    /**
+     * Consecutive time inside the acceptance box before an arrival is believed, when the plan
+     * does not say. Three control ticks: enough to reject a single noisy fix, short enough that
+     * it is not a loiter.
+     */
+    const val DEFAULT_ARRIVAL_DWELL_MS = 300L
+
     // Arrival box for flyToWaypointHoldHeading: tighter horizontally than the nose-forward
     // controller, which brakes into WP_ACCEPT_DISTANCE_M and then rotates to the final heading.
     private val HOLD_HEADING_ACCEPTANCE = WaypointControl.Acceptance(
@@ -99,6 +106,42 @@ object DroneController {
         yawDegrees = WP_ACCEPT_YAW_DEG,
         altitudeMeters = WP_ACCEPT_ALTITUDE_M
     )
+
+    /** Arrival box for flyToWaypointNoseForward, which brakes into the wider radius first. */
+    private val NOSE_FORWARD_ACCEPTANCE = WaypointControl.Acceptance(
+        distanceMeters = WP_ACCEPT_DISTANCE_M,
+        yawDegrees = WP_ACCEPT_YAW_DEG,
+        altitudeMeters = WP_ACCEPT_ALTITUDE_M
+    )
+
+    /**
+     * The acceptance box for this waypoint: the plan's radius when it gave one, else the
+     * controller's own.
+     *
+     * Only the radius is taken from the plan. Altitude and yaw tolerances stay the controller's,
+     * because MAVLink's acceptance radius is a sphere around the position and says nothing about
+     * how precisely the aircraft should be pointing when it gets there.
+     */
+    private fun acceptanceFor(
+        target: WaypointTarget,
+        fallback: WaypointControl.Acceptance
+    ): WaypointControl.Acceptance {
+        val radius = target.acceptanceRadiusM
+        return if (radius != null && radius > 0.0) fallback.copy(distanceMeters = radius) else fallback
+    }
+
+    /**
+     * How long the aircraft must hold inside the box before this waypoint counts as reached.
+     *
+     * A pass-through leg wants none: the plan asked to fly through it, and waiting there would
+     * turn a trajectory into a series of stops. Anywhere else gets the plan's hold time, or a
+     * short default that exists to filter a single noisy GPS sample rather than to loiter.
+     */
+    private fun dwellMsFor(target: WaypointTarget): Long = when {
+        target.passThrough -> 0L
+        target.holdSeconds > 0.0 -> (target.holdSeconds * 1000).toLong()
+        else -> DEFAULT_ARRIVAL_DWELL_MS
+    }
 
     private fun distancePidKp(): Double = DroneControlProfiles.activeProfile().distanceKp
     private fun distancePidKi(): Double = DroneControlProfiles.activeProfile().distanceKi
@@ -243,6 +286,24 @@ object DroneController {
 
     // Hot-swappable waypoint target for smooth PID transitions.
     // When a new waypoint arrives mid-flight, the target is swapped without restarting the loop.
+    /**
+     * What "arrived" means for one waypoint, as the plan defined it.
+     *
+     * MAVLink puts these on the mission item because only the plan knows which leg is the last
+     * one: param2 is the acceptance radius, param1 the hold time, and param3 zero means fly
+     * through. A single goto carries none of them and takes [DEFAULT], because a lone reposition
+     * is a destination rather than a leg.
+     */
+    data class WaypointArrival(
+        val acceptanceRadiusM: Double? = null,
+        val holdSeconds: Double = 0.0,
+        val passThrough: Boolean = false
+    ) {
+        companion object {
+            val DEFAULT = WaypointArrival()
+        }
+    }
+
     data class WaypointTarget(
         val latitude: Double,
         val longitude: Double,
@@ -251,7 +312,21 @@ object DroneController {
         val maxSpeed: Double,
         // FINAL yaw: heading the drone rotates to in place once it has arrived (Phase 3). Defaults
         // to the track yaw so callers that don't care about arrival heading keep the old behaviour.
-        val finalYaw: Double = yaw
+        val finalYaw: Double = yaw,
+        /**
+         * Arrival criteria for this waypoint, straight from the mission item that asked for it.
+         *
+         * MAVLink carries these per waypoint, which is the right place for them: only the plan
+         * knows which leg is the last one. A generous radius with no hold is a leg to pass
+         * through; a tight radius with a hold is somewhere to settle. Null means "use the
+         * controller's default", which is what a single goto gets — a lone reposition is a
+         * destination by definition.
+         */
+        val acceptanceRadiusM: Double? = null,
+        /** Seconds to stay inside the radius before the waypoint counts as reached. */
+        val holdSeconds: Double = 0.0,
+        /** True when the plan asked to fly through rather than stop here. */
+        val passThrough: Boolean = false
     )
 
     @Volatile
@@ -788,9 +863,16 @@ object DroneController {
         targetLongitude: Double,
         targetAlt: Double,
         targetYaw: Double,
-        maxSpeed: Double
+        maxSpeed: Double,
+        /** Arrival criteria from the plan, when this waypoint came from one. */
+        arrival: WaypointArrival = WaypointArrival.DEFAULT
     ): Long {
-        val newTarget = WaypointTarget(targetLatitude, targetLongitude, targetAlt, targetYaw, maxSpeed)
+        val newTarget = WaypointTarget(
+            targetLatitude, targetLongitude, targetAlt, targetYaw, maxSpeed,
+            acceptanceRadiusM = arrival.acceptanceRadiusM,
+            holdSeconds = arrival.holdSeconds,
+            passThrough = arrival.passThrough
+        )
         // New target → new id, and the reached latch drops to false until this target is reached.
         val seq = _waypointSeq.incrementAndGet()
         _isWaypointReached = false
@@ -924,12 +1006,13 @@ object DroneController {
                         distance = distance,
                         yawError = yawError,
                         altitudeError = altError,
-                        acceptance = HOLD_HEADING_ACCEPTANCE
+                        acceptance = acceptanceFor(target, HOLD_HEADING_ACCEPTANCE)
                     ),
                     wasWaypointReached = _isWaypointReached,
                     reachedAtMs = reachedAtMs,
                     nowMs = nowMs,
-                    holdCooldownMs = holdCooldownMs
+                    holdCooldownMs = holdCooldownMs,
+                    dwellMs = dwellMsFor(target)
                 )
                 _isWaypointReached = plan.waypointReached
                 // 0 when outside acceptance, so GPS drift or a new target restarts the cooldown.
@@ -985,7 +1068,9 @@ object DroneController {
         targetLongitude: Double,
         targetAlt: Double,
         targetYaw: Double,
-        maxSpeed: Double
+        maxSpeed: Double,
+        /** Arrival criteria from the plan, when this waypoint came from one. */
+        arrival: WaypointArrival = WaypointArrival.DEFAULT
     ): Long {
         // Track yaw = bearing(current position -> waypoint): the heading held during Phase 1/2.
         // The caller-supplied targetYaw becomes the Phase-3 final heading (finalYaw). Recomputed here
@@ -1003,7 +1088,10 @@ object DroneController {
             targetAlt,
             trackYaw,
             maxSpeed,
-            finalYaw = targetYaw
+            finalYaw = targetYaw,
+            acceptanceRadiusM = arrival.acceptanceRadiusM,
+            holdSeconds = arrival.holdSeconds,
+            passThrough = arrival.passThrough
         )
         // New target → new id, and the reached latch drops to false until this target is reached.
         val seq = _waypointSeq.incrementAndGet()
@@ -1186,11 +1274,17 @@ object DroneController {
                 )
                 val altErrorNav = target.altitude - currentPosition.altitude
 
-                // Phase 2 -> 3 transition: latch positionReached once inside the WP position + altitude
-                // tolerance. From then on we stop translating and run Phase 3 (FINAL ALIGN).
-                if (!positionReached && distance < WP_ACCEPT_DISTANCE_M && abs(altErrorNav) < WP_ACCEPT_ALTITUDE_M) {
-                    positionReached = true
-                }
+                // Phase 2 -> 3 transition: inside the WP position + altitude tolerance we stop
+                // translating and run Phase 3 (FINAL ALIGN).
+                //
+                // Re-evaluated every tick rather than latched once. Latching it meant the
+                // aircraft could touch the radius, drift out of it in wind, rotate to the final
+                // heading and report arrival from well outside the box — position was never
+                // checked again. Dropping back to Phase 2 when it drifts out is what makes the
+                // arrival claim mean what it says.
+                val acceptance = acceptanceFor(target, NOSE_FORWARD_ACCEPTANCE)
+                positionReached = distance < acceptance.distanceMeters &&
+                    abs(altErrorNav) < acceptance.altitudeMeters
 
                 // Phase 3 (FINAL ALIGN): rotate in place to the user-requested arrival heading
                 // (target.finalYaw), holding position and altitude. The waypoint is only latched as
@@ -1201,11 +1295,14 @@ object DroneController {
                     // Arrival here is final-heading only: position and altitude were already
                     // latched by positionReached, so the shared three-axis predicate does not apply.
                     val plan = WaypointControl.cooldownPlan(
-                        targetReached = abs(finalYawError) < WP_ACCEPT_YAW_DEG,
+                        // Position and altitude are re-checked above and gate entry to this
+                        // branch, so arrival here is the final heading closing the last axis.
+                        targetReached = abs(finalYawError) < acceptance.yawDegrees,
                         wasWaypointReached = _isWaypointReached,
                         reachedAtMs = reachedAtMs,
                         nowMs = nowMs,
-                        holdCooldownMs = holdCooldownMs
+                        holdCooldownMs = holdCooldownMs,
+                        dwellMs = dwellMsFor(target)
                     )
                     _isWaypointReached = plan.waypointReached
                     // 0 while still rotating to the final heading — keeps the cooldown unarmed.

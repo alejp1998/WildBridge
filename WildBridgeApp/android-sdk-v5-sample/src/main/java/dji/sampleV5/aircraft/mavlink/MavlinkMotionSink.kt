@@ -85,13 +85,12 @@ internal interface MavlinkMotionSink {
     fun releaseManualOverride(): CommandResult
 
     /**
-     * Whether a pending command has finished, or null while it is still running.
+     * How a pending command is getting on.
      *
      * Polled rather than pushed because the underlying controller signals arrival by setting a
-     * latch, not by calling back. False means it stopped without arriving — overridden, aborted,
-     * or superseded.
+     * latch, not by calling back.
      */
-    fun pollCompletion(pending: PendingCommand): Boolean?
+    fun pollCompletion(pending: PendingCommand): CommandProgress
 
     fun arm(): CommandResult
 

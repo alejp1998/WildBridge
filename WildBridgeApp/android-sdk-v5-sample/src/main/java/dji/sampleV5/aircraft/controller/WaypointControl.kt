@@ -52,21 +52,37 @@ internal object WaypointControl {
         wasWaypointReached: Boolean,
         reachedAtMs: Long,
         nowMs: Long,
-        holdCooldownMs: Long
+        holdCooldownMs: Long,
+        /**
+         * How long the aircraft must stay inside the acceptance box before it counts as arrived.
+         *
+         * Zero keeps the original behaviour, which is what a pass-through leg wants. Anything
+         * else filters the failure this exists for: the box is half a metre and GPS noise is a
+         * good fraction of that, so a single sample can place the aircraft inside while it is
+         * genuinely a metre out. Without a dwell that one sample is permanent, because the latch
+         * does not fall again once set.
+         */
+        dwellMs: Long = 0L
     ): CooldownPlan {
         if (!targetReached) {
             return CooldownPlan(
                 waypointReached = wasWaypointReached,
+                // Zero re-arms the dwell: leaving the box means the next entry starts counting
+                // again, so a run of noisy in-box samples cannot accumulate into an arrival.
                 reachedAtMs = 0L,
                 stopAtWaypoint = false
             )
         }
 
-        val firstReachedAtMs = if (wasWaypointReached) reachedAtMs else nowMs
+        val insideSinceMs = if (reachedAtMs != 0L) reachedAtMs else nowMs
+        val dwelledLongEnough = nowMs - insideSinceMs >= dwellMs
+        // Sticky once earned, and only once earned. A consumer polling at 2 Hz would miss the
+        // arrival entirely if the latch fell again the moment the aircraft drifted a centimetre.
+        val reached = wasWaypointReached || dwelledLongEnough
         return CooldownPlan(
-            waypointReached = true,
-            reachedAtMs = firstReachedAtMs,
-            stopAtWaypoint = nowMs - firstReachedAtMs >= holdCooldownMs
+            waypointReached = reached,
+            reachedAtMs = insideSinceMs,
+            stopAtWaypoint = reached && nowMs - insideSinceMs >= dwellMs + holdCooldownMs
         )
     }
 

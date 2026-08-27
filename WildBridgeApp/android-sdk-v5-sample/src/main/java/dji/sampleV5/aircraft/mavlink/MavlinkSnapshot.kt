@@ -100,7 +100,23 @@ internal data class MavlinkSnapshot(
     val totalFlightTimeS: Int = 0,
     val maxRadiusCanFlyAndGoHomeM: Double = 0.0,
     val batteryNeededToGoHomePercent: Int = 0,
-    val batteryNeededToLandPercent: Int = 0
+    val batteryNeededToLandPercent: Int = 0,
+
+    // -- Reach latches -----------------------------------------------------------------------
+
+    /**
+     * Where the aircraft has got to, reported as state alongside the command acknowledgements.
+     *
+     * The ack says "the command you sent has finished"; these say "this is where things stand".
+     * A ground station that missed an ack — started late, dropped a packet — still learns the
+     * truth from the next status message, which an ack alone can never provide.
+     */
+    val waypointReached: Boolean = false,
+    val waypointSeq: Long = 0,
+    val yawReached: Boolean = false,
+    val yawSeq: Long = 0,
+    val altitudeReached: Boolean = false,
+    val altitudeSeq: Long = 0
 ) {
     /**
      * Whether the home coordinates are a real place rather than the SDK's uninitialised value.

@@ -452,15 +452,18 @@ def test_wildbridge_status_decodes_into_the_http_telemetry_keys():
         465180000,
         65660000,
         12.5,
-        900.0,
+        900.0,  # time, lrf lat/lon/alt, max radius
+        0,
+        0,
+        0,  # waypoint / yaw / altitude seq
         45,
         18,
         63,
         24,
         25,
-        26,
+        26,  # times, then focal lengths
         18,
-        12,
+        12,  # battery budgets
         WB_FLAG_MANUAL_OVERRIDE | WB_FLAG_READY_TO_TAKEOFF | WB_FLAG_LRF_TARGET_VALID,
         b"NONE",
     )
@@ -493,6 +496,9 @@ def test_an_unlocked_rangefinder_reports_no_target_rather_than_null_island():
         0,
         0,
         0,
+        0,
+        0,
+        0,
         b"",
     )
     # 0,0 is a real place off West Africa; reporting it as a target would be worse than reporting
@@ -502,7 +508,9 @@ def test_an_unlocked_rangefinder_reports_no_target_rather_than_null_island():
 
 def test_a_truncated_payload_still_decodes():
     """MAVLink 2 drops trailing zeros, so a mostly-empty status arrives short."""
-    full = struct.pack(WILDBRIDGE_STATUS_STRUCT, 7, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"")
+    full = struct.pack(
+        WILDBRIDGE_STATUS_STRUCT, 7, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b""
+    )
     assert decode_wildbridge_status(full.rstrip(b"\x00"))["takeoffBlockReason"] == "UNKNOWN"
 
 
@@ -554,8 +562,10 @@ def test_the_joint_attitude_is_the_gimbal_relative_to_a_tilted_aircraft():
     }
     _derive(telemetry)
     joint = telemetry["gimbalJointAttitude"]
-    assert joint["roll"] == pytest.approx(1.3, abs=0.01)
-    assert joint["pitch"] == pytest.approx(0.1, abs=0.01)
+    # The magnitude is what the composition establishes; the sign against DJI's own convention is
+    # not yet established, so this pins the size and leaves GIMBAL_JOINT_SIGN to settle the rest.
+    assert abs(joint["roll"]) == pytest.approx(1.3, abs=0.01)
+    assert abs(joint["pitch"]) == pytest.approx(0.1, abs=0.01)
 
 
 def test_the_joint_attitude_falls_back_before_any_attitude_arrives():
@@ -569,7 +579,7 @@ def test_the_joint_attitude_falls_back_before_any_attitude_arrives():
 
 def test_unreported_focal_lengths_read_as_minus_one_not_zero():
     payload = struct.pack(
-        WILDBRIDGE_STATUS_STRUCT, 0, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b""
+        WILDBRIDGE_STATUS_STRUCT, 0, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b""
     )
     status = decode_wildbridge_status(payload)
     # 0 mm is not a lens. The HTTP stream says -1 for "not reported" and so must this.

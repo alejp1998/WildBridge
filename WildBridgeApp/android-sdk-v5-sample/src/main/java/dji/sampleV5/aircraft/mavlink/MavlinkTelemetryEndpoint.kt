@@ -97,6 +97,28 @@ internal class MavlinkTelemetryEndpoint(
     /** Fires the first time a ground station is heard from. */
     var onPeerDiscovered: ((String) -> Unit)? = null
 
+    /** Parsed signing key, or null when signing is not configured. */
+    private val signingKey: ByteArray? = MavlinkSigning.parseKey(config.signingKeyHex)
+
+    /**
+     * Who sent the frame currently being handled.
+     *
+     * Read by the sinks through [isTrustedOrigin] while they decide whether a command may run.
+     * Single-valued because frames are handled one at a time on the receive thread, so there is
+     * never a second command in flight to confuse it with.
+     */
+    @Volatile
+    private var commandOrigin: MavlinkSigning.Origin = MavlinkSigning.Origin.UNSIGNED
+
+    /**
+     * True when the frame being handled was signed with the configured key.
+     *
+     * The host maps this onto its own authority model: a trusted origin is the Safety Computer,
+     * anything else is the Pilot — which is what every MAVLink frame was before signing existed.
+     */
+    val isTrustedOrigin: Boolean
+        get() = commandOrigin == MavlinkSigning.Origin.TRUSTED
+
     /** Photos taken since boot, reported as CAMERA_CAPTURE_STATUS.image_count. */
     private val imageCount = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -202,6 +224,18 @@ internal class MavlinkTelemetryEndpoint(
                 }
             if (!received) break
             if (packet.length > 0 && buffer[0] == MavlinkFramer.MAGIC_V2) {
+                // Who is speaking, before anything they said is acted on. A signature that is
+                // present but wrong is dropped rather than downgraded to an unsigned frame: an
+                // attacker who cannot forge one could otherwise just strip it.
+                val origin = MavlinkSigning.originOf(buffer, packet.length, signingKey)
+                if (origin == MavlinkSigning.Origin.REJECTED) {
+                    Log.w(TAG, "Dropping a frame whose signature did not verify")
+                    continue
+                }
+                // Kept as this package's own notion of origin. Mapping it onto WildBridge's
+                // authority model is the host activity's job, which is what keeps this package
+                // free of the SDK and testable off a phone.
+                commandOrigin = origin
                 notePeer(InetSocketAddress(packet.address, packet.port))
                 MavlinkInbound.parseCommand(buffer, packet.length)?.let(::handleCommand)
                 MavlinkInbound.parseSetMode(buffer, packet.length)?.let(::handleSetMode)
@@ -453,21 +487,27 @@ internal class MavlinkTelemetryEndpoint(
         val motion = motionSink ?: return
         thread(name = "MavlinkCommandWatch", isDaemon = true) {
             val deadline = System.currentTimeMillis() + COMMAND_COMPLETION_TIMEOUT_MS
-            var completed: Boolean? = null
+            var progress = CommandProgress.RUNNING
             while (running && System.currentTimeMillis() < deadline) {
-                completed = runCatching { motion.pollCompletion(pending) }.getOrNull()
-                if (completed != null) break
+                progress = runCatching { motion.pollCompletion(pending) }
+                    .getOrDefault(CommandProgress.ABANDONED)
+                if (progress != CommandProgress.RUNNING) break
                 runCatching { Thread.sleep(COMMAND_COMPLETION_POLL_MS) }.onFailure {
                     Thread.currentThread().interrupt()
                     return@thread
                 }
             }
-            val outcome = when (completed) {
-                true -> Mav.RESULT_ACCEPTED
-                false -> Mav.RESULT_FAILED
-                null -> Mav.RESULT_FAILED
+            val outcome = when (progress) {
+                CommandProgress.ARRIVED -> Mav.RESULT_ACCEPTED
+                // Superseded is not failure: a ground station that re-issues a goto every second
+                // cancels its own previous command constantly, and calling that a failure would
+                // report an ordinary flight as a stream of errors.
+                CommandProgress.SUPERSEDED -> Mav.RESULT_CANCELLED
+                CommandProgress.ABANDONED -> Mav.RESULT_FAILED
+                // Ran out of time without ever resolving.
+                CommandProgress.RUNNING -> Mav.RESULT_FAILED
             }
-            Log.i(TAG, "Command ${command.command} seq ${pending.seq} finished: $completed")
+            Log.i(TAG, "Command ${command.command} seq ${pending.seq} finished: $progress")
             sendOnce(
                 MavlinkMsgId.COMMAND_ACK,
                 MavlinkMessages.commandAck(

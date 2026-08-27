@@ -91,6 +91,7 @@ import dji.sampleV5.aircraft.mavlink.MissionItem
 import dji.sampleV5.aircraft.mavlink.MissionProgressListener
 import dji.sampleV5.aircraft.mavlink.PendingCommand
 import dji.sampleV5.aircraft.mavlink.PendingKind
+import dji.sampleV5.aircraft.mavlink.CommandProgress
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.server.TelemetryServer
@@ -221,7 +222,21 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         private const val MISSION_POLL_MS = 200L
 
         /** The one parameter a ground station may write. See applyMavlinkParameter. */
+        /**
+         * The settings a ground station may write over MAVLink.
+         *
+         * Numeric settings only, and deliberately so: PARAM_SET carries a float, and the string
+         * settings behind the rest of the /send/set* surface — the drone's name, the video
+         * source, the MediaMTX address — have no honest float encoding. Those stay on HTTP until
+         * they earn a proper home, rather than being smuggled through as magic numbers.
+         */
         private const val PARAM_RTH_ALTITUDE = "WB_RTH_ALT"
+        private const val PARAM_MAX_HEIGHT = "WB_MAX_HEIGHT"
+        private const val PARAM_MAX_DISTANCE = "WB_MAX_DIST"
+        private const val PARAM_DISTANCE_LIMIT = "WB_DIST_LIMIT_EN"
+        private const val PARAM_WEBRTC_FPS = "WB_RTC_FPS"
+        private const val PARAM_DETECTIONS = "WB_DETECT_EN"
+        private const val PARAM_EDGE_CONFIDENCE = "WB_EDGE_CONF"
         private const val TAG_THERMAL = "WildBridgeThermal"
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
@@ -3949,6 +3964,9 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 }.getOrNull()
             ),
             systemId = systemId,
+            signingKeyHex = runCatching {
+                sharedPreferences.getString(MavlinkEndpointConfig.PREF_SIGNING_KEY, "")
+            }.getOrNull().orEmpty(),
             missionExecutor = MissionExecutor.fromPref(
                 runCatching {
                     sharedPreferences.getString(MavlinkEndpointConfig.PREF_MISSION_EXECUTOR, null)
@@ -4042,7 +4060,14 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             totalFlightTimeS = getTimeNeededToGoHome() + getTimeNeededToLand(),
             maxRadiusCanFlyAndGoHomeM = goHomeInfo.maxRadiusCanFlyAndGoHome.toDouble(),
             batteryNeededToGoHomePercent = goHomeInfo.batteryPercentNeededToGoHome,
-            batteryNeededToLandPercent = goHomeInfo.batteryPercentNeededToLand
+            batteryNeededToLandPercent = goHomeInfo.batteryPercentNeededToLand,
+
+            waypointReached = DroneController.isWaypointReached(),
+            waypointSeq = DroneController.getWaypointSeq(),
+            yawReached = DroneController.isYawReached(),
+            yawSeq = DroneController.getYawSeq(),
+            altitudeReached = DroneController.isAltitudeReached(),
+            altitudeSeq = DroneController.getAltitudeSeq()
         )
     }
 
@@ -4080,6 +4105,40 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * here is refused rather than accepted and dropped.
      */
     private fun applyMavlinkParameter(name: String, value: Float): CommandResult = when (name) {
+        PARAM_MAX_HEIGHT -> awaitParameterWrite { done ->
+            DroneController.setMaxFlightHeight(value.toInt())
+            done(true)
+        }
+
+        PARAM_MAX_DISTANCE -> awaitParameterWrite { done ->
+            DroneController.setMaxFlightDistance(value.toInt())
+            done(true)
+        }
+
+        PARAM_DISTANCE_LIMIT -> awaitParameterWrite { done ->
+            DroneController.setDistanceLimitEnabled(value >= 0.5f)
+            done(true)
+        }
+
+        PARAM_WEBRTC_FPS ->
+            if (setWebRtcFps(value.toInt())) {
+                CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            } else {
+                CommandResult(MavlinkCommandOutcome.DENIED, "Unsupported frame rate")
+            }
+
+        PARAM_DETECTIONS -> {
+            setDetectionsEnabled(value >= 0.5f)
+            CommandResult(MavlinkCommandOutcome.ACCEPTED)
+        }
+
+        PARAM_EDGE_CONFIDENCE ->
+            if (setEdgeConfidence(value)) {
+                CommandResult(MavlinkCommandOutcome.ACCEPTED)
+            } else {
+                CommandResult(MavlinkCommandOutcome.DENIED, "Threshold out of range")
+            }
+
         PARAM_RTH_ALTITUDE -> {
             val altitude = value.toInt()
             if (altitude <= 0) {
@@ -4137,6 +4196,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             // The one writable parameter. Published so a ground station can read it back after a
             // write and see what actually took, which is what makes PARAM_SET meaningful.
             PARAM_RTH_ALTITUDE to DroneController.getRTHAltitude().toFloat(),
+            PARAM_MAX_HEIGHT to DroneController.getMaxFlightHeight().toFloat(),
+            PARAM_MAX_DISTANCE to DroneController.getMaxFlightDistance().toFloat(),
+            PARAM_DISTANCE_LIMIT to if (DroneController.getDistanceLimitEnabled()) 1f else 0f,
+            PARAM_WEBRTC_FPS to getWebRTCFps().toFloat(),
+            PARAM_DETECTIONS to if (isDetectionsEnabled()) 1f else 0f,
+            PARAM_EDGE_CONFIDENCE to getEdgeConfidenceThreshold(),
             // QGC's PX4 airframe component reads this one PX4 parameter and pops a "Parameters
             // are missing from firmware" dialog when it is absent. 4001 is PX4's "Generic
             // Quadcopter" airframe id; published read-only like the rest of the list.
@@ -4360,7 +4425,15 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         if (!sharedPreferences.getBoolean(MavlinkEndpointConfig.PREF_ALLOW_FLIGHT, false)) {
             return CommandResult(MavlinkCommandOutcome.DENIED)
         }
-        if (!ControlAuthority.authorizeControlCommand(ControlAuthority.Source.PILOT)) {
+        // A frame signed with the configured key is the Safety Computer; anything else is the
+        // Pilot. Before signing every MAVLink command was the Pilot unconditionally, so an
+        // installation that configures no key sees exactly the behaviour it saw before.
+        val source = if (mavlinkEndpoint?.isTrustedOrigin == true) {
+            ControlAuthority.Source.SAFETY
+        } else {
+            ControlAuthority.Source.PILOT
+        }
+        if (!ControlAuthority.authorizeControlCommand(source)) {
             return CommandResult(MavlinkCommandOutcome.DENIED)
         }
         return null
@@ -4522,8 +4595,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
          * arriving instantly. A manual override is reported as a failure rather than as a wait,
          * because the command is not going to complete once the pilot has the sticks.
          */
-        override fun pollCompletion(pending: PendingCommand): Boolean? {
-            if (DroneController.isManualOverrideActive) return false
+        override fun pollCompletion(pending: PendingCommand): CommandProgress {
+            if (DroneController.isManualOverrideActive) return CommandProgress.ABANDONED
             val (currentSeq, reached) = when (pending.kind) {
                 PendingKind.WAYPOINT ->
                     DroneController.getWaypointSeq() to DroneController.isWaypointReached()
@@ -4532,11 +4605,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 PendingKind.ALTITUDE ->
                     DroneController.getAltitudeSeq() to DroneController.isAltitudeReached()
             }
-            if (currentSeq > pending.seq) {
-                // Something newer took over; this command will never report arrival.
-                return false
+            return when {
+                // A newer command took over. Ordinary, not a failure: this is what re-issuing a
+                // goto looks like from the perspective of the one it replaced.
+                currentSeq > pending.seq -> CommandProgress.SUPERSEDED
+                currentSeq == pending.seq && reached -> CommandProgress.ARRIVED
+                else -> CommandProgress.RUNNING
             }
-            return if (currentSeq == pending.seq && reached) true else null
         }
 
         override fun arm(): CommandResult {
@@ -4684,7 +4759,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     items.take(index).lastOrNull { it.isSpeedChange }?.speedMps?.let { speed = it }
 
                     listener?.onItemStarted(index)
-                    val seq = flyLeg(item, speed)
+                    val seq = flyLeg(item, speed, isLast = index == legs.last().index)
                     if (!awaitLeg(seq)) {
                         // Interrupted, overridden, or timed out — stop rather than skipping on.
                         listener?.onMissionFinished(false)
@@ -4699,16 +4774,29 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
-        /** Issue one leg with the controller its param4 asks for, returning the command's seq. */
-        private fun flyLeg(item: MissionItem, speed: Double): Long {
+        /**
+         * Issue one leg with the controller its param4 asks for, returning the command's seq.
+         *
+         * The arrival criteria travel with it. Without them every leg is treated as a
+         * destination, so a plan is flown as a series of stops rather than as a trajectory —
+         * which is what the aircraft did before it read param1 and param2.
+         */
+        private fun flyLeg(item: MissionItem, speed: Double, isLast: Boolean): Long {
             val yaw = if (item.noseForward) 0.0 else item.param4.toDouble()
+            val arrival = DroneController.WaypointArrival(
+                acceptanceRadiusM = item.acceptanceRadiusM,
+                holdSeconds = item.holdSeconds,
+                // The final leg is never a pass-through, whatever the plan says: there is nothing
+                // after it to fly on to, so the aircraft settles there.
+                passThrough = item.passThrough && !isLast
+            )
             return if (item.noseForward) {
                 DroneController.flyToWaypointNoseForward(
-                    item.latitudeDeg, item.longitudeDeg, item.altitudeM, yaw, speed
+                    item.latitudeDeg, item.longitudeDeg, item.altitudeM, yaw, speed, arrival
                 )
             } else {
                 DroneController.flyToWaypointHoldHeading(
-                    item.latitudeDeg, item.longitudeDeg, item.altitudeM, yaw, speed
+                    item.latitudeDeg, item.longitudeDeg, item.altitudeM, yaw, speed, arrival
                 )
             }
         }

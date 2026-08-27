@@ -39,6 +39,29 @@ internal data class MissionItem(
 
     /** The ground speed this item asks for, or null when it is not a usable speed change. */
     val speedMps: Double? get() = param2.toDouble().takeIf { isSpeedChange && it > 0 }
+
+    /**
+     * Seconds to hold at this waypoint before it counts as reached — MAV_CMD_NAV_WAYPOINT param1.
+     *
+     * This and the two below are how a plan says which legs to pass through and which to settle
+     * at. Only the plan knows which waypoint is the last one, which is exactly why MAVLink puts
+     * these on the item rather than leaving the vehicle to guess.
+     */
+    val holdSeconds: Double get() = if (isWaypoint) param1.toDouble().coerceAtLeast(0.0) else 0.0
+
+    /** Acceptance radius in metres — param2 — or null when the plan did not specify one. */
+    val acceptanceRadiusM: Double? get() =
+        param2.toDouble().takeIf { isWaypoint && it > 0 }
+
+    /**
+     * True when the plan asked to fly through rather than stop — param3 of zero.
+     *
+     * MAVLink defines param3 as the pass radius: zero means pass through the waypoint, and a
+     * positive value means pass by it at that distance. Either way the aircraft is not meant to
+     * stop, so both read as pass-through here; the orbit direction a positive value also encodes
+     * is not something WildBridge's controllers can fly.
+     */
+    val passThrough: Boolean get() = isWaypoint && holdSeconds == 0.0
 }
 
 /** MAV_MISSION_RESULT values used when acknowledging an upload. */

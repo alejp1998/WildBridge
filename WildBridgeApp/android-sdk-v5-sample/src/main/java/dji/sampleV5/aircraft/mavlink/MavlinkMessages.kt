@@ -494,6 +494,9 @@ internal object MavlinkMessages {
         val targetValid = snapshot.lrfTargetLatitudeDeg != null &&
             snapshot.lrfTargetLongitudeDeg != null
         if (targetValid) flags = flags or WB_FLAG_LRF_TARGET_VALID
+        if (snapshot.waypointReached) flags = flags or WB_FLAG_WAYPOINT_REACHED
+        if (snapshot.yawReached) flags = flags or WB_FLAG_YAW_REACHED
+        if (snapshot.altitudeReached) flags = flags or WB_FLAG_ALTITUDE_REACHED
 
         return PayloadWriter()
             .u32(timeBootMs)
@@ -501,6 +504,9 @@ internal object MavlinkMessages {
             .i32(degToE7(snapshot.lrfTargetLongitudeDeg ?: 0.0))
             .f32((snapshot.lrfTargetAltitudeM ?: 0.0).toFloat())
             .f32(snapshot.maxRadiusCanFlyAndGoHomeM.toFloat())
+            .u32(snapshot.waypointSeq)
+            .u32(snapshot.yawSeq)
+            .u32(snapshot.altitudeSeq)
             .u16(snapshot.timeNeededToGoHomeS.coerceIn(0, 0xFFFF))
             .u16(snapshot.timeNeededToLandS.coerceIn(0, 0xFFFF))
             .u16(snapshot.totalFlightTimeS.coerceIn(0, 0xFFFF))
@@ -822,6 +828,9 @@ internal object MavlinkMessages {
     private const val WB_FLAG_READY_TO_TAKEOFF = 2
     private const val WB_FLAG_HOME_SET = 4
     private const val WB_FLAG_LRF_TARGET_VALID = 8
+    private const val WB_FLAG_WAYPOINT_REACHED = 16
+    private const val WB_FLAG_YAW_REACHED = 32
+    private const val WB_FLAG_ALTITUDE_REACHED = 64
 
     /** char[24] in wildbridge.xml. */
     private const val TAKEOFF_REASON_LENGTH = 24

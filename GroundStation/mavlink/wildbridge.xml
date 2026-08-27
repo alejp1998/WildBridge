@@ -30,6 +30,19 @@
       <entry value="8" name="WILDBRIDGE_STATUS_FLAG_LRF_TARGET_VALID">
         <description>The rangefinder target fields hold a real geo-referenced point.</description>
       </entry>
+      <entry value="16" name="WILDBRIDGE_STATUS_FLAG_WAYPOINT_REACHED">
+        <description>
+          The aircraft is at the waypoint identified by waypoint_seq. Reported as state rather
+          than only as a command acknowledgement, so a ground station that missed the ack can
+          still see where things stand.
+        </description>
+      </entry>
+      <entry value="32" name="WILDBRIDGE_STATUS_FLAG_YAW_REACHED">
+        <description>The aircraft is on the heading identified by yaw_seq.</description>
+      </entry>
+      <entry value="64" name="WILDBRIDGE_STATUS_FLAG_ALTITUDE_REACHED">
+        <description>The aircraft is at the altitude identified by altitude_seq.</description>
+      </entry>
     </enum>
   </enums>
   <messages>
@@ -51,6 +64,9 @@
       <field type="uint16_t" name="hybrid_focal_length" units="mm">Hybrid-zoom focal length, or 0 when unknown.</field>
       <field type="uint8_t" name="battery_needed_to_go_home" units="%">Charge a return is predicted to consume.</field>
       <field type="uint8_t" name="battery_needed_to_land" units="%">Charge a landing is predicted to consume.</field>
+      <field type="uint32_t" name="waypoint_seq">Identifies the movement the waypoint-reached flag refers to.</field>
+      <field type="uint32_t" name="yaw_seq">Identifies the movement the yaw-reached flag refers to.</field>
+      <field type="uint32_t" name="altitude_seq">Identifies the movement the altitude-reached flag refers to.</field>
       <field type="uint8_t" name="flags" enum="WILDBRIDGE_STATUS_FLAGS">Boolean state.</field>
       <field type="char[24]" name="takeoff_block_reason">Why a takeoff would be refused, or empty when it would not.</field>
     </message>

@@ -141,6 +141,15 @@ internal object Mav {
 
     /** Accepted and still running; a further ack follows when it completes. */
     const val RESULT_IN_PROGRESS = 5
+
+    /**
+     * MAV_RESULT_CANCELLED: the command was superseded before it finished.
+     *
+     * Distinct from FAILED on purpose. A ground station that re-issues a goto every second
+     * supersedes its own previous command constantly, and reporting each as a failure turns an
+     * ordinary flight into a stream of errors. Nothing failed; a newer instruction arrived.
+     */
+    const val RESULT_CANCELLED = 6
     const val RESULT_DENIED = 2
     const val RESULT_UNSUPPORTED = 3
 

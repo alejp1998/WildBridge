@@ -65,6 +65,21 @@ internal data class PendingCommand(val kind: PendingKind, val seq: Long)
 /** Which reach latch a [PendingCommand] is waiting on. */
 internal enum class PendingKind { WAYPOINT, YAW, ALTITUDE }
 
+/** What a pending command is doing now. */
+internal enum class CommandProgress {
+    /** Still flying it. */
+    RUNNING,
+
+    /** Arrived. */
+    ARRIVED,
+
+    /** A newer command took over. Reported as MAV_RESULT_CANCELLED, not as a failure. */
+    SUPERSEDED,
+
+    /** Stopped without arriving — the pilot took the sticks, or it was aborted. */
+    ABANDONED
+}
+
 /**
  * What happened, in a shape that maps straight onto `MAV_RESULT`.
  *
@@ -83,7 +98,10 @@ internal enum class MavlinkCommandOutcome(val mavResult: Int) {
     DENIED(Mav.RESULT_DENIED),
 
     /** Understood, but not implemented for this airframe. */
-    UNSUPPORTED(Mav.RESULT_UNSUPPORTED)
+    UNSUPPORTED(Mav.RESULT_UNSUPPORTED),
+
+    /** Superseded by a newer command before it finished. Not an error. */
+    CANCELLED(Mav.RESULT_CANCELLED)
 }
 
 /**

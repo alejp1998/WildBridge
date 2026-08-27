@@ -315,13 +315,16 @@ _TELEMETRY_HANDLERS: dict[str, Callable[[dict[str, Any], Any], bool]] = {
 WILDBRIDGE_STATUS_ID = 42100
 #: mavgen's unpacker format for WILDBRIDGE_STATUS, copied from the generated dialect rather than
 #: worked out by hand, and pinned by a test that regenerates it from the XML.
-WILDBRIDGE_STATUS_STRUCT = "<IiiffHHHHHHBBB24s"
-WILDBRIDGE_STATUS_SIZE = 59
+WILDBRIDGE_STATUS_STRUCT = "<IiiffIIIHHHHHHBBB24s"
+WILDBRIDGE_STATUS_SIZE = 71
 
 WB_FLAG_MANUAL_OVERRIDE = 1
 WB_FLAG_READY_TO_TAKEOFF = 2
 WB_FLAG_HOME_SET = 4
 WB_FLAG_LRF_TARGET_VALID = 8
+WB_FLAG_WAYPOINT_REACHED = 16
+WB_FLAG_YAW_REACHED = 32
+WB_FLAG_ALTITUDE_REACHED = 64
 
 
 def decode_wildbridge_status(payload: bytes) -> dict[str, Any]:
@@ -334,6 +337,9 @@ def decode_wildbridge_status(payload: bytes) -> dict[str, Any]:
         lrf_lon,
         lrf_alt,
         max_radius,
+        waypoint_seq,
+        yaw_seq,
+        altitude_seq,
         time_to_home,
         time_to_land,
         total_time,
@@ -363,6 +369,14 @@ def decode_wildbridge_status(payload: bytes) -> dict[str, Any]:
         "hybridFl": hybrid_fl or -1,
         "batteryNeededToGoHome": battery_to_home,
         "batteryNeededToLand": battery_to_land,
+        # Reported as state, so a ground station that missed a completion ack still converges on
+        # the truth. The seq is what scopes each flag to the movement that earned it.
+        "waypointReached": bool(flags & WB_FLAG_WAYPOINT_REACHED),
+        "waypointSeq": waypoint_seq,
+        "yawReached": bool(flags & WB_FLAG_YAW_REACHED),
+        "yawSeq": yaw_seq,
+        "altitudeReached": bool(flags & WB_FLAG_ALTITUDE_REACHED),
+        "altitudeSeq": altitude_seq,
     }
     # Only a locked reading has a target; reporting 0,0 would put it off West Africa.
     status["lrfTarget"] = (
@@ -397,6 +411,20 @@ def _derive(telemetry: dict[str, Any]) -> None:
         telemetry.setdefault("distanceToHome", 0.0)
 
 
+#: Sign of the derived joint attitude relative to DJI's convention.
+#:
+#: The composition below is the gimbal's rotation expressed in the aircraft's frame, which is
+#: what "joint angle" means. Whether DJI reports that or its negation is *not established*: the
+#: one comparison available was taken from two samples a few seconds apart on a stationary
+#: aircraft, which is not evidence of a sign. So this stays +1 -- the mathematically derived
+#: value -- rather than carrying a negation justified by a mismatched pair of readings.
+#:
+#: Settling it takes one flight: tilt the aircraft, read gimbalJointAttitude on both wires at the
+#: same instant, and if they are mirrored, flip this to -1.0. It is a single constant precisely so
+#: that is a one-line change rather than an archaeology exercise.
+GIMBAL_JOINT_SIGN = 1.0
+
+
 def _derive_gimbal_joint(telemetry: dict[str, Any]) -> None:
     """Recover the gimbal's angle relative to the aircraft from two world-frame attitudes.
 
@@ -420,14 +448,11 @@ def _derive_gimbal_joint(telemetry: dict[str, Any]) -> None:
         float(attitude.get("yaw", 0.0)),
     )
     roll, pitch, yaw = _quat_to_euler_deg(_quat_mul(_quat_conjugate(body), quaternion))
-    # Negated to match DJI's sign. The composition above gives the gimbal's rotation expressed in
-    # the body frame; DJI reports the joint angle with the opposite sign, so a gimbal holding
-    # level on an aircraft rolled +1.3 degrees reads +1.3 rather than -1.3.
-    #
-    # This was calibrated against one static sample from a stationary aircraft, which fixes the
-    # sign but not the behaviour through large attitudes. Worth confirming in flight against the
-    # HTTP stream before anything depends on it for pointing.
-    telemetry["gimbalJointAttitude"] = {"roll": -roll, "pitch": -pitch, "yaw": -yaw}
+    telemetry["gimbalJointAttitude"] = {
+        "roll": roll * GIMBAL_JOINT_SIGN,
+        "pitch": pitch * GIMBAL_JOINT_SIGN,
+        "yaw": yaw * GIMBAL_JOINT_SIGN,
+    }
 
 
 def _euler_deg_to_quat(roll: float, pitch: float, yaw: float) -> tuple[float, ...]:
@@ -887,11 +912,22 @@ def _send_trajectory(channel: MavlinkCommandChannel, payload: str, timeout: floa
     return f"ACCEPTED via MAVLink mission, {len(waypoints)} waypoints"
 
 
-def _send_rth_altitude(channel: MavlinkCommandChannel, payload: str, timeout: float) -> str:
-    values = _numbers(payload)
-    if not values:
-        return "REJECTED: invalid altitude value"
-    return channel.set_parameter(PARAM_RTH_ALTITUDE, values[0], timeout)
+def _send_setting_parameter(endpoint: str):
+    """A settings endpoint whose MAVLink form is a parameter write."""
+
+    def send(channel: MavlinkCommandChannel, payload: str, timeout: float) -> str:
+        text = str(payload).strip()
+        # Booleans arrive as "true"/"false" on the HTTP surface and as 1/0 in a float parameter.
+        if text.lower() in ("true", "false"):
+            value = 1.0 if text.lower() == "true" else 0.0
+        else:
+            values = _numbers(text)
+            if not values:
+                return f"REJECTED: {endpoint} needs a numeric value over MAVLink"
+            value = values[0]
+        return channel.set_parameter(SETTING_PARAM_ENDPOINTS[endpoint], value, timeout)
+
+    return send
 
 
 def _send_setting(channel: MavlinkCommandChannel, payload: str, timeout: float) -> str:
@@ -912,12 +948,25 @@ def _send_setting(channel: MavlinkCommandChannel, payload: str, timeout: float) 
 _SPECIAL_SENDERS: dict[str, Any] = {
     "/send/stick": _send_stick,
     "/send/navigateTrajectoryDJINative": _send_trajectory,
-    "/send/setRTHAltitude": _send_rth_altitude,
     "/send/setSetting": _send_setting,
 }
 
-#: The one parameter the aircraft accepts a write to, and the setting names that map onto it.
+#: Settings the aircraft accepts a write to, keyed by the endpoint the HTTP surface uses.
+#:
+#: Numeric only. PARAM_SET carries a float, and the string settings behind the rest of the
+#: /send/set* surface -- drone name, video source, the MediaMTX address -- have no honest float
+#: encoding, so they stay on HTTP rather than being smuggled through as magic numbers. In
+#: mavlink-only mode those come back refused, which is the truthful answer.
 PARAM_RTH_ALTITUDE = "WB_RTH_ALT"
+SETTING_PARAM_ENDPOINTS = {
+    "/send/setRTHAltitude": PARAM_RTH_ALTITUDE,
+    "/send/setMaxFlightHeight": "WB_MAX_HEIGHT",
+    "/send/setMaxFlightDistance": "WB_MAX_DIST",
+    "/send/setDistanceLimitEnabled": "WB_DIST_LIMIT_EN",
+    "/send/setWebRtcFps": "WB_RTC_FPS",
+    "/send/setDetectionsEnabled": "WB_DETECT_EN",
+    "/send/setEdgeConfidence": "WB_EDGE_CONF",
+}
 
 #: What a WildBridge parameter reads when the aircraft has never reported it.
 PARAM_UNKNOWN = -1.0
@@ -930,7 +979,20 @@ REACH_LATCHES = {
     "/send/gotoYaw": ("yawReached", "yawSeq"),
     "/send/gotoAltitude": ("altitudeReached", "altitudeSeq"),
 }
-SETTING_PARAMETERS = {"rthAltitude": PARAM_RTH_ALTITUDE}
+#: The same settings addressed by their webapp key, for requestSetSetting.
+SETTING_PARAMETERS = {
+    "rthAltitude": PARAM_RTH_ALTITUDE,
+    "maxFlightHeight": "WB_MAX_HEIGHT",
+    "maxFlightDistance": "WB_MAX_DIST",
+    "distanceLimitEnabled": "WB_DIST_LIMIT_EN",
+    "webrtcFps": "WB_RTC_FPS",
+    "detectionsEnabled": "WB_DETECT_EN",
+    "edgeConfidenceThreshold": "WB_EDGE_CONF",
+}
+
+
+for _endpoint in SETTING_PARAM_ENDPOINTS:
+    _SPECIAL_SENDERS[_endpoint] = _send_setting_parameter(_endpoint)
 
 
 class _FrameSink:
