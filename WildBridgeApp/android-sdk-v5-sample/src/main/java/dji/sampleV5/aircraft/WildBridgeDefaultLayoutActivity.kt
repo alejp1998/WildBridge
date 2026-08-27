@@ -356,8 +356,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     override val mainHandler = Handler(Looper.getMainLooper())
 
     private var settingsBackupListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    //: The backup writes a file to Documents/WildBridge; that I/O must not run on the main
+    //: thread (StrictMode flags it). Serialized so debounced writes never pile up.
+    private val settingsBackupExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val settingsBackupTask = Runnable {
-        WildBridgeSettingsBackup.save(sharedPreferences, droneName)
+        settingsBackupExecutor.execute {
+            WildBridgeSettingsBackup.save(sharedPreferences, droneName)
+        }
     }
     private val telemetryCoordinator = TelemetryCoordinator()
     private lateinit var discoveryManager: WildBridgeDiscoveryManager
@@ -3836,6 +3841,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             mavlinkEndpoint?.stop()
             mavlinkEndpoint = null
             captureExecutor.shutdownNow()
+            // Unregister the settings backup listener and stop its writer: the SharedPreferences
+            // singleton otherwise keeps the listener (and the activity through it) alive, and the
+            // executor would keep writing after destroy.
+            settingsBackupListener?.let { sharedPreferences.unregisterOnSharedPreferenceChangeListener(it) }
+            settingsBackupListener = null
+            settingsBackupExecutor.shutdownNow()
             webRTCStreamer?.listener = null
             stopActiveStreaming()
             discoveryManager.stopDiscoveryServer()
