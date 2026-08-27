@@ -132,9 +132,8 @@ const publishCatalog = [
     ['Capture Thermal Image', 'POST', '/send/captureThermalImage', '', 'Trips one shutter on the thermal payload, storing thermal R-JPEG plus wide/zoom when enabled.'],
   ]],
   ['HTTP Waypoint And Mission', 'Higher-level navigation routes for single-waypoint and multi-waypoint movement. These commands carry coordinates in the request body, so check units before publishing from scripts.', [
-    ['Goto Waypoint', 'POST', '/send/gotoWP', '55.6761,12.5683,35', 'Single lat,lon,alt waypoint command in decimal degrees and meters.'],
-    ['Goto Waypoint With PID', 'POST', '/send/gotoWPwithPID', '55.6761,12.5683,35,90,4', 'Waypoint plus yaw and maxSpeed: lat,lon,alt,yaw,maxSpeed.'],
-    ['Navigate Trajectory', 'POST', '/send/navigateTrajectory', '55.6761,12.5683,25;55.6764,12.5688,30;55.6768,12.5692,32,90', 'Semicolon-separated waypoint list; final waypoint may include yaw.'],
+    ['Goto Waypoint (Hold Heading)', 'POST', '/send/gotoWaypointHoldHeading', '55.6761,12.5683,35,90,4', 'Single lat,lon,alt waypoint plus final yaw and maxSpeed: lat,lon,alt,yaw,maxSpeed. The nose stays on the commanded heading while translating.'],
+    ['Goto Waypoint (Nose Forward)', 'POST', '/send/gotoWaypointNoseForward', '55.6761,12.5683,35,90,4', 'Single lat,lon,alt waypoint plus final yaw and maxSpeed: lat,lon,alt,yaw,maxSpeed. The nose follows the path; yaw is the arrival heading.'],
     ['Navigate DJI Native', 'POST', '/send/navigateTrajectoryDJINative', '4.0;55.6761,12.5683,25;55.6768,12.5692,32', 'DJI native mission upload with speed first, then at least two lat,lon,alt waypoints.'],
     ['Abort DJI Mission', 'POST', '/send/abort/DJIMission', '', 'Stops the active DJI native mission path.'],
   ]],
@@ -1371,7 +1370,7 @@ function updatePublishSummary(shown) {
   publishSummary.replaceChildren(
     publishStat(`${items.length}`, 'endpoints'),
     publishStat(`${covered}`, 'also on MAVLink', covered ? 'good' : undefined),
-    publishStat(`${items.length - covered}`, 'HTTP only', items.length - covered ? 'warn' : 'good'),
+    publishStat(`${items.length - covered}`, 'HTTP only'),
     publishStat(`${shown}`, 'shown'),
   );
 }
@@ -1972,9 +1971,9 @@ const mavlinkCompare = document.querySelector('#mavlinkCompare');
 let mavlinkTimer = null;
 
 const MAVLINK_STATUS_LABELS = {
-  agree: 'agree',
-  differ: 'differ',
-  httpOnly: 'HTTP only',
+  agree: 'matches HTTP',
+  differ: 'differs from HTTP',
+  httpOnly: 'not on MAVLink',
   mavlinkOnly: 'MAVLink only',
 };
 
@@ -2044,26 +2043,32 @@ function mavlinkEmptyState(text) {
 
 function renderMavlinkComparison(payload) {
   const rows = payload.rows || [];
+  const crossCheck = mavlinkDiffOnly.checked;
+  // What MAVLink actually reports is the subject; anything HTTP-only is absent from this wire
+  // and belongs in the cross-check, not in a list of what the aircraft is telling us.
+  const reported = rows.filter((row) => row.status !== 'httpOnly');
   const differing = rows.filter((row) => row.status === 'differ').length;
-  const agreeing = rows.filter((row) => row.status === 'agree').length;
+  const missing = rows.filter((row) => row.status === 'httpOnly').length;
 
   mavlinkSummary.replaceChildren(
-    mavlinkStat(`${payload.mavlinkKeys}`, 'fields on MAVLink'),
+    mavlinkStat(`${payload.mavlinkKeys}`, 'fields reported'),
     mavlinkStat(`${payload.httpKeys}`, 'fields on HTTP'),
-    mavlinkStat(`${agreeing}`, 'agree'),
-    mavlinkStat(`${differing}`, 'disagree', differing > 0 ? 'warn' : 'good'),
+    mavlinkStat(`${missing}`, 'HTTP only', missing ? undefined : 'good'),
+    mavlinkStat(`${differing}`, 'disagreeing', differing ? 'warn' : 'good'),
   );
 
-  const shown = mavlinkDiffOnly.checked ? rows.filter((row) => row.status !== 'agree') : rows;
+  const shown = crossCheck ? rows : reported;
   if (!shown.length) {
-    mavlinkCompare.replaceChildren(mavlinkEmptyState('Nothing to show — the two wires agree on every field.'));
+    mavlinkCompare.replaceChildren(mavlinkEmptyState('Nothing reported yet — waiting for telemetry.'));
     return;
   }
 
   const table = document.createElement('table');
   table.className = 'mavlinkTable';
   const head = document.createElement('thead');
-  head.innerHTML = '<tr><th>Field</th><th>MAVLink</th><th>HTTP</th><th></th></tr>';
+  head.innerHTML = crossCheck
+    ? '<tr><th>Field</th><th>MAVLink</th><th>HTTP</th><th></th></tr>'
+    : '<tr><th>Field</th><th>Value</th><th></th></tr>';
   const body = document.createElement('tbody');
   shown.forEach((row) => {
     const tr = document.createElement('tr');
@@ -2073,14 +2078,22 @@ function renderMavlinkComparison(payload) {
     key.textContent = row.key;
     const mav = document.createElement('td');
     mav.textContent = row.mavlink;
-    const http = document.createElement('td');
-    http.textContent = row.http;
+    tr.append(key, mav);
+    if (crossCheck) {
+      const http = document.createElement('td');
+      http.textContent = row.http;
+      tr.append(http);
+    }
     const status = document.createElement('td');
-    const chip = document.createElement('span');
-    chip.className = `mavlinkChip ${row.status}`;
-    chip.textContent = MAVLINK_STATUS_LABELS[row.status] || row.status;
-    status.append(chip);
-    tr.append(key, mav, http, status);
+    // Only worth a chip when it says something: in the plain view every row is a field MAVLink
+    // reports, and labelling each one "matches HTTP" is noise rather than information.
+    if (crossCheck || row.status === 'differ') {
+      const chip = document.createElement('span');
+      chip.className = `mavlinkChip ${row.status}`;
+      chip.textContent = MAVLINK_STATUS_LABELS[row.status] || row.status;
+      status.append(chip);
+    }
+    tr.append(status);
     body.append(tr);
   });
   table.append(head, body);
