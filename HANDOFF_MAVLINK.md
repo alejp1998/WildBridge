@@ -119,4 +119,57 @@ Calibrated by logging both wires while the aircraft was tilted by hand — 91 sa
 The derivation (`q_body⁻¹ ⊗ q_world`) has the right sign and a slope of **+1.03**, so
 `GIMBAL_JOINT_SIGN` stays `+1`. What it cannot recover is a **~1.5° mounting offset** baked into
 DJI's joint angles. The aircraft therefore reports them directly in `WILDBRIDGE_STATUS`; the
-composition survives only as a fallback. The two wires now agree to a tenth of a degree.
+composition survives only as a fallback.
+
+That "0 disagreements" verdict was only true while the aircraft stood still, and the yaw path
+carried the bug the static sweep could not see. The aircraft wrote the joint yaw in **degrees**
+into `GIMBAL_DEVICE_ATTITUDE_STATUS.delta_yaw`, which MAVLink specifies in **radians**, and the
+ground station converts it (`math.degrees`). With the aircraft still, joint yaw ≈ 0 and both
+wires agreed; the moment the aircraft moves and the gimbal compensates, the MAVLink value reads
+**57.3×** the HTTP value and the MAVLink tab lights up. Fixed by sending radians; pinned by
+`MavlinkGimbalMessageTest` (aircraft), `test_delta_yaw_is_interpreted_as_radians` and
+`test_a_real_gimbal_frame_recovers_the_joint_yaw_in_degrees` (ground station, the last one a
+real encode→decode frame round-trip).
+
+**Fingerprint of an aircraft still on the old build**: the MAVLink tab shows the gimbal row
+differing *in yaw only* (pitch/roll match — they travel in WILDBRIDGE_STATUS), with the MAVLink
+yaw equal to `degrees(http_yaw)`. A 0.2° joint yaw reads **11.46** on MAVLink — `math.degrees(0.2)`.
+The fix lives in the APK; rebuild and reinstall it, then re-check with the aircraft yawed by hand
+before trusting the gimbal rows again.
+
+**Sampling skew on the comparison tab**: even with correct units, the HTTP and MAVLink wires
+cache frames at different message rates, so a single paired read shows the gimbal row "differing
+a bit" purely from how far the aircraft moved between the two updates. The tab now burst-samples
+3 pairs ~50 ms apart and reports `agree` when any cross pair is within tolerance (`NUMERIC_TOLERANCE`),
+so a genuine disagreement survives every pair but sampling skew does not. Pinned by
+`test_mavlink_debug.py`.
+
+**WhipPublisher teardown crashes** (unrelated to MAVLink; the app was seen closing/restarting
+twice): two native crashes from racing the publish loop. (1) `stop()` used to call `teardown()`
+on the caller thread while `publish()` was mid-`addTrack` on the executor thread → use-after-free,
+SIGILL in `PeerConnection_nativeAddTrack`. (2) teardown disposed the WebRTC `VideoSource` while a
+frame was still being delivered into it on DJI's live-view thread → `pthread_mutex_lock on a
+destroyed mutex`, SIGABRT in `VideoSource.nativeAdaptFrame`. Fixed by: `stop()` shutting down the
+executor and awaiting its termination so `teardown()` always runs on the executor thread after
+the loop exits, and `teardown()` draining in-flight frame deliveries
+(`awaitInFlightFramesIdle` on both `SharedVideoCapturerHandle` and `DJIV5VideoCapturer`) before
+disposing the video track/source.
+
+**Verification tooling** (added 2026-08-27):
+- `GroundStation/Python/test_scripts/soak_whip_publish_stop.py` — soak that forces publish/stop
+  cycles over HTTP and watches the crash buffer + native heap. Note: attaching a telemetry client
+  starts streaming only *once per client IP*, and disconnecting clients does not stop the stream,
+  so the soak drives `POST /send/streaming/mode webrtc` (→ `restartActiveStreaming()` →
+  `WhipPublisher.stop()` + fresh `startWhip()`), which is the app's real teardown path. It verifies
+  the `WHIP publishing started` and `WhipPublisher stopped` log markers, the crash buffer stays
+  empty, the PID is stable, and native heap does not grow past a threshold. Smoke-tested 4 cycles
+  clean (native heap flat ~131 MB). Optionally `--mediamtx http://host:9997` for an end-to-end
+  path-live check.
+- StrictMode (debug-only, `penaltyLog`) installed in `DJIAircraftApplication.onCreate()` — thread
+  (disk/network) + VM (leaked Closables/Activities) policies. Confirmed on-device
+  ("StrictMode enabled (debug build)").
+- Android Lint: `:sample:lintReportCurrentDebug` — **0 StaticFieldLeak** findings in WildBridge
+  code. Notable Error-severity items: `NewApi` `ContextWrapper#getDisplay` (API 30 vs min 24,
+  `WildBridgeDefaultLayoutActivity.kt:1564`) and malformed `frag_upgrade_page.xml` (`ExtraText`).
+  Also fixed `qualityWildBridge` which referenced the ambiguous `:sample:lintDebug` → now
+  `:sample:lintCurrentDebug`.

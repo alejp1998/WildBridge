@@ -1,6 +1,7 @@
 package dji.sampleV5.aircraft
 
 import android.content.Context
+import android.os.StrictMode
 import android.util.Log
 
 /**
@@ -30,10 +31,37 @@ class DJIAircraftApplication : DJIApplication() {
         Log.d("DJIAircraftApp", "DJIAircraftApplication onCreate() called")
         try {
             super.onCreate()
+            installStrictModeInDebugBuilds()
             Log.d("DJIAircraftApp", "DJIAircraftApplication onCreate() completed successfully")
         } catch (e: Exception) {
             Log.e("DJIAircraftApp", "Error in DJIAircraftApplication onCreate: ${e.message}", e)
             throw e
         }
+    }
+
+    /**
+     * Debug-only StrictMode policies. The app runs an HTTP command server and MAVLink writers,
+     * so disk/network on the main thread and leaked Closables/Activities are real failure modes;
+     * log (not crash) so a bench soak surfaces them without killing a live session.
+     */
+    private fun installStrictModeInDebugBuilds() {
+        if (!BuildConfig.DEBUG) return
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .detectNetwork()
+                .penaltyLog()
+                .build()
+        )
+        StrictMode.setVmPolicy(
+            StrictMode.VmPolicy.Builder()
+                .detectLeakedSqlLiteObjects()
+                .detectLeakedClosableObjects()
+                .detectActivityLeaks()
+                .penaltyLog()
+                .build()
+        )
+        Log.d("DJIAircraftApp", "StrictMode enabled (debug build)")
     }
 }

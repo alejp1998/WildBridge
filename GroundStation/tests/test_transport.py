@@ -646,6 +646,63 @@ def test_gimbal_attitude_reports_the_world_frame_angles():
     assert telemetry["gimbalAttitude"]["yaw"] == pytest.approx(90.0, abs=0.01)
 
 
+def test_delta_yaw_is_interpreted_as_radians():
+    """The wire's delta_yaw is radians; a receiver converts it to the degrees the HTTP stream uses.
+
+    This is the contract the aircraft is built against: a joint yaw of 30 degrees travels as
+    ~0.524 rad and must come back as 30 degrees. The failure this guards against is invisible
+    while the aircraft is still -- joint yaw sits near zero, and a zero is a zero in either unit
+    -- and shows up the moment the aircraft moves and the gimbal compensates. It is pinned here
+    rather than left to a live-aircraft comparison for exactly that reason.
+    """
+    telemetry = {}
+    q = _euler_to_quat(0.0, 0.0, 0.0)
+    apply_mavlink_message(
+        telemetry,
+        FakeMessage("GIMBAL_DEVICE_ATTITUDE_STATUS", q=q, delta_yaw=math.radians(30.0)),
+    )
+    assert telemetry["_gimbalJointYaw"] == pytest.approx(30.0)
+
+
+def test_a_real_gimbal_frame_recovers_the_joint_yaw_in_degrees():
+    """The whole wire contract in one test: a frame built the way the aircraft builds it.
+
+    A 0.2-degree joint yaw travels as delta_yaw = 0.00349 rad (the MAVLink field is radians) and
+    must come back as 0.2 degrees. This is the exact failure the MAVLink tab caught on a live
+    aircraft: shipping degrees instead put 0.2 on the wire and the receiver read 11.46 -- a frame
+    that decodes cleanly and means the wrong thing, visible only once the aircraft moves.
+    """
+    from pymavlink.dialects.v20 import common as mavlink_common
+
+    class Sink:
+        buf = b""
+
+        def write(self, data):
+            self.buf += data
+
+    sink = Sink()
+    mavlink_common.MAVLink(sink, srcSystem=1, srcComponent=154).gimbal_device_attitude_status_send(
+        0,  # target_system: broadcast
+        0,  # target_component
+        0,  # time_boot_ms
+        32,  # flags: GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME
+        [1.0, 0.0, 0.0, 0.0],  # q: gimbal level in the vehicle frame
+        float("nan"),
+        float("nan"),
+        float("nan"),  # angular rates: not reported
+        0,  # failure_flags
+        math.radians(0.2),  # delta_yaw: radians per spec, as the aircraft now sends
+        float("nan"),  # delta_yaw_velocity
+        0,  # gimbal_device_id
+    )
+    parser = mavlink_common.MAVLink(None)
+    (msg,) = parser.parse_buffer(sink.buf)
+    telemetry = {}
+    apply_mavlink_message(telemetry, msg)
+    assert telemetry["_gimbalJointYaw"] == pytest.approx(0.2, abs=1e-3)
+    assert telemetry["gimbalAttitude"]["yaw"] == pytest.approx(0.0, abs=1e-3)
+
+
 def test_the_reported_joint_angles_beat_the_derived_ones():
     """When the aircraft reports its own joint angles, they win.
 

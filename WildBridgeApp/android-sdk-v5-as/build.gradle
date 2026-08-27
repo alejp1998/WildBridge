@@ -123,7 +123,7 @@ tasks.register('detektDji', detektTaskClass) {
 tasks.register('qualityWildBridge') {
     group = 'verification'
     description = 'Run ktlint formatting checks, Detekt, and Android Lint for WildBridge app code.'
-    dependsOn ':sample:spotlessKotlinCheck', 'detektWildBridge', ':sample:lintDebug'
+    dependsOn ':sample:spotlessKotlinCheck', 'detektWildBridge', ':sample:lintCurrentDebug'
 }
 
 tasks.register('qualityDji') {

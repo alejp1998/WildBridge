@@ -78,6 +78,10 @@ internal data class MavlinkSnapshot(
      * recovers the right sign and slope, but sits about 1.5 degrees off what DJI reports --
      * measured over a hand-tilted sweep -- because the joint angles carry a mounting offset the
      * world attitude does not describe.
+     *
+     * On the wire, pitch and roll travel as centidegrees in WILDBRIDGE_STATUS, and yaw travels
+     * as `delta_yaw` in GIMBAL_DEVICE_ATTITUDE_STATUS -- which MAVLink specifies in radians, so
+     * the builder converts.
      */
     val gimbalJointPitchDeg: Double = 0.0,
     val gimbalJointRollDeg: Double = 0.0,

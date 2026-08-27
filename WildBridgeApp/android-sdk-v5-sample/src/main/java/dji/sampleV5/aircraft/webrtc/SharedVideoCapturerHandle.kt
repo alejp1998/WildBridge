@@ -55,6 +55,8 @@ class SharedVideoCapturerHandle(
         source.recoverCapture(reason)
     }
 
+    fun awaitInFlightFramesIdle(timeoutMs: Long): Boolean = source.awaitInFlightFramesIdle(timeoutMs)
+
     override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
         source.changeResolution(width, height)
         source.changeFrameRate(framerate)

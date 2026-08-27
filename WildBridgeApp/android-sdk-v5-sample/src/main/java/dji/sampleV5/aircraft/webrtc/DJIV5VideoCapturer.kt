@@ -11,6 +11,7 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoFrame
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -51,6 +52,10 @@ class DJIV5VideoCapturer(
 
     // Frame counter for metadata synchronization
     private val frameCounter = AtomicLong(0)
+    //: Frames currently being handled on DJI's live-view thread; teardown waits on this before
+    //: disposing the observer it feeds (see awaitInFlightFramesIdle).
+    private val inFlightFrames = AtomicInteger(0)
+    private val frameIdleLock = Object()
 
     // Listener for frame metadata (called for each frame with synchronized telemetry)
     var metadataListener: FrameMetadataListener? = null
@@ -72,12 +77,21 @@ class DJIV5VideoCapturer(
             height: Int,
             format: ICameraStreamManager.FrameFormat
         ) {
-            if (!isCapturing.get() || capturerObserver == null) return
+            // Count before anything else so teardown can wait for in-flight delivery before
+            // disposing the observer (see awaitInFlightFramesIdle).
+            inFlightFrames.incrementAndGet()
+            try {
+                if (!isCapturing.get() || capturerObserver == null) return
 
-            runCatching {
-                processFrame(frameData, width, height)
-            }.onFailure { error ->
-                Log.e(TAG, "Error processing frame: ${error.message}", error)
+                runCatching {
+                    processFrame(frameData, width, height)
+                }.onFailure { error ->
+                    Log.e(TAG, "Error processing frame: ${error.message}", error)
+                }
+            } finally {
+                if (inFlightFrames.decrementAndGet() == 0) {
+                    synchronized(frameIdleLock) { frameIdleLock.notifyAll() }
+                }
             }
         }
     }
@@ -224,6 +238,23 @@ class DJIV5VideoCapturer(
         stopCapture()
         capturerObserver = null
         surfaceTextureHelper = null
+    }
+
+    /**
+     * Block until every frame currently being handled on DJI's live-view thread has finished, or
+     * the timeout elapses. Call before disposing the observer, which is otherwise a use-after-free
+     * on the frame thread.
+     */
+    fun awaitInFlightFramesIdle(timeoutMs: Long): Boolean {
+        val deadlineMs = System.currentTimeMillis() + timeoutMs
+        synchronized(frameIdleLock) {
+            while (inFlightFrames.get() > 0) {
+                val remainingMs = deadlineMs - System.currentTimeMillis()
+                if (remainingMs <= 0L) return false
+                runCatching { frameIdleLock.wait(remainingMs) }
+            }
+        }
+        return true
     }
 
     override fun isScreencast(): Boolean = false

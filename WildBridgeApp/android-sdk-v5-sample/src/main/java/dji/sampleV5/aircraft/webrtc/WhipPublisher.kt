@@ -56,6 +56,11 @@ class WhipPublisher(
         private const val RECONNECT_MAX_DELAY_MS = 30000L
         private const val FIRST_FRAME_TIMEOUT_MS = 8_000L
         private const val FIRST_FRAME_RECOVERY_TIMEOUT_MS = 4_000L
+        //: How long stop() waits for the publish loop to finish its own teardown before returning.
+        private const val STOP_AWAIT_GRACE_S = 5L
+        //: How long teardown() waits for DJI's live-view thread to finish an in-flight frame
+        //: before disposing the WebRTC source it delivers into.
+        private const val FRAME_DRAIN_TIMEOUT_MS = 200L
     }
 
     private val appContext = context.applicationContext
@@ -103,7 +108,12 @@ class WhipPublisher(
         mainHandler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
         if (wasRunning) {
-            teardown()
+            // The publish loop owns teardown, on the executor thread. Disposing the native
+            // WebRTC objects from here while publish() is mid-flight (addTrack, WHIP POST, ICE
+            // gather) is a use-after-free that has crashed the process -- SIGILL inside
+            // PeerConnection_nativeAddTrack, observed in the field. The loop always tears down
+            // before it exits, and its blocking calls are bounded, so wait for it instead.
+            runCatching { executor.awaitTermination(STOP_AWAIT_GRACE_S, TimeUnit.SECONDS) }
             Log.i(TAG, "WhipPublisher stopped")
         }
     }
@@ -307,6 +317,11 @@ class WhipPublisher(
             deleteWhipResource()
             localPreviewSink?.let { sink -> runCatching { videoTrack?.removeSink(sink) } }
             runCatching { videoCapturer.stopCapture() }
+            // stopCapture removed our observer, but a frame already dispatched on DJI's live-view
+            // thread can still be delivering into the VideoSource. Disposing the source first
+            // aborts inside WebRTC native -- pthread_mutex_lock on a destroyed mutex, seen in the
+            // field -- so wait for the frame thread to quiesce before disposing anything it feeds.
+            drainInFlightFrames()
             runCatching { videoTrack?.dispose() }
             videoTrack = null
             runCatching { videoSource?.dispose() }
@@ -319,6 +334,15 @@ class WhipPublisher(
         } finally {
             isTearingDown.set(false)
         }
+    }
+
+    private fun drainInFlightFrames() {
+        val drained = when (videoCapturer) {
+            is SharedVideoCapturerHandle -> videoCapturer.awaitInFlightFramesIdle(FRAME_DRAIN_TIMEOUT_MS)
+            is DJIV5VideoCapturer -> videoCapturer.awaitInFlightFramesIdle(FRAME_DRAIN_TIMEOUT_MS)
+            else -> true
+        }
+        if (!drained) Log.w(TAG, "Timed out draining in-flight video frames before dispose")
     }
 
     /**

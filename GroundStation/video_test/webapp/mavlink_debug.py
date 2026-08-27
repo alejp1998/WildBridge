@@ -24,9 +24,19 @@ from wildbridge_groundstation.transport import Transport
 #: should not leave a socket bound to the aircraft's telemetry port forever.
 IDLE_TIMEOUT_S = 120.0
 
-#: Fields where a small numeric difference is sampling noise rather than disagreement. Both wires
-#: are read a fraction of a second apart, and the aircraft does not stand perfectly still.
+#: Fields where a small numeric difference is sampling noise rather than disagreement.
 NUMERIC_TOLERANCE = 1.0
+
+#: How many (HTTP, MAVLink) pairs each comparison samples, and the pause between them.
+#:
+#: Each wire is a cache of its latest frame, updated at its own message rate, so a single read is
+#: skewed by however far the aircraft moved between the two wires' last updates. That skew is
+#: exactly how the gimbal rows read "differ" while the aircraft was moving -- both wires carried
+#: the same value, sampled a few milliseconds apart. A short burst lets both caches advance; a
+#: real wire disagreement survives every pair, while sampling skew does not (some pair lands on
+#: the same underlying value). A field therefore agrees when the two wires agreed on any pair.
+COMPARISON_BURST_PAIRS = 3
+COMPARISON_BURST_PAUSE_S = 0.05
 
 
 class _Comparison:
@@ -48,14 +58,20 @@ class _Comparison:
 
     def snapshot(self) -> dict[str, Any]:
         self.touched = time.monotonic()
-        with self._lock:
-            http = self._http.getTelemetry()
-            mavlink = self._mavlink.getTelemetry()
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for pair_index in range(COMPARISON_BURST_PAIRS):
+            with self._lock:
+                http = self._http.getTelemetry()
+                mavlink = self._mavlink.getTelemetry()
+            pairs.append((http, mavlink))
+            if pair_index < COMPARISON_BURST_PAIRS - 1:
+                time.sleep(COMPARISON_BURST_PAUSE_S)
+        latest_http, latest_mavlink = pairs[-1]
         return {
             "ip": self.ip,
-            "httpKeys": len(http),
-            "mavlinkKeys": len([k for k in mavlink if not k.startswith("_")]),
-            "rows": _rows(http, mavlink),
+            "httpKeys": len(latest_http),
+            "mavlinkKeys": len([k for k in latest_mavlink if not k.startswith("_")]),
+            "rows": _rows(pairs),
         }
 
     def close(self) -> None:
@@ -63,21 +79,29 @@ class _Comparison:
         self._mavlink.stopTelemetryStream()
 
 
-def _rows(http: dict[str, Any], mavlink: dict[str, Any]) -> list[dict[str, Any]]:
+def _rows(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
     """One row per field, ordered so disagreements come first."""
+    http_by_key: dict[str, list[Any]] = {}
+    mavlink_by_key: dict[str, list[Any]] = {}
+    for http, mavlink in pairs:
+        for key, value in http.items():
+            if not key.startswith("_"):
+                # Working state the transport keeps for itself, not telemetry.
+                http_by_key.setdefault(key, []).append(value)
+        for key, value in mavlink.items():
+            if not key.startswith("_"):
+                mavlink_by_key.setdefault(key, []).append(value)
+
     rows = []
-    for key in sorted(set(http) | set(mavlink)):
-        if key.startswith("_"):
-            # Working state the transport keeps for itself, not telemetry.
-            continue
-        on_http = key in http
-        on_mavlink = key in mavlink
+    for key in sorted(set(http_by_key) | set(mavlink_by_key)):
+        http_values = http_by_key.get(key, [])
+        mavlink_values = mavlink_by_key.get(key, [])
         rows.append(
             {
                 "key": key,
-                "http": _render(http.get(key)),
-                "mavlink": _render(mavlink.get(key)),
-                "status": _status(http.get(key), mavlink.get(key), on_http, on_mavlink),
+                "http": _render(http_values[-1] if http_values else None),
+                "mavlink": _render(mavlink_values[-1] if mavlink_values else None),
+                "status": _status(http_values, mavlink_values),
             }
         )
     order = {"differ": 0, "mavlinkOnly": 1, "httpOnly": 2, "agree": 3}
@@ -85,12 +109,16 @@ def _rows(http: dict[str, Any], mavlink: dict[str, Any]) -> list[dict[str, Any]]
     return rows
 
 
-def _status(http_value, mavlink_value, on_http: bool, on_mavlink: bool) -> str:
-    if not on_mavlink:
+def _status(http_values: list[Any], mavlink_values: list[Any]) -> str:
+    if not mavlink_values:
         return "httpOnly"
-    if not on_http:
+    if not http_values:
         return "mavlinkOnly"
-    return "agree" if _close_enough(http_value, mavlink_value) else "differ"
+    # Agree when the wires ever agreed during the burst: a difference that is only sampling skew
+    # disappears on the pair where both caches hold the same underlying value, while a genuine
+    # disagreement is there on every pair.
+    agreed = any(_close_enough(h, m) for h in http_values for m in mavlink_values)
+    return "agree" if agreed else "differ"
 
 
 def _close_enough(a: Any, b: Any) -> bool:

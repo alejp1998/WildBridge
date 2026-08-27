@@ -13,6 +13,7 @@ import org.webrtc.NV21Buffer
 import org.webrtc.VideoFrame
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -83,6 +84,10 @@ class SharedDJIFrameSource(
     private val lastSentTimestampNs = AtomicLong(0L)
     private val frameCounter = AtomicLong(0)
     private val incomingFrameCounter = AtomicLong(0)
+    //: Frames currently being handled on DJI's live-view thread; teardown waits on this before
+    //: disposing anything the observers feed into (see awaitInFlightFramesIdle).
+    private val inFlightFrames = AtomicInteger(0)
+    private val frameIdleLock = Object()
     private val droppedFrameCounter = AtomicLong(0)
     private val processingErrorCounter = AtomicLong(0)
     private val recoveryCounter = AtomicLong(0)
@@ -189,13 +194,24 @@ class SharedDJIFrameSource(
             height: Int,
             format: ICameraStreamManager.FrameFormat
         ) {
-            if (isCapturing.get()) {
-                val frame = Nv21Frame(frameData, offset, length, width, height, System.nanoTime())
-                edgeDetectionFrameListener?.onNv21Frame(frame)
+            // Count the callback before anything else. Teardown removes its observer and then
+            // waits for this counter to drain, so a frame already dispatched on DJI's live-view
+            // thread can never outlive the WebRTC VideoSource it delivers into -- disposing that
+            // first aborts inside the native lib (pthread_mutex_lock on a destroyed mutex).
+            inFlightFrames.incrementAndGet()
+            try {
+                if (isCapturing.get()) {
+                    val frame = Nv21Frame(frameData, offset, length, width, height, System.nanoTime())
+                    edgeDetectionFrameListener?.onNv21Frame(frame)
 
-                val recipients = DjiFrameRecipients.capture(observers, metadataListeners)
-                if (recipients.hasObservers) {
-                    frameProcessor.process(frame, recipients)
+                    val recipients = DjiFrameRecipients.capture(observers, metadataListeners)
+                    if (recipients.hasObservers) {
+                        frameProcessor.process(frame, recipients)
+                    }
+                }
+            } finally {
+                if (inFlightFrames.decrementAndGet() == 0) {
+                    synchronized(frameIdleLock) { frameIdleLock.notifyAll() }
                 }
             }
         }
@@ -356,6 +372,27 @@ class SharedDJIFrameSource(
                 val remainingMs = deadlineMs - System.currentTimeMillis()
                 if (remainingMs <= 0L) return false
                 runCatching { frameWaitLock.wait(remainingMs) }
+            }
+        }
+        return true
+    }
+
+    /**
+     * Block until every frame currently being handled on DJI's live-view thread has finished, or
+     * the timeout elapses.
+     *
+     * Call after removing your observer and before disposing anything the observers hold native
+     * state in (e.g. a WebRTC [VideoSource]): a frame already dispatched on that thread can
+     * otherwise still land in a disposed source, which aborts inside WebRTC native
+     * (pthread_mutex_lock on a destroyed mutex).
+     */
+    fun awaitInFlightFramesIdle(timeoutMs: Long): Boolean {
+        val deadlineMs = System.currentTimeMillis() + timeoutMs
+        synchronized(frameIdleLock) {
+            while (inFlightFrames.get() > 0) {
+                val remainingMs = deadlineMs - System.currentTimeMillis()
+                if (remainingMs <= 0L) return false
+                runCatching { frameIdleLock.wait(remainingMs) }
             }
         }
         return true

@@ -439,6 +439,13 @@ internal object MavlinkMessages {
      * DJI reports two gimbal attitudes — one in the world frame and one relative to the aircraft.
      * The quaternion carries the world-frame attitude, and `delta_yaw` carries the difference,
      * which is exactly the field MAVLink defines for "yaw relative to the vehicle".
+     *
+     * The wire specifies `delta_yaw` in radians, not degrees. Sending the joint angle as degrees
+     * is a units bug that is invisible while the aircraft is still — the joint yaw sits near zero
+     * and a zero is a zero in either unit — and shows up the moment the aircraft moves and the
+     * gimbal compensates: a receiver converts the field from radians, so a 30-degree joint yaw
+     * sent as 30.0 reads back as 1719 degrees. The field was shipped this way once; the
+     * regression test pins the radians encoding.
      */
     fun gimbalDeviceAttitudeStatus(snapshot: MavlinkSnapshot, timeBootMs: Long): ByteArray {
         val (w, x, y, z) = eulerToQuaternion(
@@ -454,7 +461,7 @@ internal object MavlinkMessages {
             .u16(GIMBAL_FLAGS_YAW_IN_VEHICLE_FRAME)
             .u8(0) // target_system: broadcast
             .u8(0) // target_component
-            .f32(snapshot.gimbalJointYawDeg.toFloat())
+            .f32((snapshot.gimbalJointYawDeg * DEG_TO_RAD).toFloat()) // delta_yaw, radians per spec
             .f32(Float.NaN) // delta_yaw_velocity
             .u8(GIMBAL_DEVICE_ID)
             .build()
