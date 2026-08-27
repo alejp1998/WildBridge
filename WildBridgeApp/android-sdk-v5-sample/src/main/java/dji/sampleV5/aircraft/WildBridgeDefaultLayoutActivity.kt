@@ -4769,14 +4769,34 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 (abs(latitudeDeg) < REPOSITION_COORD_EPSILON &&
                     abs(longitudeDeg) < REPOSITION_COORD_EPSILON)
             if (holdingPosition) {
-                // Routed to the altitude controller rather than to a waypoint at the current
-                // position: a zero-length leg has no bearing, so the nose-forward controller
-                // would read atan2(0, 0) and rotate the aircraft to north before climbing.
-                val seq = DroneController.gotoAltitude(altitudeMeters)
-                return CommandResult(
-                    MavlinkCommandOutcome.ACCEPTED,
-                    pending = PendingCommand(PendingKind.ALTITUDE, seq)
-                )
+                // Three of QGroundControl's guided actions are this one command, told apart only
+                // by which parameters are real: Go to location carries a position, Change
+                // altitude carries only an altitude, and Set heading carries only a yaw. So a
+                // command with no position is not automatically an altitude change, and reading
+                // it as one silently discarded the heading the operator had just dialled in.
+                //
+                // Neither is routed to a waypoint at the current position, which would be the
+                // obvious way to express "stay here": a zero-length leg has no bearing, so the
+                // nose-forward controller reads atan2(0, 0) and turns the aircraft north first.
+                return if (!yawDeg.isNaN()) {
+                    val seq = DroneController.gotoYaw(yawDeg)
+                    CommandResult(
+                        MavlinkCommandOutcome.ACCEPTED,
+                        pending = PendingCommand(PendingKind.YAW, seq)
+                    )
+                } else {
+                    val seq = DroneController.gotoAltitude(
+                        // A Change altitude always names one. Defended anyway, because an
+                        // altitude of NaN reaches the vertical controller as a setpoint and
+                        // every comparison against it is false, so the aircraft would hold
+                        // whatever throttle it had rather than refuse.
+                        altitudeMeters.takeIf { it.isFinite() } ?: getLocation3D().altitude
+                    )
+                    CommandResult(
+                        MavlinkCommandOutcome.ACCEPTED,
+                        pending = PendingCommand(PendingKind.ALTITUDE, seq)
+                    )
+                }
             }
 
             // param4 NaN means "use the vehicle's heading mode", exactly as it does in a mission
@@ -4784,13 +4804,18 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             // which is otherwise only reachable by uploading a one-item plan. The arrival heading
             // is then the heading the aircraft already holds: "do not change yaw" cannot mean
             // "finish by rotating to north", which is what a hardcoded zero asked for.
+            // param7 NaN means "keep the altitude you are at", the same "leave this alone" that
+            // the other three parameters express. Flown as a setpoint it is not refused: every
+            // comparison against NaN is false, so the aircraft never reaches the altitude and
+            // never reports arriving.
+            val altitude = altitudeMeters.takeIf { it.isFinite() } ?: getLocation3D().altitude
             val seq = if (yawDeg.isNaN()) {
                 DroneController.flyToWaypointNoseForward(
-                    latitudeDeg, longitudeDeg, altitudeMeters, getHeading(), speed
+                    latitudeDeg, longitudeDeg, altitude, getHeading(), speed
                 )
             } else {
                 DroneController.flyToWaypointHoldHeading(
-                    latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, speed
+                    latitudeDeg, longitudeDeg, altitude, yawDeg, speed
                 )
             }
             return CommandResult(

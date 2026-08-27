@@ -549,16 +549,42 @@ internal class MavlinkTelemetryEndpoint(
      * bound is [COMMAND_COMPLETION_TIMEOUT_MS], after which the command is reported failed rather
      * than left unanswered: a ground station waiting on an ack that never comes is the failure
      * this whole mechanism exists to remove.
+     *
+     * While it runs, the IN_PROGRESS acknowledgement is repeated. MAV_RESULT_IN_PROGRESS is not a
+     * single reply that buys unlimited time: the protocol says such a command "may send further
+     * COMMAND_ACK messages with result MAV_RESULT_IN_PROGRESS (at a rate decided by the
+     * implementation), and must terminate by sending a COMMAND_ACK with the final result". A
+     * receiver has no other way to distinguish a command still being flown from one whose
+     * aircraft has stopped answering, so silence is read as the latter.
+     *
+     * QGroundControl reads it that way after about three seconds, which is what put "Vehicle did
+     * not respond to command: Reposition" on screen while the aircraft was visibly flying the
+     * reposition it had just been given. The command was accepted, acted on, and would have been
+     * acknowledged properly on arrival — but a leg takes far longer than the wait, and the one
+     * IN_PROGRESS that had been sent bought a few seconds of it.
      */
     private fun watchCompletion(command: MavlinkCommand, pending: PendingCommand) {
         val motion = motionSink ?: return
         thread(name = "MavlinkCommandWatch", isDaemon = true) {
             val deadline = System.currentTimeMillis() + COMMAND_COMPLETION_TIMEOUT_MS
             var progress = CommandProgress.RUNNING
+            var nextKeepaliveMs = System.currentTimeMillis() + COMMAND_IN_PROGRESS_REPEAT_MS
             while (running && System.currentTimeMillis() < deadline) {
                 progress = runCatching { motion.pollCompletion(pending) }
                     .getOrDefault(CommandProgress.ABANDONED)
                 if (progress != CommandProgress.RUNNING) break
+                if (System.currentTimeMillis() >= nextKeepaliveMs) {
+                    nextKeepaliveMs = System.currentTimeMillis() + COMMAND_IN_PROGRESS_REPEAT_MS
+                    sendOnce(
+                        MavlinkMsgId.COMMAND_ACK,
+                        MavlinkMessages.commandAck(
+                            command = command.command,
+                            result = Mav.RESULT_IN_PROGRESS,
+                            targetSystem = command.senderSystem,
+                            targetComponent = command.senderComponent
+                        )
+                    )
+                }
                 runCatching { Thread.sleep(COMMAND_COMPLETION_POLL_MS) }.onFailure {
                     Thread.currentThread().interrupt()
                     return@thread
@@ -1361,6 +1387,15 @@ internal class MavlinkTelemetryEndpoint(
         /** Longest a guided command may run before it is reported failed. */
         private const val COMMAND_COMPLETION_TIMEOUT_MS = 300_000L
         private const val COMMAND_COMPLETION_POLL_MS = 200L
+
+        /**
+         * How often a still-running command repeats its IN_PROGRESS acknowledgement.
+         *
+         * Comfortably inside QGroundControl's roughly three-second patience, and slow enough that
+         * a five-minute leg costs a few hundred small frames rather than competing with telemetry
+         * for the link.
+         */
+        private const val COMMAND_IN_PROGRESS_REPEAT_MS = 1_000L
 
         /** Gimbal pointing changes as fast as the operator moves it. */
         private const val GIMBAL_INTERVAL_MS = 200L
