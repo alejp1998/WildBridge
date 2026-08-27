@@ -641,6 +641,14 @@ class MavlinkTelemetrySource:
             return False
         if int.from_bytes(data[7:10], "little") != WILDBRIDGE_STATUS_ID:
             return False
+        if not _checksum_ok(data):
+            # An aircraft running an older build sends an older layout of this message, and
+            # padding it out and decoding anyway produces confident nonsense: a string read
+            # twelve bytes late, focal lengths that are really ASCII pairs. The CRC_EXTRA is
+            # derived from the field definitions, so it changes when they do -- which makes it
+            # exactly the check that tells the two versions apart. Refusing is the honest
+            # outcome; the fields simply stay absent until the aircraft is updated.
+            return False
         payload = data[10 : 10 + data[1]]
         try:
             self._telemetry.update(decode_wildbridge_status(payload))
@@ -997,6 +1005,27 @@ SETTING_PARAM_ENDPOINTS = {
     "/send/setDetectionsEnabled": "WB_DETECT_EN",
     "/send/setEdgeConfidence": "WB_EDGE_CONF",
 }
+
+#: CRC_EXTRA for WILDBRIDGE_STATUS, from wildbridge.xml. Changes whenever the fields do, which is
+#: what lets a frame from a mismatched build be recognised rather than misread.
+WILDBRIDGE_STATUS_CRC_EXTRA = 135
+
+
+def _checksum_ok(data: bytes) -> bool:
+    """Verify a MAVLink 2 frame's checksum, the way the standard parser would."""
+    from pymavlink.generator.mavcrc import x25crc
+
+    payload_length = data[1]
+    end = 10 + payload_length
+    if len(data) < end + 2:
+        return False
+    crc = x25crc(data[1:end])
+    # As a byte, not as a character: CRC_EXTRA values above 127 encode as two bytes in UTF-8, so
+    # accumulating them through a str silently checksums the wrong thing.
+    crc.accumulate(bytes([WILDBRIDGE_STATUS_CRC_EXTRA]))
+    expected = data[end] | (data[end + 1] << 8)
+    return crc.crc == expected
+
 
 #: What a WildBridge parameter reads when the aircraft has never reported it.
 PARAM_UNKNOWN = -1.0

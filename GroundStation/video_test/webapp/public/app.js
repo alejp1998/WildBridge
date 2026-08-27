@@ -7,6 +7,9 @@ const videoChartsGrid = document.querySelector('#videoChartsGrid');
 const telemetryChartsGrid = document.querySelector('#telemetryChartsGrid');
 const publishTargets = document.querySelector('#publishTargets');
 const publishGrid = document.querySelector('#publishGrid');
+const publishFilter = document.querySelector('#publishFilter');
+const publishHttpOnly = document.querySelector('#publishHttpOnly');
+const publishSummary = document.querySelector('#publishSummary');
 const settingsGrid = document.querySelector('#settingsGrid');
 const tileTemplate = document.querySelector('#tileTemplate');
 const droneModal = document.querySelector('#droneModal');
@@ -1221,9 +1224,67 @@ function renderPublishTargets(state) {
   }
 }
 
+// Endpoints that also have a MAVLink form, from the transport's own tables. Empty until the
+// first fetch, which is fine: the catalogue renders without coverage and gains it a moment later.
+let mavlinkCoveredEndpoints = new Set();
+
+async function loadMavlinkCoverage() {
+  try {
+    const response = await fetch('/api/mavlink-coverage');
+    const payload = await response.json();
+    if (payload.available) mavlinkCoveredEndpoints = new Set(payload.endpoints);
+  } catch {
+    // The catalogue is still useful without it; every entry simply shows no coverage chip.
+  }
+}
+
 function renderPublishCatalog() {
   if (publishGrid.childElementCount) return;
   renderHttpPublishCatalog();
+  loadMavlinkCoverage().then(() => {
+    publishGrid.replaceChildren();
+    renderHttpPublishCatalog();
+  });
+}
+
+function applyPublishFilter() {
+  const needle = (publishFilter.value || '').trim().toLowerCase();
+  const httpOnly = publishHttpOnly.checked;
+  let shown = 0;
+  publishGrid.querySelectorAll('.publishItem').forEach((item) => {
+    const matchesText = !needle || item.dataset.search.includes(needle);
+    const matchesCoverage = !httpOnly || item.dataset.coverage === 'httpOnly';
+    const visible = matchesText && matchesCoverage;
+    item.hidden = !visible;
+    if (visible) shown += 1;
+  });
+  // A card whose every endpoint is filtered out is noise, not structure.
+  publishGrid.querySelectorAll('.publishCard').forEach((card) => {
+    card.hidden = !card.querySelector('.publishItem:not([hidden])');
+  });
+  updatePublishSummary(shown);
+}
+
+function updatePublishSummary(shown) {
+  const items = Array.from(publishGrid.querySelectorAll('.publishItem'));
+  const covered = items.filter((item) => item.dataset.coverage === 'both').length;
+  publishSummary.replaceChildren(
+    publishStat(`${items.length}`, 'endpoints'),
+    publishStat(`${covered}`, 'also on MAVLink', covered ? 'good' : undefined),
+    publishStat(`${items.length - covered}`, 'HTTP only', items.length - covered ? 'warn' : 'good'),
+    publishStat(`${shown}`, 'shown'),
+  );
+}
+
+function publishStat(value, label, tone) {
+  const cell = document.createElement('div');
+  cell.className = `mavlinkStat${tone ? ` ${tone}` : ''}`;
+  const big = document.createElement('strong');
+  big.textContent = value;
+  const small = document.createElement('span');
+  small.textContent = label;
+  cell.append(big, small);
+  return cell;
 }
 
 function renderHttpPublishCatalog() {
@@ -1235,12 +1296,19 @@ function renderHttpPublishCatalog() {
     for (const [title, method, endpoint, commandBody, commandDescription] of commands) {
       const item = document.createElement('article');
       item.className = 'publishItem';
+      const onMavlink = mavlinkCoveredEndpoints.has(endpoint);
+      item.dataset.coverage = onMavlink ? 'both' : 'httpOnly';
+      item.dataset.search = `${title} ${endpoint} ${commandDescription}`.toLowerCase();
       const requestLine = method === 'GET' ? `${method} http://DRONE_IP:8080${endpoint}` : `${method} http://DRONE_IP:8080${endpoint}\nBody: ${commandBody || '(empty)'}`;
-      item.innerHTML = `<div class="publishItemHeader"><h4>${escapeHtml(title)}</h4><span class="publishMeta">${escapeHtml(method)} ${escapeHtml(endpoint)}</span></div><p class="publishDescription">${escapeHtml(commandDescription)}</p><pre class="publishCode">${escapeHtml(requestLine)}</pre>`;
+      const chip = mavlinkCoveredEndpoints.size
+        ? `<span class="coverageChip ${onMavlink ? 'both' : 'httpOnly'}">${onMavlink ? 'also on MAVLink' : 'HTTP only'}</span>`
+        : '';
+      item.innerHTML = `<div class="publishItemHeader"><h4>${escapeHtml(title)}</h4><span class="publishMeta">${escapeHtml(method)} ${escapeHtml(endpoint)}</span>${chip}</div><p class="publishDescription">${escapeHtml(commandDescription)}</p><pre class="publishCode">${escapeHtml(requestLine)}</pre>`;
       body.appendChild(item);
     }
     publishGrid.appendChild(card);
   }
+  applyPublishFilter();
 }
 
 function renderHealthSummary(root, health) {
@@ -1929,6 +1997,9 @@ function stopMavlinkPolling() {
   if (mavlinkTimer !== null) clearInterval(mavlinkTimer);
   mavlinkTimer = null;
 }
+
+publishFilter.addEventListener('input', applyPublishFilter);
+publishHttpOnly.addEventListener('change', applyPublishFilter);
 
 mavlinkTarget.addEventListener('change', loadMavlinkComparison);
 mavlinkDiffOnly.addEventListener('change', loadMavlinkComparison);

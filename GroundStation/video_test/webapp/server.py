@@ -149,6 +149,21 @@ else:
     MAVLINK_UNAVAILABLE = ""
 
 
+def mavlink_coverage():
+    """Which HTTP endpoints also have a MAVLink form.
+
+    The HTTP catalogue is the older surface and MAVLink is replacing it endpoint by endpoint, so
+    "which of these still needs HTTP" is the question anyone reading that tab actually has. It is
+    answered from the transport's own tables rather than from a list kept alongside them, which
+    would drift the moment an endpoint was mapped.
+    """
+    try:
+        from wildbridge_groundstation.transport import _COMMAND_MAP, _SPECIAL_SENDERS
+    except ImportError:
+        return {"available": False, "endpoints": []}
+    return {"available": True, "endpoints": sorted(set(_COMMAND_MAP) | set(_SPECIAL_SENDERS))}
+
+
 def make_drone(name, ip=None):
     ip = ip or FALLBACK_IPS.get(name)
     return {
@@ -268,9 +283,21 @@ def upsert_discovered(found):
 
 
 def run_discovery_socket(sock, target):
+    """Broadcast a discovery probe on one address and collect the replies.
+
+    A send that fails is not fatal. The broadcast list is built from every interface the host
+    has, and a machine on several networks routinely has one that cannot be reached -- a docker
+    bridge with nothing on it, a VPN that is down. Letting that raise took the whole sweep with
+    it, so a drone sitting on a perfectly good interface went undiscovered because a different
+    interface was unusable.
+    """
     sock.settimeout(1.5)
     try:
-        sock.sendto(DISCOVERY_MSG, target)
+        try:
+            sock.sendto(DISCOVERY_MSG, target)
+        except OSError as error:
+            log_event("discovery_broadcast_failed", target=target[0], error=str(error))
+            return
         deadline = time.time() + 1.5
         while time.time() < deadline:
             try:
@@ -304,6 +331,16 @@ def get_subnet_broadcast_addresses():
     return broadcasts
 
 
+def _known_drone_addresses():
+    """Addresses worth probing directly: configured fallbacks and anything seen before."""
+    addresses = set(FALLBACK_IPS.values())
+    with lock:
+        for drone in drones.values():
+            if drone.get("ip"):
+                addresses.add(drone["ip"])
+    return {address for address in addresses if address}
+
+
 def discover_now():
     log_event("discovery_started", drones=DRONE_NAMES or "any")
 
@@ -319,6 +356,23 @@ def discover_now():
             ).start()
         except Exception as exc:
             log_event("discovery_error", transport=f"broadcast-{broadcast_ip}", error=str(exc))
+
+    # Probe every address already known, one datagram each.
+    #
+    # Broadcast is not reliable on a real network: access points drop it, and a phone's Wi-Fi
+    # power-save can too. A drone that answers a direct probe perfectly well then never appears,
+    # which is exactly what happened on a live aircraft that was serving HTTP the whole time.
+    # Anything previously seen, or configured as a fallback, is worth asking directly.
+    for known_ip in sorted(_known_drone_addresses()):
+        try:
+            unicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            threading.Thread(
+                target=run_discovery_socket,
+                args=(unicast_sock, (known_ip, DISCOVERY_PORT)),
+                daemon=True,
+            ).start()
+        except OSError as exc:
+            log_event("discovery_error", transport=f"unicast-{known_ip}", error=str(exc))
 
     try:
         multicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -818,6 +872,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/drones": lambda: self.send_json(200, public_state()),
             "/api/logs": lambda: self.send_json(200, {"eventLog": str(EVENT_LOG)}),
             "/api/ros-status": lambda: self.send_json(200, ros_status_snapshot()),
+            "/api/mavlink-coverage": lambda: self.send_json(200, mavlink_coverage()),
         }
         handler = exact.get(path)
         if handler is not None:

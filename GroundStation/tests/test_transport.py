@@ -29,6 +29,7 @@ from wildbridge_groundstation.transport import (
     WB_FLAG_LRF_TARGET_VALID,
     WB_FLAG_MANUAL_OVERRIDE,
     WB_FLAG_READY_TO_TAKEOFF,
+    WILDBRIDGE_STATUS_CRC_EXTRA,
     WILDBRIDGE_STATUS_ID,
     WILDBRIDGE_STATUS_SIZE,
     WILDBRIDGE_STATUS_STRUCT,
@@ -496,6 +497,56 @@ def test_the_hand_decoder_matches_the_dialect_definition():
         finally:
             sys.path.remove(str(work))
             sys.modules.pop("dialect", None)
+
+
+def test_a_status_frame_from_a_mismatched_build_is_refused_not_misread():
+    """The failure this check exists for, reproduced.
+
+    An aircraft on an older build sends an older layout of WILDBRIDGE_STATUS. Padding that out
+    and decoding anyway produced confident nonsense on a live drone -- the takeoff reason read
+    twelve bytes late as "ISION", focal lengths that were really ASCII pairs. CRC_EXTRA is
+    derived from the field definitions, so it changes when they do, which is what tells the two
+    apart.
+    """
+
+    source = MavlinkTelemetrySource(peer_host="")
+    old_payload = struct.pack(
+        "<IiiffHHHHHHBBB24s", 0, 0, 0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"NON_GPS_NONVISION"
+    )
+
+    # Framed exactly as the old build framed it, including its own CRC_EXTRA of 127.
+    header = bytes([0xFD, len(old_payload), 0, 0, 0, 1, 1]) + (42100).to_bytes(3, "little")
+    from pymavlink.generator.mavcrc import x25crc
+
+    crc = x25crc(header[1:] + old_payload)
+    crc.accumulate(bytes([127]))  # the old build's CRC_EXTRA, before the seq fields existed
+    frame = header + old_payload + crc.crc.to_bytes(2, "little")
+
+    assert not source._apply_wildbridge_status(frame)
+    assert "takeoffBlockReason" not in source._telemetry
+
+
+def test_a_current_status_frame_passes_the_checksum():
+    """The other half: the gate must not reject frames it is supposed to accept.
+
+    Worth its own test because the first version of this check did exactly that -- it fed
+    CRC_EXTRA through a str, and a value above 127 encodes as two UTF-8 bytes, so every genuine
+    frame failed and the panel quietly showed a third of the telemetry it should have.
+    """
+    from pymavlink.generator.mavcrc import x25crc
+
+    payload = struct.pack(
+        WILDBRIDGE_STATUS_STRUCT, 1, 0, 0, 0.0, 0.0, 4, 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"NONE"
+    )
+    header = bytes([0xFD, len(payload), 0, 0, 0, 1, 1]) + (42100).to_bytes(3, "little")
+    crc = x25crc(header[1:] + payload)
+    crc.accumulate(bytes([WILDBRIDGE_STATUS_CRC_EXTRA]))
+    frame = header + payload + crc.crc.to_bytes(2, "little")
+
+    source = MavlinkTelemetrySource(peer_host="")
+    assert source._apply_wildbridge_status(frame)
+    assert source._telemetry["takeoffBlockReason"] == "NONE"
+    assert source._telemetry["waypointSeq"] == 4
 
 
 def test_wildbridge_status_decodes_into_the_http_telemetry_keys():

@@ -6,7 +6,7 @@
   <title>WildBridge Video and Connection Testing Tool</title>
   <link rel="icon" type="image/png" href="/assets/wildbridge-icon.png">
   <link rel="apple-touch-icon" href="/assets/wildbridge-icon.png">
-  <link rel="stylesheet" href="/styles.css?v=12">
+  <link rel="stylesheet" href="/styles.css?v=13">
   <script>
     try {
       var wbTheme = localStorage.getItem('wb-theme') || 'system';
@@ -78,8 +78,8 @@
         <span>Settings</span>
       </button>
       <button class="tabButton" type="button" data-tab="publish">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
-        <span>Publish</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="m11 4 3 3-3 3"/><path d="M20 17H10"/><path d="m13 14-3 3 3 3"/></svg>
+        <span>HTTP</span>
       </button>
       <button class="tabButton" type="button" data-tab="mavlink">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h4l2-7 4 14 2-7h4"/></svg>
@@ -150,10 +150,15 @@
       <section class="publishShell">
         <div class="publishIntro panelBand">
           <div>
-            <h2>Drone Publish Surface</h2>
-            <p>Direct phone HTTP endpoints for flight control, sensing, and configuration.</p>
+            <h2>HTTP Command Surface</h2>
+            <p>Every <code>/send/</code> endpoint the phone exposes, sent straight to the drone over HTTP &mdash; flight control, virtual stick, camera and gimbal, waypoints, sensing. This is the original control surface; the <strong>MAVLink</strong> tab shows the same aircraft over the wire that is replacing it.</p>
           </div>
         </div>
+          <div class="publishControls">
+            <input type="search" id="publishFilter" placeholder="Filter endpoints…" aria-label="Filter endpoints">
+            <label class="publishToggle"><input type="checkbox" id="publishHttpOnly"> Still HTTP-only</label>
+          </div>
+        <div id="publishSummary" class="publishSummary"></div>
         <div id="publishTargets" class="publishTargets"></div>
         <div id="publishGrid" class="publishGrid"></div>
       </section>
@@ -312,7 +317,7 @@
           <div><dt>Telemetry</dt><dd>The full nested JSON telemetry tree per drone &mdash; flight state, phone health, streaming config.</dd></div>
           <div><dt>Telemetry Charts</dt><dd>Telemetry-derived time series: battery, satellites, altitude, distance to home, speed, Wi-Fi RSSI.</dd></div>
           <div><dt>Settings</dt><dd>Read and change each drone's DJI and app settings (RTH altitude, max height/distance, RC pairing, video source) over HTTP.</dd></div>
-          <div><dt>Publish</dt><dd>The full catalog of phone HTTP endpoints (flight control, virtual stick, camera/gimbal, waypoints, sensing) for manual testing.</dd></div>
+          <div><dt>HTTP</dt><dd>The full catalog of phone <code>/send/</code> endpoints (flight control, virtual stick, camera/gimbal, waypoints, sensing) for manual testing.</dd></div>
           <div><dt>MAVLink</dt><dd>The same drone read over MAVLink and over HTTP at once, field by field, so a value that disagrees between the two wires is visible rather than inferred.</dd></div>
           <div><dt>ROS</dt><dd>Liveness and rates for every topic the <code>ros-monitor</code> container sees from <code>DjiNode</code>, plus phone HTTP reachability.</dd></div>
         </dl>
