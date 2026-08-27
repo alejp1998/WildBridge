@@ -182,6 +182,7 @@ import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlin.math.abs
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 
@@ -223,6 +224,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
         /** Longest a single mission leg may take before the plan is abandoned. */
         private const val MISSION_LEG_TIMEOUT_MS = 300_000L
+
+        /**
+         * Below this, a DO_REPOSITION coordinate is read as "unset" rather than as a position.
+         *
+         * The command's latitude and longitude are NaN when only the altitude is meant to change,
+         * but COMMAND_INT stores them as int32 scaled by 1e7, and NaN converts to zero. Zero is a
+         * real coordinate, so the marker and a genuine position off the coast of Africa are
+         * indistinguishable — a 1e-7 degree window (about a centimetre) is where that trade is
+         * made, since no operator repositions an aircraft to within a centimetre of the equator.
+         */
+        private const val REPOSITION_COORD_EPSILON = 1e-7
         private const val MISSION_POLL_MS = 200L
 
         /** The one parameter a ground station may write. See applyMavlinkParameter. */
@@ -4738,16 +4750,47 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 return CommandResult(MavlinkCommandOutcome.DENIED)
             }
             supersedeMission("reposition")
+
+            // DO_REPOSITION carries three "leave this one alone" sentinels, and QGroundControl
+            // sends all three. None of them are values to fly to, and passing them through as if
+            // they were is what made a goto fly backwards and an altitude change do nothing.
+
+            // param1 is "ground speed, less than 0 (-1) for default". As a speed it is harmless;
+            // as the *ceiling* the waypoint loop clamps to, -1 m/s is a command to retreat.
+            val speed = groundSpeedMps
+                .takeIf { it.isFinite() && it > 0.0 }
+                ?: DroneControlProfiles.activeProfile().defaultCruiseSpeedMps
+
+            // param5/param6 NaN mean "hold the current position and change only the altitude",
+            // which is how QGC expresses Change Altitude. A COMMAND_INT carries them as scaled
+            // int32, where NaN converts to 0 -- a real coordinate in the Gulf of Guinea rather
+            // than a marker -- so the zero case has to be caught alongside the non-finite one.
+            val holdingPosition = !latitudeDeg.isFinite() || !longitudeDeg.isFinite() ||
+                (abs(latitudeDeg) < REPOSITION_COORD_EPSILON &&
+                    abs(longitudeDeg) < REPOSITION_COORD_EPSILON)
+            if (holdingPosition) {
+                // Routed to the altitude controller rather than to a waypoint at the current
+                // position: a zero-length leg has no bearing, so the nose-forward controller
+                // would read atan2(0, 0) and rotate the aircraft to north before climbing.
+                val seq = DroneController.gotoAltitude(altitudeMeters)
+                return CommandResult(
+                    MavlinkCommandOutcome.ACCEPTED,
+                    pending = PendingCommand(PendingKind.ALTITUDE, seq)
+                )
+            }
+
             // param4 NaN means "use the vehicle's heading mode", exactly as it does in a mission
             // item. Honouring it here too is what lets a single reposition express nose-forward,
-            // which is otherwise only reachable by uploading a one-item plan.
+            // which is otherwise only reachable by uploading a one-item plan. The arrival heading
+            // is then the heading the aircraft already holds: "do not change yaw" cannot mean
+            // "finish by rotating to north", which is what a hardcoded zero asked for.
             val seq = if (yawDeg.isNaN()) {
                 DroneController.flyToWaypointNoseForward(
-                    latitudeDeg, longitudeDeg, altitudeMeters, 0.0, groundSpeedMps
+                    latitudeDeg, longitudeDeg, altitudeMeters, getHeading(), speed
                 )
             } else {
                 DroneController.flyToWaypointHoldHeading(
-                    latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, groundSpeedMps
+                    latitudeDeg, longitudeDeg, altitudeMeters, yawDeg, speed
                 )
             }
             return CommandResult(
@@ -5121,7 +5164,19 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 mavlinkCommandSink,
                 mavlinkMotionSink,
                 mavlinkMissionSink,
-                ftpServer
+                ftpServer,
+                commandLog = { command, result ->
+                    WildBridgeFlightLogger.logMavlinkCommand(
+                        command = command.command,
+                        params = listOf(
+                            command.param1, command.param2, command.param3, command.param4,
+                            command.param5, command.param6, command.param7
+                        ),
+                        result = result.mavResult,
+                        signed = mavlinkEndpoint?.isTrustedOrigin == true,
+                        senderSystem = command.senderSystem
+                    )
+                }
             )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")

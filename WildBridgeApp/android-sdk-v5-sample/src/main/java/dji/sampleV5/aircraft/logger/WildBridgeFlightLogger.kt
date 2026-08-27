@@ -125,6 +125,46 @@ object WildBridgeFlightLogger {
         commitLog("COMMAND", fields)
     }
 
+    /**
+     * Log a MAVLink command and what it was answered with.
+     *
+     * Logged in the same stream and the same shape as an HTTP command, because after the fact
+     * the question is what the aircraft was asked to do, not which socket carried the request.
+     *
+     * The parameters are recorded raw, before any interpretation. That is the point of them:
+     * the two defects this logging was added for -- a goto that flew backwards and an altitude
+     * change that did nothing -- were both a sentinel value in a parameter being flown as if it
+     * were a real one, and both are obvious in a line that shows `p1=-1.0` or a NaN latitude and
+     * invisible in anything recorded further downstream. There were no MAVLink lines at all when
+     * they were first seen in the field, so there was nothing to look at.
+     */
+    fun logMavlinkCommand(
+        command: Int,
+        params: List<Float>,
+        result: Int,
+        signed: Boolean,
+        senderSystem: Int
+    ) {
+        commitLog(
+            "COMMAND",
+            mapOf(
+                "cmd" to "MAV_CMD_$command",
+                "via" to "mavlink",
+                "params" to params.joinToString(",") { formatParam(it) },
+                "result" to result,
+                "signed" to signed,
+                "from" to senderSystem
+            )
+        )
+    }
+
+    /** NaN and the negative sentinels have to survive into the log as themselves, not as 0. */
+    private fun formatParam(value: Float): String = when {
+        value.isNaN() -> "NaN"
+        value.isInfinite() -> if (value > 0) "Inf" else "-Inf"
+        else -> value.toString()
+    }
+
     /** Log a drone status / mode change (e.g. "NAVIGATING", "RETURNING_HOME"). */
     fun logStatus(status: String) {
         commitLog("STATUS", mapOf("status" to status))

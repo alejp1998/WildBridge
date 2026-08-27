@@ -129,6 +129,29 @@ override, and item 5 confirms the override works before anything later depends o
 | 13 | RTH | Returns and lands at the home point, at the altitude written in step 3 |
 | 14 | Swarm-Steward on `WB_TRANSPORT=mavlink` | An action completes end to end. Fall back to `both` if something is unmapped — that keeps MAVLink telemetry and HTTP for the rest |
 
+### Re-test first: the two QGC guided commands
+
+Both failed on the first field attempt and both are fixed, so these are the ones to fly before
+anything else depends on them.
+
+**QGC → Go to location.** It flew *away* from the point. `MAV_CMD_DO_REPOSITION`'s ground-speed
+parameter is documented as "less than 0 (-1) for default" and QGC sends `-1`; that reached the
+waypoint loop as the speed *ceiling*, so the commanded speed was −1 m/s and the aircraft retreated
+at walking pace. It could never recover on its own — the along-track term stays positive while it
+retreats, so nothing reversed the sign. Confirm it now flies *toward* the point, at the profile
+cruise speed.
+
+**QGC → Change Altitude.** Nothing happened. QGC expresses it as the same `DO_REPOSITION` with
+latitude and longitude `NaN`, meaning "hold position, change only altitude". Those were flown as
+coordinates: over `COMMAND_INT` NaN scales to `0`, which is a real position in the Gulf of Guinea.
+It now routes to the altitude controller. Confirm the aircraft climbs or descends **without
+rotating** — a zero-length leg has no bearing, and the nose-forward controller would have read
+`atan2(0, 0)` and turned to north first.
+
+Also worth watching: a goto sends `yaw = NaN`, "don't change yaw". The arrival heading was
+hardcoded to zero, so the aircraft used to finish by rotating to north. It should now hold the
+heading it already had.
+
 ---
 
 ## Keep this open while flying
@@ -143,3 +166,14 @@ A compiler can't see any of those, and neither can a reviewer.
 **A disagreement that appears only in the air is the interesting one.** Everything above has been
 checked at rest, so anything new belongs to motion: a value that's fine stationary and wrong at
 speed, or one that saturates.
+
+MAVLink commands are now recorded in the flight log alongside the HTTP ones, with their raw
+parameters, in `/sdcard/Documents/WildBridge/FlightLogs/<date>/`. They were not, which is why the
+first two field failures had to be diagnosed from the source rather than from evidence — a
+mission flown over MAVLink left no record of having been commanded at all. Both defects are a
+sentinel value flown as a real one, and both are plain in a line reading `p1=-1.0` or a `NaN`
+latitude. Pull the log after flying:
+
+```bash
+adb pull /sdcard/Documents/WildBridge/FlightLogs/$(date +%F)/
+```

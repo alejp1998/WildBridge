@@ -55,7 +55,20 @@ internal class MavlinkTelemetryEndpoint(
      * Serves MAVLink FTP v1 (read-only media access). Null leaves FILE_TRANSFER_PROTOCOL
      * unanswered, which is the pre-FTP behaviour.
      */
-    private val ftpServer: MavlinkFtpServer? = null
+    private val ftpServer: MavlinkFtpServer? = null,
+    /**
+     * Records an executed command in the flight log: command id, its raw parameters, the result,
+     * whether the frame was signed, and which system sent it.
+     *
+     * A callback rather than a direct call to the logger because this package holds no imports
+     * from the rest of the app, which is what lets it be read and reviewed on its own. The host
+     * supplies the destination.
+     *
+     * Worth having because the MAVLink surface had no equivalent of the HTTP surface's command
+     * log, so a mission flown over MAVLink left no record of having been commanded at all. Two
+     * defects were reported from the field before anything logged what had been sent.
+     */
+    private val commandLog: (MavlinkCommand, CommandResult) -> Unit = { _, _ -> }
 ) {
     private val framer = MavlinkFramer(config.systemId)
 
@@ -707,6 +720,10 @@ internal class MavlinkTelemetryEndpoint(
         if (result.outcome != MavlinkCommandOutcome.UNSUPPORTED) {
             Log.i(TAG, "Command ${command.command} -> ${result.outcome}")
         }
+        // Logged whatever the outcome, including UNSUPPORTED: "the ground station asked for
+        // something this build does not implement" is a thing to find in a log afterwards, and
+        // is indistinguishable from silence if only successes are recorded.
+        runCatching { commandLog(command, result) }
         return result
     }
 

@@ -14,6 +14,18 @@ class WaypointControlTest {
     }
 
     @Test
+    fun limitedSpeedNeverCommandsReverseFromANegativeCeiling() {
+        // MAV_CMD_DO_REPOSITION's ground speed is "less than 0 (-1) for default", and
+        // QGroundControl sends -1. It arrived here as the ceiling, and a ceiling of -1 m/s used
+        // to come straight back out: the aircraft flew away from the waypoint at 1 m/s and never
+        // arrived, because the along-track term stays positive the whole time it retreats.
+        assertEquals(0.0, WaypointControl.limitedSpeed(5.0, -1.0, 0.0, 5.0), 0.0001)
+        assertEquals(0.0, WaypointControl.limitedSpeed(5.0, -1.0, 3.0, 5.0), 0.0001)
+        // The slew limit can also go negative while decelerating from a standstill.
+        assertEquals(0.0, WaypointControl.limitedSpeed(5.0, 5.0, -2.0, 0.5), 0.0001)
+    }
+
+    @Test
     fun bodyVelocityConvertsWorldDirectionToDroneRelativeAxes() {
         val forward = WaypointControl.bodyVelocity(targetSpeed = 2.0, movementDirection = 90.0, currentYaw = 90.0)
         val lateral = WaypointControl.bodyVelocity(targetSpeed = 2.0, movementDirection = 180.0, currentYaw = 90.0)
