@@ -166,59 +166,6 @@
                 app:uxsdk_interactionEnabled="false"
                 app:uxsdk_sourceCameraNameVisibility="true" />
 
-            <!-- Aircraft idle / low-power (eco) overlay — centered, hidden until detected -->
-            <LinearLayout
-                android:id="@+id/aircraft_idle_overlay"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="#CC000000"
-                android:gravity="center_horizontal"
-                android:orientation="vertical"
-                android:padding="20dp"
-                android:visibility="gone"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toTopOf="parent"
-                tools:ignore="HardcodedText">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:gravity="center"
-                    android:text="AIRCRAFT IDLE — LOW-POWER (ECO) MODE"
-                    android:textColor="#FFFFC107"
-                    android:textSize="18sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:gravity="center"
-                    android:maxWidth="360dp"
-                    android:text="The aircraft is on the ground with motors stopped and can drop into low-power eco mode. Exit idle mode to keep it ready, or wake it manually by moving both sticks down and inwards (towards each other)."
-                    android:textColor="#FFFFFFFF"
-                    android:textSize="14sp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:gravity="center"
-                    android:maxWidth="360dp"
-                    android:text="⚠ WARNING — Motors will start spinning at ground idle. Make sure the aircraft is on a flat, safe surface, the propellers are clear of people, animals and objects, and nobody is holding it."
-                    android:textColor="#FFFF5252"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-
-                <Button
-                    android:id="@+id/button_exit_idle_mode"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:text="EXIT IDLE MODE" />
-            </LinearLayout>
         </androidx.constraintlayout.widget.ConstraintLayout>
 
         <dji.v5.ux.core.panel.topbar.TopBarPanelWidget
@@ -647,6 +594,65 @@
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintWidth_percent="0.95"
             app:uxsdk_titleBarBackgroundColor="@color/uxsdk_black" />
+
+        <!-- Aircraft idle / eco overlay — last child of the content layout so it draws above the
+             top bar, map, and side panels; bordered box + high elevation to stay on top. -->
+        <LinearLayout
+            android:id="@+id/aircraft_idle_overlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/wildbridge_idle_overlay_box"
+            android:elevation="50dp"
+            android:gravity="center_horizontal"
+            android:maxWidth="320dp"
+            android:orientation="vertical"
+            android:padding="14dp"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            tools:ignore="HardcodedText">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="AIRCRAFT IDLE — ECO MODE"
+                android:textColor="#FFFFC107"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center"
+                android:text="Motors off, GPS/camera quiet. Wake it manually (sticks down &amp; inwards) or below."
+                android:textColor="#FFFFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:text="⚠ Check safe: flat ground, props clear of people/objects."
+                android:textColor="#FFFF5252"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/button_exit_idle_mode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:minHeight="40dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="WAKE UP (START MOTORS)"
+                android:textSize="13sp" />
+        </LinearLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

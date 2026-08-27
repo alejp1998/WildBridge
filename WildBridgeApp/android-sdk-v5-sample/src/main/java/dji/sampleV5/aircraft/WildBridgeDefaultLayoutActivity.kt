@@ -558,10 +558,17 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private val flightModeKey: DJIKey<FlightMode> = FlightControllerKey.KeyFlightMode.create()
     private val isFlyingKey: DJIKey<Boolean> = FlightControllerKey.KeyIsFlying.create()
 
-    // Aircraft idle (low-power / eco) detection: motors off + on ground + connected.
-    private val areMotorsOnKey: DJIKey<Boolean> = FlightControllerKey.KeyAreMotorsOn.create()
-    private val idleDetectDebounceMs = 30_000L
-    @Volatile private var motorsOn = true
+    // Aircraft idle (low-power / eco) detection.
+    // DJI exposes no arming/eco key here (KeyAreMotorsOn is unreliable — it reports true/null in
+    // the low-power standby, so it never goes false when the aircraft is genuinely idle). Idle is
+    // therefore inferred from the aircraft going quiet on the ground: connected + not airborne +
+    // flight mode UNKNOWN + no GPS fix. Field-verified 2026-08-27 (mini1): in the true idle state
+    // the telemetry shows flightMode=UNKNOWN, satelliteCount=-1, no camera frames.
+    // The signature (UNKNOWN mode + no GPS) only appears in the true quiet state, so a short
+    // debounce is safe — just enough to survive a transient frame loss.
+    private val idleDetectDebounceMs = 5_000L
+    @Volatile private var cachedFlightMode: FlightMode = FlightMode.UNKNOWN
+    @Volatile private var cachedSatelliteCount = -1
     @Volatile private var idleDetectArmed = false
     private val showIdleOverlayRunnable = Runnable { onIdleDetectDebounceElapsed() }
 
@@ -2901,6 +2908,10 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         // RTH button on the physical controller → activate manual override so the server
         // cannot accidentally interfere with the returning drone.
         KeyManager.getInstance().listen(flightModeKey, this) { _, newValue ->
+            mainHandler.post {
+                cachedFlightMode = newValue ?: FlightMode.UNKNOWN
+                reevaluateAircraftIdle()
+            }
             if (newValue == FlightMode.GO_HOME &&
                 DroneController.droneStatus != DroneController.DroneStatus.RETURNING_HOME) {
                 mainHandler.post { DroneController.activateManualOverride() }
@@ -2917,10 +2928,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * The overlay is delayed by [idleDetectDebounceMs] so transient states never flash it.
      */
     private fun setupAircraftIdleMonitor() {
-        motorsOn = KeyManager.getInstance().getValue(areMotorsOnKey) ?: true
-        KeyManager.getInstance().listen(areMotorsOnKey, this) { _, newValue ->
+        cachedFlightMode = KeyManager.getInstance().getValue(flightModeKey) ?: FlightMode.UNKNOWN
+        cachedSatelliteCount = KeyManager.getInstance().getValue(satelliteCountKey) ?: -1
+        // Flight mode is also observed by setupRthModeOverrideListener (same key, same observer),
+        // which keeps cachedFlightMode in sync and re-evaluates idle.
+        KeyManager.getInstance().listen(satelliteCountKey, this) { _, newValue ->
             mainHandler.post {
-                motorsOn = newValue ?: true
+                cachedSatelliteCount = newValue ?: -1
                 reevaluateAircraftIdle()
             }
         }
@@ -2929,17 +2943,26 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     }
 
     private fun isAircraftIdle(): Boolean =
-        aircraftConnected && !motorsOn && !DroneController.isAirborne
+        aircraftConnected &&
+            !DroneController.isAirborne &&
+            cachedFlightMode == FlightMode.UNKNOWN &&
+            cachedSatelliteCount <= 0
+
+    private fun idleStateSummary(): String =
+        "airborne=${DroneController.isAirborne} connected=$aircraftConnected " +
+            "flightMode=$cachedFlightMode sats=$cachedSatelliteCount"
 
     private fun reevaluateAircraftIdle() {
         val isIdle = isAircraftIdle()
         if (isIdle && !idleDetectArmed) {
             idleDetectArmed = true
+            Log.i(TAG, "Aircraft idle candidate (${idleStateSummary()}) — arming $idleDetectDebounceMs ms debounce")
             mainHandler.postDelayed(showIdleOverlayRunnable, idleDetectDebounceMs)
         } else if (!isIdle && idleDetectArmed) {
             idleDetectArmed = false
             mainHandler.removeCallbacks(showIdleOverlayRunnable)
             showIdleOverlay(false)
+            Log.i(TAG, "Aircraft no longer idle (${idleStateSummary()}) — overlay hidden")
         }
     }
 
@@ -2947,6 +2970,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         idleDetectArmed = false
         if (isAircraftIdle()) {
             showIdleOverlay(true)
+            Log.i(TAG, "Aircraft idle overlay SHOWN — ${idleStateSummary()}")
         }
     }
 
@@ -2960,16 +2984,11 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         AlertDialog.Builder(this)
             .setTitle("Exit idle mode?")
             .setMessage(
-                "The aircraft is idle on the ground. Exiting idle mode starts the motors at " +
-                    "ground idle (the same as moving both sticks down and inwards to start motors " +
-                    "manually).\n\n" +
-                    "BEFORE CONTINUING, verify the aircraft:\n" +
-                    "• is on a flat, safe surface\n" +
-                    "• has propellers clear of people, animals and objects\n" +
-                    "• is not being held by anyone\n\n" +
-                    "The motors will spin as soon as you confirm."
+                "Starting the motors wakes the aircraft. VERIFY: flat safe surface, " +
+                    "propellers clear of people/objects, nobody holding it. " +
+                    "Motors will spin on confirm."
             )
-            .setPositiveButton("START MOTORS") { _, _ -> performExitIdleMode() }
+            .setPositiveButton("WAKE UP") { _, _ -> performExitIdleMode() }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -2991,15 +3010,41 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                     }
 
                     override fun onFailure(error: IDJIError) {
-                        val message = "Failed to start motors: ${error.description()}"
-                        mainHandler.post {
-                            Toast.makeText(
-                                this@WildBridgeDefaultLayoutActivity,
-                                message,
-                                Toast.LENGTH_LONG
-                            ).show()
+                        val code = error.errorCode()
+                        val hint = error.hint()
+                        if (code?.contains("REQUEST_HANDLER_NOT_FOUND") == true) {
+                            // This aircraft's flight controller has no app-side motor-start action
+                            // (verified on M400: FLIGHTCONTROLLER.TurnOnTheMotor:-1). The only MSDK
+                            // path that spins motors is takeoff, which must not fire from a "wake
+                            // up" button — so guide the manual CSC gesture instead.
+                            val guidance =
+                                "This aircraft doesn't support app-controlled motor start. " +
+                                    "Wake it manually: move BOTH sticks down and inwards (towards " +
+                                    "each other) — motors will spin at ground idle."
+                            mainHandler.post {
+                                Toast.makeText(
+                                    this@WildBridgeDefaultLayoutActivity,
+                                    guidance,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            Log.w(TAG, "Motor-start action unsupported ($code) — guiding manual wake")
+                        } else {
+                            val message =
+                                "Could not start motors (code=$code${if (hint.isNullOrEmpty()) "" else " — $hint"})"
+                            mainHandler.post {
+                                Toast.makeText(
+                                    this@WildBridgeDefaultLayoutActivity,
+                                    message,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            Log.e(
+                                TAG,
+                                "Failed to start motors — code=$code inner=${error.innerCode()} " +
+                                    "hint=$hint desc=${error.description()}"
+                            )
                         }
-                        Log.e(TAG, message)
                     }
                 }
             )
