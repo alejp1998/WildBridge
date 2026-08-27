@@ -25,6 +25,7 @@ Select the wire with the ``WB_TRANSPORT`` environment variable:
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import socket
@@ -1134,14 +1135,144 @@ for _endpoint in TEXT_PARAM_ENDPOINTS:
     _SPECIAL_SENDERS[_endpoint] = _send_text_parameter(_endpoint)
 
 
-class _FrameSink:
-    """Collects the bytes pymavlink writes, so a message can be framed without a live socket."""
+#: Environment variable carrying the 64-hex MAVLink 2 signing key. When set, the command
+#: channel signs every outbound frame, so the aircraft treats this ground station as the
+#: Safety Computer (see MavlinkSigning on the aircraft side).
+SIGNING_KEY_ENV = "WB_MAVLINK_SIGNING_KEY"
 
-    def __init__(self) -> None:
+#: Fixed link id for this ground station's commands. The aircraft keys its replay protection on
+#: (system id, component id, link id); one fixed value keeps the timestamp monotonic.
+SIGNING_LINK_ID = 1
+
+#: MAVLink 2 signing timestamps are 10-microsecond ticks since 2015-01-01 UTC.
+SIGNING_EPOCH = 1420070400
+SIGNING_INCOMPAT_FLAG = 0x01
+SIGNING_TIMESTAMP_BYTES = 6
+SIGNING_TAIL_BYTES = 6
+SIGNING_KEY_BYTES = 32
+SIGNING_TOTAL_BYTES = 13
+
+
+def signing_key_from_env(environ: dict[str, str] | None = None) -> bytes | None:
+    """The 32-byte signing key from ``WB_MAVLINK_SIGNING_KEY`` (64 hex), or None.
+
+    Malformed is the same as absent, mirroring the aircraft's MavlinkSigning.parseKey: a typo
+    must leave the ground station unsigned rather than signing with a key the aircraft refuses.
+    """
+    raw = (environ if environ is not None else os.environ).get(SIGNING_KEY_ENV, "").strip()
+    if len(raw) != SIGNING_KEY_BYTES * 2:
+        return None
+    try:
+        return bytes.fromhex(raw)
+    except ValueError:
+        return None
+
+
+def _signing_timestamp(now: float | None = None) -> int:
+    """48-bit MAVLink signing timestamp: 10us ticks since 2015-01-01 UTC."""
+    base = time.time() if now is None else now
+    return int((base - SIGNING_EPOCH) * 100_000) & 0xFFFFFFFFFFFF
+
+
+def _crc_extra_for(message_id: int) -> int:
+    """The MAVLink CRC extra byte for [message_id], from the dialect's own table."""
+    from pymavlink.dialects.v20 import common as mavlink_common
+
+    return mavlink_common.mavlink_map[message_id].crc_extra
+
+
+def _x25crc(data: bytes) -> int:
+    """MAVLink X.25 CRC, the same the dialect's own packer uses."""
+    from pymavlink.mavutil import x25crc
+
+    return x25crc(data).crc
+
+
+def sign_frame(frame: bytes, key: bytes, timestamp: int, link_id: int = SIGNING_LINK_ID) -> bytes:
+    """Append the MAVLink 2 packet signature to a pymavlink-built frame.
+
+    Mirrors the aircraft's MavlinkSigning byte-for-byte: the signed incompat bit is set, the
+    checksum is recomputed over the header that now includes it, and the six-byte signature is
+    the start of SHA-256(key || frame || link_id || timestamp_le). The timestamp is 48-bit
+    little-endian, 10us ticks since 2015-01-01.
+    """
+    if frame[0] != MAVLINK2_MAGIC:
+        raise ValueError("Only MAVLink 2 frames can be signed")
+    payload_length = frame[1]
+    # The 10-byte MAVLink 2 header ends with the 24-bit message id at bytes 7..10.
+    message_id = int.from_bytes(frame[7:10], "little")
+
+    framed = bytearray(frame)
+    framed[2] |= SIGNING_INCOMPAT_FLAG
+    crc = _x25crc(bytes(framed[1 : 1 + 9 + payload_length]) + bytes([_crc_extra_for(message_id)]))
+    framed[10 + payload_length : 12 + payload_length] = crc.to_bytes(2, "little")
+    body = bytes(framed)
+
+    timestamp_bytes = (timestamp & 0xFFFFFFFFFFFF).to_bytes(SIGNING_TIMESTAMP_BYTES, "little")
+    digest = hashlib.sha256()
+    digest.update(key)
+    digest.update(body)
+    digest.update(bytes([link_id]))
+    digest.update(timestamp_bytes)
+    return body + bytes([link_id]) + timestamp_bytes + digest.digest()[:SIGNING_TAIL_BYTES]
+
+
+def verify_frame_signature(frame: bytes, key: bytes) -> bool:
+    """Whether [frame] carries a valid signature under [key] (hash check only, no replay state).
+
+    The mirror of the aircraft's MavlinkSigning hash check, used by tests to prove the signer
+    agrees with the reference. Timestamp / replay enforcement is the aircraft's to make.
+    """
+    if len(frame) < 12 or frame[0] != MAVLINK2_MAGIC:
+        return False
+    if frame[2] & SIGNING_INCOMPAT_FLAG == 0:
+        return False
+    payload_length = frame[1]
+    signature_start = 10 + payload_length + 2
+    if len(frame) < signature_start + SIGNING_TOTAL_BYTES:
+        return False
+    digest = hashlib.sha256()
+    digest.update(key)
+    digest.update(frame[:signature_start])
+    digest.update(frame[signature_start : signature_start + 1 + SIGNING_TIMESTAMP_BYTES])
+    expected = digest.digest()[:SIGNING_TAIL_BYTES]
+    return expected == frame[signature_start + 1 + SIGNING_TIMESTAMP_BYTES :]
+
+
+class _FrameSigner:
+    """Signs every frame a channel emits with one MAVLink 2 key.
+
+    The timestamp is the MAVLink epoch-based 10us clock and only ever advances, so the
+    aircraft's replay protection (which refuses a timestamp not newer than the last seen)
+    accepts each frame in sequence.
+    """
+
+    def __init__(self, key: bytes, link_id: int = SIGNING_LINK_ID) -> None:
+        self._key = key
+        self._link_id = link_id
+        self._last_timestamp = 0
+
+    def sign(self, frame: bytes) -> bytes:
+        timestamp = _signing_timestamp()
+        if timestamp <= self._last_timestamp:
+            timestamp = self._last_timestamp + 1
+        self._last_timestamp = timestamp
+        return sign_frame(frame, self._key, timestamp, self._link_id)
+
+
+class _FrameSink:
+    """Collects the bytes pymavlink writes, so a message can be framed without a live socket.
+
+    With a [signer], every captured frame is signed in place: pymavlink writes exactly one
+    whole frame per call, so the signature is applied to the complete packet before it is read.
+    """
+
+    def __init__(self, signer: _FrameSigner | None = None) -> None:
         self.buf = b""
+        self._signer = signer
 
     def write(self, data: bytes) -> None:
-        self.buf += data
+        self.buf = self._signer.sign(data) if self._signer is not None else data
 
 
 def _json_endpoint_reply(endpoint: str, result: int | None, value: int) -> str | None:
@@ -1188,6 +1319,7 @@ class MavlinkCommandChannel:
         port: int = DEFAULT_MAVLINK_PORT,
         target_system: int = 1,
         on_latch: Callable[[dict[str, Any]], None] | None = None,
+        signing_key: bytes | None = None,
     ):
         #: Called when a moving command completes, with the reach-latch keys to merge into
         #: telemetry. The client wires this to its own telemetry state.
@@ -1205,7 +1337,9 @@ class MavlinkCommandChannel:
         self._reader: threading.Thread | None = None
         self._inbox: list[Any] = []
         self._inbox_ready = threading.Condition()
-        self._sink = _FrameSink()
+        # With a signing key every outbound frame is signed, so the aircraft reads this ground
+        # station as the Safety Computer rather than the Pilot.
+        self._sink = _FrameSink(_FrameSigner(signing_key) if signing_key is not None else None)
 
     def supports(self, endpoint: str) -> bool:
         return endpoint in _COMMAND_MAP

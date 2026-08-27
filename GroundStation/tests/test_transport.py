@@ -38,12 +38,17 @@ from wildbridge_groundstation.transport import (
     MavlinkCommandChannel,
     MavlinkTelemetrySource,
     Transport,
+    _crc_extra_for,
     _derive,
     _dji_heading,
     _trim,
+    _x25crc,
     apply_mavlink_message,
     decode_wildbridge_status,
     flight_mode_name,
+    sign_frame,
+    signing_key_from_env,
+    verify_frame_signature,
 )
 
 #: WILDBRIDGE_STATUS field order, so a fixture names what it sets instead of counting commas.
@@ -877,6 +882,78 @@ def test_a_refused_command_is_reported_as_refused():
     channel._socket = _FakeSocket([_ack_frame(CMD_DO_REPOSITION, 3)])  # MAV_RESULT_DENIED
     reply = channel.send("/send/gotoWaypointHoldHeading", "46.518,6.566,30,90,5", timeout=1.0)
     assert reply.startswith("REJECTED")
+
+
+# The aircraft's own reference frames, from MavlinkSigningTest.kt. They were signed by
+# pymavlink's signer with the key 00 01 ... 1f, so reproducing them byte-for-byte is the
+# cross-implementation proof that this signer agrees with the aircraft's MavlinkSigning.
+SIGNING_KEY = bytes(range(32))
+VALID_FIRST = (
+    "fd20010000ffbe4c00000000803f00000000000000000000000000000000000000000000000090010101"
+    "49d00040420f00000083b453f4492b"
+)
+VALID_SECOND = (
+    "fd20010001ffbe4c00000000803f00000000000000000000000000000000000000000000000090010101"
+    "a79a0041420f000000638d21c1617a"
+)
+TAMPERED = (
+    "fd20010001ffbe4c00000000803f00000000000000000000000000000000000000000000000090010101"
+    "a79a0041420f000000638d21c16185"
+)
+UNSIGNED = (
+    "fd20000000ffbe4c00000000803f000000000000000000000000000000000000000000000000900101019e4e"
+)
+
+
+def test_verifier_accepts_the_aircrafts_reference_frames():
+    """The app's own vectors verify here, so the hash matches MavlinkSigning on the aircraft."""
+    assert verify_frame_signature(bytes.fromhex(VALID_FIRST), SIGNING_KEY)
+    assert verify_frame_signature(bytes.fromhex(VALID_SECOND), SIGNING_KEY)
+    # TAMPERED differs only in the last signature byte.
+    assert not verify_frame_signature(bytes.fromhex(TAMPERED), SIGNING_KEY)
+    # UNSIGNED carries no signed incompat flag.
+    assert not verify_frame_signature(bytes.fromhex(UNSIGNED), SIGNING_KEY)
+
+
+def test_signer_reproduces_the_aircrafts_reference_signature():
+    """Re-signing the reference frame's unsigned content yields the reference bytes exactly."""
+    signed = bytes.fromhex(VALID_FIRST)
+    payload_length = signed[1]
+    signature_start = 10 + payload_length + 2
+    link_id = signed[signature_start]
+    timestamp = int.from_bytes(signed[signature_start + 1 : signature_start + 7], "little")
+
+    # Reconstruct what pymavlink produced before signing: strip the 13 signature bytes, clear
+    # the signed incompat bit, and recompute the checksum without it.
+    unsigned = bytearray(signed[:signature_start])
+    unsigned[2] &= ~0x01
+    message_id = int.from_bytes(unsigned[7:10], "little")
+    crc = _x25crc(bytes(unsigned[1 : 1 + 9 + payload_length]) + bytes([_crc_extra_for(message_id)]))
+    unsigned[10 + payload_length : 12 + payload_length] = crc.to_bytes(2, "little")
+
+    resigned = sign_frame(bytes(unsigned), SIGNING_KEY, timestamp, link_id)
+    assert resigned == signed
+
+
+def test_a_signing_key_channel_emits_frames_the_aircraft_trusts():
+    channel = MavlinkCommandChannel("127.0.0.1", signing_key=SIGNING_KEY)
+    command, params = _COMMAND_MAP["/send/land"]("")
+    frame = channel._frame_command(command, params)
+    assert frame[2] & 0x01 != 0, "the signed incompat flag must be set"
+    assert verify_frame_signature(frame, SIGNING_KEY)
+
+    plain = MavlinkCommandChannel("127.0.0.1")
+    unsigned = plain._frame_command(command, params)
+    assert unsigned[2] & 0x01 == 0
+    assert len(unsigned) == len(frame) - 13, "signing appends exactly the 13 signature bytes"
+
+
+def test_signing_key_from_env_parses_64_hex():
+    key = bytes(range(32))
+    assert signing_key_from_env({"WB_MAVLINK_SIGNING_KEY": key.hex()}) == key
+    assert signing_key_from_env({"WB_MAVLINK_SIGNING_KEY": "not-hex"}) is None
+    assert signing_key_from_env({"WB_MAVLINK_SIGNING_KEY": "00"}) is None
+    assert signing_key_from_env({}) is None
 
 
 def _ack_frame(command: int, result: int) -> bytes:

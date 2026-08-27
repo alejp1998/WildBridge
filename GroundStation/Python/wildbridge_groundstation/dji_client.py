@@ -26,6 +26,7 @@ from wildbridge_groundstation.transport import (
     Transport,
     mavlink_peer_port_from_env,
     mavlink_port_from_env,
+    signing_key_from_env,
 )
 
 DISCOVERY_PORT = 30000
@@ -245,6 +246,9 @@ class DJIInterface:
                 # isWaypointReached(seq) and friends keep working without the caller knowing
                 # which wire the answer came from.
                 on_latch=self._apply_mavlink_telemetry,
+                # Sign every command with WB_MAVLINK_SIGNING_KEY when configured, so the
+                # aircraft treats this ground station as the Safety Computer.
+                signing_key=signing_key_from_env(),
             )
             print(
                 f"Transport: {self.transport.value} "
