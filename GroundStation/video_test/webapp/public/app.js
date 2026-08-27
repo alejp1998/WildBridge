@@ -589,6 +589,9 @@ function render(state) {
   renderSettingsPanel(state);
   renderPublishTargets(state);
   renderPublishCatalog();
+  // Kept current as drones come and go, rather than only when the tab is opened: a drone
+  // discovered while the panel is already visible has to appear in the picker.
+  refreshMavlinkTargets();
   if (selectedDroneName) updateModalForDrone(selectedDroneName);
   updateTelemetryChartSamples(state);
   updateCharts();
@@ -1879,9 +1882,10 @@ const MAVLINK_STATUS_LABELS = {
 };
 
 function mavlinkDroneNames() {
-  // state.drones is the array the SSE state carries, and only drones with a known address can be
-  // compared: the MAVLink side has to bind a socket filtered to that aircraft.
-  return (state.drones || [])
+  // latestState, not state: `state` is a parameter of render(), so reading it here found nothing
+  // and the picker stayed empty. Only drones with a known address can be compared, because the
+  // MAVLink side binds a socket filtered to that aircraft.
+  return ((latestState && latestState.drones) || [])
     .filter((drone) => drone.ip)
     .map((drone) => drone.name)
     .sort();
@@ -1890,6 +1894,11 @@ function mavlinkDroneNames() {
 function refreshMavlinkTargets() {
   const names = mavlinkDroneNames();
   const chosen = mavlinkTarget.value;
+  const unchanged =
+    names.length === mavlinkTarget.options.length &&
+    names.every((name, index) => mavlinkTarget.options[index].value === name);
+  // Rebuilding the list on every state push would reset the operator's choice twice a second.
+  if (unchanged) return;
   mavlinkTarget.replaceChildren(
     ...names.map((name) => {
       const option = document.createElement('option');
@@ -1898,7 +1907,14 @@ function refreshMavlinkTargets() {
       return option;
     }),
   );
-  if (names.includes(chosen)) mavlinkTarget.value = chosen;
+  if (names.includes(chosen)) {
+    mavlinkTarget.value = chosen;
+  } else if (names.length) {
+    // Nothing chosen yet, or the chosen drone went away: pick the first so the panel shows
+    // something the moment a drone exists, rather than an empty table beside a full picker.
+    mavlinkTarget.value = names[0];
+    if (mavlinkTimer !== null) loadMavlinkComparison();
+  }
 }
 
 async function loadMavlinkComparison() {
