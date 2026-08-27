@@ -5,14 +5,34 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VARIANT="current"
 BUILD=false
 CHECK_ONLY=false
+# Which device to install onto. Empty means "the only one attached", which is what a bare adb
+# assumes and the reason this script used to fail outright with two RCs plugged in: adb refuses
+# every command with "more than one device" rather than picking one. A fleet is the normal case
+# here, so the choice has to be expressible.
+SERIAL=""
+ALL_DEVICES=false
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --build)
       BUILD=true
       ;;
     --check)
       CHECK_ONLY=true
+      ;;
+    --serial)
+      SERIAL="${2:-}"
+      if [[ -z "$SERIAL" ]]; then
+        echo "--serial needs a device serial (see: adb devices)" >&2
+        exit 1
+      fi
+      shift
+      ;;
+    --serial=*)
+      SERIAL="${1#--serial=}"
+      ;;
+    --all)
+      ALL_DEVICES=true
       ;;
     current)
       VARIANT="current"
@@ -22,10 +42,17 @@ for arg in "$@"; do
       ;;
     *)
       echo "Usage: $0 [current|demoBiomass|demo_biomass] [--build] [--check]" >&2
+      echo "          [--serial SERIAL | --all]" >&2
       exit 1
       ;;
   esac
+  shift
 done
+
+if [[ "$ALL_DEVICES" == true && -n "$SERIAL" ]]; then
+  echo "--all and --serial are mutually exclusive" >&2
+  exit 1
+fi
 
 if [[ "$VARIANT" == "demoBiomass" ]]; then
   PACKAGE_NAME="com.dji.sampleV5.aircraft.demo_biomass"
@@ -130,19 +157,77 @@ fi
 
 ensure_android_sdk_configured
 
-echo "Waiting for a DJI RC / Android device over ADB..."
-adb wait-for-device
+# Install onto one device and start the app there.
+install_to() {
+  local target="$1"
+  local model product
+  model="$(adb -s "$target" shell getprop ro.product.model 2>/dev/null | tr -d '\r' || true)"
+  product="$(adb -s "$target" shell getprop ro.product.product.name 2>/dev/null | tr -d '\r' || true)"
 
-serial="$(adb get-serialno 2>/dev/null || true)"
-model="$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' || true)"
-product="$(adb shell getprop ro.product.product.name 2>/dev/null | tr -d '\r' || true)"
+  echo
+  echo "Device: serial=$target model=${model:-unknown} product=${product:-unknown}"
+  echo "Installing $VARIANT: $APK_PATH"
+  adb -s "$target" install -r "$APK_PATH"
 
-echo "Device detected: serial=${serial:-unknown} model=${model:-unknown} product=${product:-unknown}"
-echo "Installing $VARIANT: $APK_PATH"
-adb install -r "$APK_PATH"
+  echo "Launching $PACKAGE_NAME"
+  adb -s "$target" shell am start -n "$PACKAGE_NAME/$LAUNCH_ACTIVITY" >/dev/null || \
+    adb -s "$target" shell monkey -p "$PACKAGE_NAME" -c android.intent.category.LAUNCHER 1 >/dev/null
+}
 
-echo "Launching $PACKAGE_NAME"
-adb shell am start -n "$PACKAGE_NAME/$LAUNCH_ACTIVITY" >/dev/null || \
-  adb shell monkey -p "$PACKAGE_NAME" -c android.intent.category.LAUNCHER 1 >/dev/null
+# Serials of everything currently attached and ready. Devices listed as "offline",
+# "unauthorized" or "no permissions" are excluded rather than attempted, so a stale entry for an
+# RC that has been unplugged does not fail the run.
+attached_devices() {
+  adb devices | awk 'NR > 1 && $2 == "device" { print $1 }'
+}
 
+mapfile -t devices < <(attached_devices)
+
+# Only actually wait when nothing is ready yet. A bare `adb wait-for-device` refuses outright
+# once two devices are attached -- "more than one device/emulator" -- so waiting unconditionally
+# breaks the fleet case this script exists to serve.
+if [[ ${#devices[@]} -eq 0 || -n "$SERIAL" ]]; then
+  echo "Waiting for a DJI RC / Android device over ADB..."
+  if [[ -n "$SERIAL" ]]; then
+    adb -s "$SERIAL" wait-for-device
+  else
+    adb wait-for-device
+  fi
+  mapfile -t devices < <(attached_devices)
+fi
+
+if [[ ${#devices[@]} -eq 0 ]]; then
+  echo "No ready device attached. Check 'adb devices' — an entry marked offline or" >&2
+  echo "unauthorized needs the RC's screen unlocked and the debugging prompt accepted." >&2
+  exit 1
+fi
+
+if [[ -n "$SERIAL" ]]; then
+  # shellcheck disable=SC2076  # literal match is intended: serials are compared exactly
+  if [[ ! " ${devices[*]} " =~ " ${SERIAL} " ]]; then
+    echo "Device not attached: $SERIAL" >&2
+    printf 'Attached: %s\n' "${devices[*]}" >&2
+    exit 1
+  fi
+  targets=("$SERIAL")
+elif [[ "$ALL_DEVICES" == true ]]; then
+  targets=("${devices[@]}")
+elif [[ ${#devices[@]} -gt 1 ]]; then
+  # Refused rather than guessed: installing the wrong build on the aircraft someone is about to
+  # fly is worse than stopping, and with two RCs on a bench there is no safe default.
+  echo "More than one device attached; choose one with --serial, or --all for every device:" >&2
+  for device in "${devices[@]}"; do
+    model="$(adb -s "$device" shell getprop ro.product.model 2>/dev/null | tr -d '\r' || true)"
+    printf '  %s  %s\n' "$device" "${model:-unknown}" >&2
+  done
+  exit 1
+else
+  targets=("${devices[@]}")
+fi
+
+for target in "${targets[@]}"; do
+  install_to "$target"
+done
+
+echo
 echo "Done. PID/control profile is selected inside the app from DJI ProductKey.KeyProductType."
