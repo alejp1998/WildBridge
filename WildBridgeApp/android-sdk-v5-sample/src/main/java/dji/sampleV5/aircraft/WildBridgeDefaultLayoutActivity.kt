@@ -94,6 +94,7 @@ import dji.sampleV5.aircraft.mavlink.MissionProgressListener
 import dji.sampleV5.aircraft.mavlink.PendingCommand
 import dji.sampleV5.aircraft.mavlink.PendingKind
 import dji.sampleV5.aircraft.mavlink.CommandProgress
+import dji.sampleV5.aircraft.mavlink.DetectedTargetSnapshot
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
 import dji.sampleV5.aircraft.mavlink.MavlinkFtpServer
@@ -4239,7 +4240,22 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             yawReached = DroneController.isYawReached(),
             yawSeq = DroneController.getYawSeq(),
             altitudeReached = DroneController.isAltitudeReached(),
-            altitudeSeq = DroneController.getAltitudeSeq()
+            altitudeSeq = DroneController.getAltitudeSeq(),
+
+            // The same answers GET /config gives, so a ground station on MAVLink alone still
+            // learns how to reach the other surfaces and what this airframe carries.
+            ipAddress = NetworkUtils.getDeviceIpAddress() ?: "",
+            httpPort = HTTP_PORT,
+            telemetryPort = TELEMETRY_PORT,
+            videoMode = getStreamingMode().prefValue,
+            hasThermal = runCatching { hasThermalCamera() }.getOrDefault(false),
+
+            autoSensingActive = isAutoSensingActive,
+            detectionSource = getDetectionSource().prefValue,
+            detectionConfidenceThreshold = getEdgeConfidenceThreshold(),
+            detectedTargets = currentDetectedTargets.map {
+                DetectedTargetSnapshot(it.type, it.left, it.top, it.right, it.bottom, it.confidence)
+            }
         )
     }
 
@@ -4510,6 +4526,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             } else {
                 CommandResult(MavlinkCommandOutcome.FAILED, "Drop refused by the payload")
             }
+        }
+
+        override fun setAutoSensing(enabled: Boolean): CommandResult {
+            // On the main thread, as the HTTP route does: this drives the detector and its UI
+            // switch, and the MAVLink receive thread is not where either belongs.
+            mainHandler.post {
+                if (enabled) startAutoSensing() else stopAutoSensing()
+                setAutoSensingSwitchChecked(enabled)
+            }
+            return CommandResult(MavlinkCommandOutcome.ACCEPTED)
         }
 
         override fun setParameter(name: String, value: Float): CommandResult =

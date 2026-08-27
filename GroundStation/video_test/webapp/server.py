@@ -170,6 +170,8 @@ def mavlink_coverage():
             _COMMAND_MAP,
             _SPECIAL_SENDERS,
             _TELEMETRY_HANDLERS,
+            decode_autosensing_status,
+            decode_wildbridge_config,
             decode_wildbridge_status,
         )
     except ImportError:
@@ -179,7 +181,12 @@ def mavlink_coverage():
     # that only reports something is covered when its value is on the telemetry stream -- not by
     # inventing a command to ask for it. Reporting those as simply absent conflated "we cannot do
     # this" with "we do this a different way".
+    # Derived from the decoders themselves rather than a list kept beside them, so a field added
+    # to a message shows up here without anyone remembering to mention it twice.
     streamed = set(decode_wildbridge_status(bytes(75)))
+    streamed |= set(decode_wildbridge_config(bytes(53)))
+    streamed |= set(decode_autosensing_status(bytes(30)))
+    streamed |= {"detectedTargets"}
     streamed |= {
         "location",
         "altitude",

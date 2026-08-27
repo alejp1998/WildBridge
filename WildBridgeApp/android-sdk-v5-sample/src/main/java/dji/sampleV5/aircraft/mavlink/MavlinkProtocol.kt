@@ -33,6 +33,13 @@ internal object MavlinkMsgId {
 
     /** WildBridge's own residue; see GroundStation/mavlink/wildbridge.xml. */
     const val WILDBRIDGE_STATUS = 42100
+
+    /** Identity and service ports. Static, so streamed slowly and separately from state. */
+    const val WILDBRIDGE_CONFIG = 42101
+
+    /** On-device detection: state, then one message per target per cycle. */
+    const val AUTOSENSING_STATUS = 42102
+    const val AUTOSENSING_TARGET = 42103
     const val HEARTBEAT = 0
     const val SYS_STATUS = 1
     const val SET_MODE = 11
@@ -231,6 +238,8 @@ internal object Mav {
     /** USER_1 selectors, in param1. */
     const val USER1_GIMBAL_RELATIVE = 1f
     const val USER1_RELEASE_MANUAL_OVERRIDE = 2f
+    const val USER1_AUTOSENSING_START = 3f
+    const val USER1_AUTOSENSING_STOP = 4f
     const val USER1_RELEASE_SAFETY = 3f
 
     /** USER_2 selectors, in param1. */

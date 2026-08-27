@@ -47,6 +47,9 @@ internal interface MavlinkCommandSink {
     /** Release the payload. The one command here that moves something off the aircraft. */
     fun dropPayload(): CommandResult
 
+    /** Start or stop the on-device detector. */
+    fun setAutoSensing(enabled: Boolean): CommandResult
+
     /**
      * Write one named setting.
      *

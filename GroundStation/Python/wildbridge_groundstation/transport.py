@@ -66,8 +66,6 @@ HTTP_ONLY_BY_DESIGN: dict[str, str] = {
     "/send/rcPairing/stop": (
         "RC pairing is a hardware handshake between the remote and the aircraft; no MAVLink form."
     ),
-    "/send/autoSensing/start": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
-    "/send/autoSensing/stop": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
     # Media stays on HTTP even though MAVLink FTP can list and read the card: FTP moves 239
     # bytes per request-reply round trip (tens of KB/s at best), so a multi-megabyte JPEG over
     # FTP is minutes of stop-and-wait. HTTP over the same Wi-Fi saturates the link (MB/s), so
@@ -586,6 +584,9 @@ class MavlinkTelemetrySource:
         #: when its address was never configured.
         self.peer: tuple[str, int] | None = None
         self._heartbeat_frame: bytes | None = None
+        #: Targets gathered for the cycle currently arriving, and which cycle that is.
+        self._detection_targets: list[dict[str, Any]] = []
+        self._detection_frame = -1
 
     def start(self) -> None:
         if self._running:
@@ -676,6 +677,45 @@ class MavlinkTelemetrySource:
         with suppress(OSError):
             sock.sendto(self._heartbeat_frame, (self.peer_host, self.peer_port))
 
+    def _collect_target(self, data: bytes) -> bool:
+        """Hold a target until its cycle is complete."""
+        if not _checksum_ok(data, AUTOSENSING_TARGET_CRC_EXTRA):
+            return False
+        try:
+            decoded = decode_autosensing_target(data[10 : 10 + data[1]])
+        except struct.error:
+            return False
+        if decoded["frameId"] != self._detection_frame:
+            # A new cycle: whatever was being gathered belonged to the last one.
+            self._detection_frame = decoded["frameId"]
+            self._detection_targets = []
+        self._detection_targets.append(decoded["target"])
+        # Nothing is published yet — the status message closes the cycle.
+        return False
+
+    def _publish_detection_cycle(self, data: bytes) -> bool:
+        """Publish the cycle the status message describes.
+
+        The count is what makes a cycle whole. Publishing on the count rather than on the last
+        target arriving is also what reports an empty cycle, which is the thing that clears a
+        stale overlay: no target messages arrive at all, so nothing else could.
+        """
+        if not _checksum_ok(data, AUTOSENSING_STATUS_CRC_EXTRA):
+            return False
+        try:
+            status = decode_autosensing_status(data[10 : 10 + data[1]])
+        except struct.error:
+            return False
+
+        gathered = self._detection_targets if status["frameId"] == self._detection_frame else []
+        # Short means packets were lost; report what arrived rather than nothing.
+        self._telemetry["detectedTargets"] = list(gathered[: status["count"]])
+        self._telemetry["autoSensingActive"] = status["autoSensingActive"]
+        self._telemetry["detectionSource"] = status["detectionSource"]
+        self._telemetry["edgeConfidenceThreshold"] = status["edgeConfidenceThreshold"]
+        self._detection_targets = []
+        return True
+
     def _apply_wildbridge_status(self, data: bytes) -> bool:
         """Decode WILDBRIDGE_STATUS straight off the wire.
 
@@ -686,9 +726,21 @@ class MavlinkTelemetrySource:
         """
         if len(data) < 12 or data[0] != MAVLINK2_MAGIC:
             return False
-        if int.from_bytes(data[7:10], "little") != WILDBRIDGE_STATUS_ID:
+        message_id = int.from_bytes(data[7:10], "little")
+        if message_id == AUTOSENSING_TARGET_ID:
+            return self._collect_target(data)
+        if message_id == AUTOSENSING_STATUS_ID:
+            return self._publish_detection_cycle(data)
+        if message_id == WILDBRIDGE_CONFIG_ID:
+            if not _checksum_ok(data, WILDBRIDGE_CONFIG_CRC_EXTRA):
+                return False
+            with suppress(struct.error):
+                self._telemetry.update(decode_wildbridge_config(data[10 : 10 + data[1]]))
+                return True
             return False
-        if not _checksum_ok(data):
+        if message_id != WILDBRIDGE_STATUS_ID:
+            return False
+        if not _checksum_ok(data, WILDBRIDGE_STATUS_CRC_EXTRA):
             # An aircraft running an older build sends an older layout of this message, and
             # padding it out and decoding anyway produces confident nonsense: a string read
             # twelve bytes late, focal lengths that are really ASCII pairs. The CRC_EXTRA is
@@ -736,6 +788,8 @@ PX4_MODE_OFFBOARD = 6 << 16
 #: USER_1 / USER_2 selectors, carried in param1. Kept in step with Mav in MavlinkProtocol.kt.
 USER1_GIMBAL_RELATIVE = 1.0
 USER1_RELEASE_MANUAL_OVERRIDE = 2.0
+USER1_AUTOSENSING_START = 3.0
+USER1_AUTOSENSING_STOP = 4.0
 USER1_RELEASE_SAFETY = 3.0
 USER2_LRF_MEASURE = 1.0
 USER2_CAPTURE_TEMPERATURE = 2.0
@@ -940,6 +994,16 @@ def _gimbal_rel_yaw(payload: str) -> tuple[int, list[float]]:
     return CMD_USER_1, [USER1_GIMBAL_RELATIVE, 0, yaw, 0, 0, 0, 0]
 
 
+@_register("/send/autoSensing/start")
+def _autosensing_start(_payload: str) -> tuple[int, list[float]]:
+    return CMD_USER_1, [USER1_AUTOSENSING_START, 0, 0, 0, 0, 0, 0]
+
+
+@_register("/send/autoSensing/stop")
+def _autosensing_stop(_payload: str) -> tuple[int, list[float]]:
+    return CMD_USER_1, [USER1_AUTOSENSING_STOP, 0, 0, 0, 0, 0, 0]
+
+
 @_register("/send/lrf/measure")
 def _lrf_measure(_payload: str) -> tuple[int, list[float]]:
     return CMD_USER_2, [USER2_LRF_MEASURE, 0, 0, 0, 0, 0, 0]
@@ -1074,7 +1138,82 @@ SETTING_PARAM_ENDPOINTS = {
 WILDBRIDGE_STATUS_CRC_EXTRA = 216
 
 
-def _checksum_ok(data: bytes) -> bool:
+#: WILDBRIDGE_CONFIG, from wildbridge.xml. Identity and service ports, streamed slowly because
+#: none of it changes during a session.
+WILDBRIDGE_CONFIG_ID = 42101
+WILDBRIDGE_CONFIG_STRUCT = "<HHB20s16s12s"
+WILDBRIDGE_CONFIG_SIZE = 53
+WILDBRIDGE_CONFIG_CRC_EXTRA = 186
+WB_CONFIG_FLAG_HAS_THERMAL = 1
+
+
+def decode_wildbridge_config(payload: bytes) -> dict[str, Any]:
+    """Turn a WILDBRIDGE_CONFIG payload into the keys GET /config returns.
+
+    Same names as the HTTP answer, so a consumer cannot tell which wire told it.
+    """
+    padded = payload.ljust(WILDBRIDGE_CONFIG_SIZE, b"\x00")
+    http_port, telemetry_port, flags, name, ip, video = struct.unpack(
+        WILDBRIDGE_CONFIG_STRUCT, padded
+    )
+    return {
+        "droneName": _trim(name),
+        "ipAddress": _trim(ip),
+        "httpPort": http_port,
+        "telemetryPort": telemetry_port,
+        "videoMode": _trim(video),
+        "hasThermal": bool(flags & WB_CONFIG_FLAG_HAS_THERMAL),
+    }
+
+
+#: AUTOSENSING_STATUS and AUTOSENSING_TARGET, from wildbridge.xml.
+#:
+#: Targets arrive one message each rather than as a list, so they are gathered by cycle and only
+#: published once the status message says how many the cycle held. Publishing them as they arrive
+#: would show a half-built set, and a viewer would see targets flicker in one at a time.
+AUTOSENSING_STATUS_ID = 42102
+AUTOSENSING_STATUS_STRUCT = "<IIfBB16s"
+AUTOSENSING_STATUS_SIZE = 30
+AUTOSENSING_STATUS_CRC_EXTRA = 254
+
+AUTOSENSING_TARGET_ID = 42103
+AUTOSENSING_TARGET_STRUCT = "<IIfffffBB16s"
+AUTOSENSING_TARGET_SIZE = 46
+AUTOSENSING_TARGET_CRC_EXTRA = 83
+
+
+def decode_autosensing_target(payload: bytes) -> dict[str, Any]:
+    """One detected object, in the shape the HTTP surface reports it."""
+    padded = payload.ljust(AUTOSENSING_TARGET_SIZE, b"\x00")
+    (_boot, frame_id, left, top, right, bottom, confidence, index, count, kind) = struct.unpack(
+        AUTOSENSING_TARGET_STRUCT, padded
+    )
+    target: dict[str, Any] = {
+        "index": index,
+        "type": _trim(kind),
+        "rect": [left, top, right, bottom],
+    }
+    # NaN means the detector did not report one, which is not the same as zero confidence.
+    if not math.isnan(confidence):
+        target["confidence"] = confidence
+    return {"frameId": frame_id, "count": count, "target": target}
+
+
+def decode_autosensing_status(payload: bytes) -> dict[str, Any]:
+    padded = payload.ljust(AUTOSENSING_STATUS_SIZE, b"\x00")
+    _boot, frame_id, threshold, active, count, source = struct.unpack(
+        AUTOSENSING_STATUS_STRUCT, padded
+    )
+    return {
+        "frameId": frame_id,
+        "count": count,
+        "autoSensingActive": bool(active),
+        "detectionSource": _trim(source),
+        "edgeConfidenceThreshold": threshold,
+    }
+
+
+def _checksum_ok(data: bytes, crc_extra: int) -> bool:
     """Verify a MAVLink 2 frame's checksum, the way the standard parser would."""
     from pymavlink.generator.mavcrc import x25crc
 
@@ -1085,7 +1224,7 @@ def _checksum_ok(data: bytes) -> bool:
     crc = x25crc(data[1:end])
     # As a byte, not as a character: CRC_EXTRA values above 127 encode as two bytes in UTF-8, so
     # accumulating them through a str silently checksums the wrong thing.
-    crc.accumulate(bytes([WILDBRIDGE_STATUS_CRC_EXTRA]))
+    crc.accumulate(bytes([crc_extra]))
     expected = data[end] | (data[end + 1] << 8)
     return crc.crc == expected
 

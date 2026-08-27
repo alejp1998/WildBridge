@@ -80,6 +80,12 @@
         <description>Trip one shutter on the thermal payload, storing thermal R-JPEG plus wide/zoom when enabled.</description>
       </entry>
     </enum>
+    <enum name="WILDBRIDGE_CONFIG_FLAGS" bitmask="true">
+      <description>Airframe capabilities reported in WILDBRIDGE_CONFIG.</description>
+      <entry value="1" name="WILDBRIDGE_CONFIG_FLAG_HAS_THERMAL">
+        <description>A thermal payload is fitted.</description>
+      </entry>
+    </enum>
   </enums>
   <messages>
     <message id="42100" name="WILDBRIDGE_STATUS">
@@ -113,6 +119,64 @@
       <field type="uint32_t" name="altitude_seq">Identifies the movement the altitude-reached flag refers to.</field>
       <field type="uint8_t" name="flags" enum="WILDBRIDGE_STATUS_FLAGS">Boolean state.</field>
       <field type="char[24]" name="takeoff_block_reason">Why a takeoff would be refused, or empty when it would not.</field>
+    </message>
+    <message id="42101" name="WILDBRIDGE_CONFIG">
+      <description>
+        The aircraft's identity and how to reach its other services. Everything here is static for
+        the life of a session, so it is streamed slowly and in its own message rather than
+        weighing down WILDBRIDGE_STATUS, which carries state that changes.
+
+        It exists so a ground station learns what GET /config would have told it without needing
+        the HTTP surface at all. MAVLink streams state rather than answering polls, so the answer
+        to a read arrives on its own rather than on request.
+      </description>
+      <field type="uint16_t" name="http_port">Port the HTTP command surface listens on.</field>
+      <field type="uint16_t" name="telemetry_port">Port the JSON telemetry stream listens on.</field>
+      <field type="uint8_t" name="flags" enum="WILDBRIDGE_CONFIG_FLAGS">Capabilities of this airframe.</field>
+      <field type="char[20]" name="drone_name">Name this aircraft answers to, as configured in the app.</field>
+      <field type="char[16]" name="ip_address">Address the aircraft is reachable on.</field>
+      <field type="char[12]" name="video_mode">Streaming mode currently configured, such as "whip".</field>
+    </message>
+    <message id="42102" name="AUTOSENSING_STATUS">
+      <description>
+        Whether on-device detection is running, and how many targets it currently holds. Streamed
+        at a low rate so a ground station that joins mid-flight learns the state without asking,
+        and so a viewer can tell "detection is off" from "detection is on and sees nothing".
+      </description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Timestamp since system boot.</field>
+      <field type="uint32_t" name="frame_id">Detection cycle the target count belongs to.</field>
+      <field type="float" name="confidence_threshold">Confidence below which a detection is discarded.</field>
+      <field type="uint8_t" name="active">Non-zero while detection is running.</field>
+      <field type="uint8_t" name="target_count">Targets in the cycle named by frame_id.</field>
+      <field type="char[16]" name="source">Which detector is selected, such as "edge" or "none".</field>
+    </message>
+    <message id="42103" name="AUTOSENSING_TARGET">
+      <description>
+        One detected object, emitted once per target per detection cycle rather than as a list.
+
+        MAVLink messages are fixed-size, so a list would either cap the number of targets or
+        truncate them. Emitting one message each borrows the pattern ADSB_VEHICLE uses for
+        traffic: no cap, and a dropped packet costs one target rather than the whole frame.
+
+        target_index and target_count delimit a cycle, so a receiver knows when it has the whole
+        set and can drop anything left over from the previous one. A cycle with nothing in it is
+        reported by AUTOSENSING_STATUS with target_count zero, which is what clears a stale
+        overlay.
+
+        The bounding box is normalised to the frame, in the left/top/right/bottom form the
+        detector produces; converting to centre and extent here would only invite the receiver to
+        convert it back.
+      </description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Timestamp since system boot.</field>
+      <field type="uint32_t" name="frame_id">Detection cycle this target belongs to.</field>
+      <field type="float" name="left">Left edge of the bounding box, 0 to 1.</field>
+      <field type="float" name="top">Top edge of the bounding box, 0 to 1.</field>
+      <field type="float" name="right">Right edge of the bounding box, 0 to 1.</field>
+      <field type="float" name="bottom">Bottom edge of the bounding box, 0 to 1.</field>
+      <field type="float" name="confidence">Detector confidence, 0 to 1, or NaN when not reported.</field>
+      <field type="uint8_t" name="target_index">Index of this target within its cycle.</field>
+      <field type="uint8_t" name="target_count">Total targets in this cycle.</field>
+      <field type="char[16]" name="type">Class the detector assigned, such as "PERSON".</field>
     </message>
   </messages>
 </mavlink>

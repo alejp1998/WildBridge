@@ -531,6 +531,71 @@ internal object MavlinkMessages {
             .build()
     }
 
+    /**
+     * http_port(u16), telemetry_port(u16), flags(u8), drone_name(char[20]),
+     * ip_address(char[16]), video_mode(char[12])
+     *
+     * What GET /config would have answered, streamed instead of asked for. Everything in it is
+     * static for a session, which is why it is its own message at a slow rate rather than more
+     * weight on WILDBRIDGE_STATUS.
+     */
+    fun wildbridgeConfig(snapshot: MavlinkSnapshot): ByteArray =
+        PayloadWriter()
+            .u16(snapshot.httpPort.coerceIn(0, 0xFFFF))
+            .u16(snapshot.telemetryPort.coerceIn(0, 0xFFFF))
+            .u8(if (snapshot.hasThermal) WB_CONFIG_FLAG_HAS_THERMAL else 0)
+            .chars(snapshot.droneName, DRONE_NAME_LENGTH)
+            .chars(snapshot.ipAddress, IP_ADDRESS_LENGTH)
+            .chars(snapshot.videoMode, VIDEO_MODE_LENGTH)
+            .build()
+
+    /**
+     * time_boot_ms(u32), frame_id(u32), confidence_threshold(f32), active(u8), target_count(u8),
+     * source(char[16])
+     *
+     * Sent even when nothing is detected, because "detection is off" and "detection is on and
+     * sees nothing" are different states and a ground station cannot tell them apart from the
+     * absence of target messages alone.
+     */
+    fun autoSensingStatus(snapshot: MavlinkSnapshot, timeBootMs: Long, frameId: Long): ByteArray =
+        PayloadWriter()
+            .u32(timeBootMs)
+            .u32(frameId)
+            .f32(snapshot.detectionConfidenceThreshold)
+            .u8(if (snapshot.autoSensingActive) 1 else 0)
+            .u8(snapshot.detectedTargets.size.coerceIn(0, 255))
+            .chars(snapshot.detectionSource, DETECTION_SOURCE_LENGTH)
+            .build()
+
+    /**
+     * time_boot_ms(u32), frame_id(u32), left/top/right/bottom(f32), confidence(f32),
+     * target_index(u8), target_count(u8), type(char[16])
+     *
+     * One message per target, the way ADSB_VEHICLE reports traffic. A fixed-size list would have
+     * to cap the number of targets; this does not, and a dropped packet costs one target rather
+     * than the whole cycle.
+     */
+    fun autoSensingTarget(
+        target: DetectedTargetSnapshot,
+        index: Int,
+        total: Int,
+        timeBootMs: Long,
+        frameId: Long
+    ): ByteArray =
+        PayloadWriter()
+            .u32(timeBootMs)
+            .u32(frameId)
+            .f32(target.left.toFloat())
+            .f32(target.top.toFloat())
+            .f32(target.right.toFloat())
+            .f32(target.bottom.toFloat())
+            // NaN rather than zero when the detector did not report one: zero is a confidence.
+            .f32(target.confidence?.toFloat() ?: Float.NaN)
+            .u8(index.coerceIn(0, 255))
+            .u8(total.coerceIn(0, 255))
+            .chars(target.type, DETECTION_TYPE_LENGTH)
+            .build()
+
     /** Degrees to centidegrees, clamped to the int16 the wire field is. */
     private fun degToCentidegrees(degrees: Double): Int =
         (degrees * 100).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
@@ -879,6 +944,16 @@ internal object MavlinkMessages {
 
     /** char[24] in wildbridge.xml. */
     private const val TAKEOFF_REASON_LENGTH = 24
+
+    /** WILDBRIDGE_CONFIG field widths, from wildbridge.xml. */
+    private const val DRONE_NAME_LENGTH = 20
+    private const val IP_ADDRESS_LENGTH = 16
+    private const val VIDEO_MODE_LENGTH = 12
+    private const val WB_CONFIG_FLAG_HAS_THERMAL = 1
+
+    /** AUTOSENSING field widths, from wildbridge.xml. */
+    private const val DETECTION_SOURCE_LENGTH = 16
+    private const val DETECTION_TYPE_LENGTH = 16
     private const val MODE_NAME_LENGTH = 35
 
     /** MAV_FRAME_GLOBAL_RELATIVE_ALT_INT: lat/lon scaled, altitude relative to the home point. */

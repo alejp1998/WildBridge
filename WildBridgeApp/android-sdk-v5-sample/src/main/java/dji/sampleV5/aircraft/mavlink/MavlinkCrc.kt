@@ -62,6 +62,9 @@ internal object MavlinkCrc {
         MavlinkMsgId.DISTANCE_SENSOR to 85,
         // Generated from wildbridge.xml with pymavlink's mavgen, not computed by hand.
         MavlinkMsgId.WILDBRIDGE_STATUS to 216,
+        MavlinkMsgId.WILDBRIDGE_CONFIG to 186,
+        MavlinkMsgId.AUTOSENSING_STATUS to 254,
+        MavlinkMsgId.AUTOSENSING_TARGET to 83,
         MavlinkMsgId.PARAM_REQUEST_LIST to 159,
         MavlinkMsgId.MISSION_REQUEST_LIST to 132
     )

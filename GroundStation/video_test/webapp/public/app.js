@@ -1336,7 +1336,7 @@ const READ_ENDPOINT_FIELDS = {
   '/get/isManualOverrideActive': 'isManualOverrideActive',
   '/get/autoSensing/status': 'autoSensingActive',
   '/get/autoSensing/targets': 'detectedTargets',
-  '/config': 'droneName',
+  '/config': 'ipAddress',
 };
 
 async function loadMavlinkCoverage() {

@@ -12,6 +12,21 @@ package dji.sampleV5.aircraft.mavlink
  * Unknown values use the conventions the MAVLink field documentation specifies rather than a
  * plausible-looking zero — see the `INVALID_*` constants.
  */
+/**
+ * One detected object, in the shape the detector reports it.
+ *
+ * Kept as the SDK's own left/top/right/bottom rather than converted to a centre and extent: the
+ * conversion would be lossless but pointless, since nothing downstream wants it that way.
+ */
+internal data class DetectedTargetSnapshot(
+    val type: String,
+    val left: Double,
+    val top: Double,
+    val right: Double,
+    val bottom: Double,
+    val confidence: Double?
+)
+
 internal data class MavlinkSnapshot(
     val droneName: String = "",
 
@@ -129,7 +144,25 @@ internal data class MavlinkSnapshot(
     val yawReached: Boolean = false,
     val yawSeq: Long = 0,
     val altitudeReached: Boolean = false,
-    val altitudeSeq: Long = 0
+    val altitudeSeq: Long = 0,
+
+    // -- Identity and services ---------------------------------------------------------------
+
+    /** How to reach this aircraft's other surfaces, and what it is. Static for a session. */
+    val ipAddress: String = "",
+    val httpPort: Int = 0,
+    val telemetryPort: Int = 0,
+    val videoMode: String = "",
+    val hasThermal: Boolean = false,
+
+    // -- On-device detection -----------------------------------------------------------------
+
+    val autoSensingActive: Boolean = false,
+    val detectionSource: String = "",
+    val detectionConfidenceThreshold: Float = 0f,
+
+    /** The current detection cycle's targets, in the order the detector reported them. */
+    val detectedTargets: List<DetectedTargetSnapshot> = emptyList()
 ) {
     /**
      * Whether the home coordinates are a real place rather than the SDK's uninitialised value.

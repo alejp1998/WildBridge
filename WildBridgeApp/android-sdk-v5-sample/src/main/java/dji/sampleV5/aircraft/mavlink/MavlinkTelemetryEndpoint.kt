@@ -94,6 +94,9 @@ internal class MavlinkTelemetryEndpoint(
      */
     private val discoveredTargets: MutableSet<InetSocketAddress> = ConcurrentHashMap.newKeySet()
 
+    /** Delimits a detection cycle, so a receiver knows when it has the whole set. */
+    private val detectionFrameId = java.util.concurrent.atomic.AtomicLong(0)
+
     /** Set once a peer has been seen, so the UI can show whether a GCS is actually attached. */
     @Volatile
     var peerAddress: String? = null
@@ -266,6 +269,25 @@ internal class MavlinkTelemetryEndpoint(
         }
     }
 
+    /**
+     * Emit one message per detected target.
+     *
+     * Sent before the status that announces the cycle, so a receiver has the whole set in hand by
+     * the time it is told how many to expect — the other order would leave it briefly believing
+     * targets were missing.
+     */
+    private fun sendDetectedTargets(snapshot: MavlinkSnapshot, frameId: Long) {
+        val targets = snapshot.detectedTargets
+        if (targets.isEmpty()) return
+        val now = timeBootMs()
+        targets.forEachIndexed { index, target ->
+            sendOnce(
+                MavlinkMsgId.AUTOSENSING_TARGET,
+                MavlinkMessages.autoSensingTarget(target, index, targets.size, now, frameId)
+            )
+        }
+    }
+
     private fun notePeer(address: InetSocketAddress) {
         if (!discoveredTargets.add(address)) return
         val label = "${address.address.hostAddress}:${address.port}"
@@ -425,6 +447,19 @@ internal class MavlinkTelemetryEndpoint(
             // Everything WildBridge knows that MAVLink has no message for.
             Stream(MavlinkMsgId.WILDBRIDGE_STATUS, WILDBRIDGE_STATUS_INTERVAL_MS) {
                 MavlinkMessages.wildbridgeStatus(it, timeBootMs())
+            },
+            // Identity and service ports. Static for a session, so slow: a ground station that
+            // joins late still learns it within a few seconds, and nothing is spent repeating it.
+            Stream(MavlinkMsgId.WILDBRIDGE_CONFIG, WILDBRIDGE_CONFIG_INTERVAL_MS) {
+                MavlinkMessages.wildbridgeConfig(it)
+            },
+            // Detection state, then one message per target. The status carries the count, so it
+            // is the thing that says "this cycle had nothing in it" -- which is what clears a
+            // stale overlay. Sending it drives the target messages that follow.
+            Stream(MavlinkMsgId.AUTOSENSING_STATUS, AUTOSENSING_INTERVAL_MS) {
+                val frameId = detectionFrameId.incrementAndGet()
+                sendDetectedTargets(it, frameId)
+                MavlinkMessages.autoSensingStatus(it, timeBootMs(), frameId)
             },
             Stream(MavlinkMsgId.CURRENT_MODE, CURRENT_MODE_INTERVAL_MS) {
                 MavlinkMessages.currentMode(
@@ -634,6 +669,8 @@ internal class MavlinkTelemetryEndpoint(
                         sink.setGimbalRelative(command.param2.toDouble(), command.param3.toDouble())
                     Mav.USER1_RELEASE_MANUAL_OVERRIDE ->
                         motionSink?.releaseManualOverride() ?: unsupported
+                    Mav.USER1_AUTOSENSING_START -> sink.setAutoSensing(true)
+                    Mav.USER1_AUTOSENSING_STOP -> sink.setAutoSensing(false)
                     Mav.USER1_RELEASE_SAFETY ->
                         motionSink?.releaseSafetyControl() ?: unsupported
                     else -> CommandResult(MavlinkCommandOutcome.UNSUPPORTED)
@@ -1320,6 +1357,12 @@ internal class MavlinkTelemetryEndpoint(
          * hear that it changed, not to be told only while something else is true.
          */
         private const val WILDBRIDGE_STATUS_INTERVAL_MS = 500L
+
+        /** Identity does not change during a session; twice a second would be waste. */
+        private const val WILDBRIDGE_CONFIG_INTERVAL_MS = 5_000L
+
+        /** Detection cycle rate. Fast enough for an overlay, slow enough not to flood the link. */
+        private const val AUTOSENSING_INTERVAL_MS = 500L
         private const val CAPTURE_STATUS_INTERVAL_MS = 1_000L
 
         private const val CAMERA_VENDOR = "WildBridge"

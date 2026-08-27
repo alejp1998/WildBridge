@@ -8,6 +8,12 @@ import pytest
 from wildbridge_groundstation.transport import (
     _COMMAND_MAP,
     _SPECIAL_SENDERS,
+    AUTOSENSING_STATUS_CRC_EXTRA,
+    AUTOSENSING_STATUS_ID,
+    AUTOSENSING_STATUS_STRUCT,
+    AUTOSENSING_TARGET_CRC_EXTRA,
+    AUTOSENSING_TARGET_ID,
+    AUTOSENSING_TARGET_STRUCT,
     CMD_DO_GRIPPER,
     CMD_DO_REPOSITION,
     CMD_DO_SET_MODE,
@@ -33,6 +39,9 @@ from wildbridge_groundstation.transport import (
     WB_FLAG_LRF_TARGET_VALID,
     WB_FLAG_MANUAL_OVERRIDE,
     WB_FLAG_READY_TO_TAKEOFF,
+    WILDBRIDGE_CONFIG_CRC_EXTRA,
+    WILDBRIDGE_CONFIG_ID,
+    WILDBRIDGE_CONFIG_STRUCT,
     WILDBRIDGE_STATUS_ID,
     WILDBRIDGE_STATUS_SIZE,
     WILDBRIDGE_STATUS_STRUCT,
@@ -997,3 +1006,124 @@ class _FakeSocket:
             time.sleep(0.02)
             raise TimeoutError
         return self._frames.pop(0), ("127.0.0.1", 14550)
+
+
+# -- config and detections ----------------------------------------------------------------------
+
+
+def _frame(message_id, payload, crc_extra):
+    from pymavlink.generator.mavcrc import x25crc
+
+    header = bytes([0xFD, len(payload), 0, 0, 0, 1, 1]) + message_id.to_bytes(3, "little")
+    crc = x25crc(header[1:] + payload)
+    crc.accumulate(bytes([crc_extra]))
+    return header + payload + crc.crc.to_bytes(2, "little")
+
+
+def test_config_arrives_as_the_keys_the_http_endpoint_returns():
+    """GET /config is a read, and MAVLink streams state rather than answering reads."""
+    payload = struct.pack(
+        WILDBRIDGE_CONFIG_STRUCT, 8080, 8081, 1, b"mini1", b"192.168.50.172", b"whip"
+    )
+    source = MavlinkTelemetrySource(peer_host="")
+    assert source._apply_wildbridge_status(
+        _frame(WILDBRIDGE_CONFIG_ID, payload, WILDBRIDGE_CONFIG_CRC_EXTRA)
+    )
+    assert source._telemetry["droneName"] == "mini1"
+    assert source._telemetry["ipAddress"] == "192.168.50.172"
+    assert source._telemetry["httpPort"] == 8080
+    assert source._telemetry["telemetryPort"] == 8081
+    assert source._telemetry["videoMode"] == "whip"
+    assert source._telemetry["hasThermal"] is True
+
+
+def _target(frame_id, index, count, kind, rect, confidence=float("nan")):
+    return struct.pack(
+        AUTOSENSING_TARGET_STRUCT, 0, frame_id, *rect, confidence, index, count, kind
+    )
+
+
+def _status(frame_id, count, active=1, source=b"edge", threshold=0.25):
+    return struct.pack(AUTOSENSING_STATUS_STRUCT, 0, frame_id, threshold, active, count, source)
+
+
+def test_a_detection_cycle_is_published_only_once_it_is_whole():
+    """Targets arrive one message each; publishing them as they land shows a half-built set."""
+    source = MavlinkTelemetrySource(peer_host="")
+
+    assert not source._apply_wildbridge_status(
+        _frame(
+            AUTOSENSING_TARGET_ID,
+            _target(7, 0, 2, b"PERSON", (0.1, 0.2, 0.3, 0.4), 0.9),
+            AUTOSENSING_TARGET_CRC_EXTRA,
+        )
+    ), "a target alone must not publish"
+    assert "detectedTargets" not in source._telemetry
+
+    source._apply_wildbridge_status(
+        _frame(
+            AUTOSENSING_TARGET_ID,
+            _target(7, 1, 2, b"VEHICLE", (0.5, 0.5, 0.6, 0.7)),
+            AUTOSENSING_TARGET_CRC_EXTRA,
+        )
+    )
+    assert source._apply_wildbridge_status(
+        _frame(AUTOSENSING_STATUS_ID, _status(7, 2), AUTOSENSING_STATUS_CRC_EXTRA)
+    )
+
+    targets = source._telemetry["detectedTargets"]
+    assert [t["type"] for t in targets] == ["PERSON", "VEHICLE"]
+    assert targets[0]["confidence"] == pytest.approx(0.9)
+    assert "confidence" not in targets[1], "NaN means the detector reported none, not zero"
+    assert targets[0]["rect"] == [pytest.approx(v) for v in (0.1, 0.2, 0.3, 0.4)]
+    assert source._telemetry["autoSensingActive"] is True
+    assert source._telemetry["detectionSource"] == "edge"
+
+
+def test_an_empty_cycle_clears_the_previous_targets():
+    """The thing that clears a stale overlay: no target messages arrive, so only the status can."""
+    source = MavlinkTelemetrySource(peer_host="")
+    source._apply_wildbridge_status(
+        _frame(
+            AUTOSENSING_TARGET_ID,
+            _target(1, 0, 1, b"PERSON", (0.1, 0.1, 0.2, 0.2)),
+            AUTOSENSING_TARGET_CRC_EXTRA,
+        )
+    )
+    source._apply_wildbridge_status(
+        _frame(AUTOSENSING_STATUS_ID, _status(1, 1), AUTOSENSING_STATUS_CRC_EXTRA)
+    )
+    assert len(source._telemetry["detectedTargets"]) == 1
+
+    source._apply_wildbridge_status(
+        _frame(
+            AUTOSENSING_STATUS_ID,
+            _status(2, 0, active=0, source=b"none"),
+            AUTOSENSING_STATUS_CRC_EXTRA,
+        )
+    )
+    assert source._telemetry["detectedTargets"] == []
+    assert source._telemetry["autoSensingActive"] is False
+
+
+def test_targets_from_a_stale_cycle_are_discarded():
+    """A dropped status leaves targets orphaned; they must not leak into the next cycle."""
+    source = MavlinkTelemetrySource(peer_host="")
+    source._apply_wildbridge_status(
+        _frame(
+            AUTOSENSING_TARGET_ID,
+            _target(4, 0, 1, b"BOAT", (0, 0, 1, 1)),
+            AUTOSENSING_TARGET_CRC_EXTRA,
+        )
+    )
+    source._apply_wildbridge_status(
+        _frame(
+            AUTOSENSING_TARGET_ID,
+            _target(5, 0, 1, b"ANIMAL", (0, 0, 1, 1)),
+            AUTOSENSING_TARGET_CRC_EXTRA,
+        )
+    )
+    source._apply_wildbridge_status(
+        _frame(AUTOSENSING_STATUS_ID, _status(5, 1), AUTOSENSING_STATUS_CRC_EXTRA)
+    )
+    assert [t["type"] for t in source._telemetry["detectedTargets"]] == ["ANIMAL"]
