@@ -689,9 +689,28 @@ GRIPPER_ACTION_RELEASE = 0
 MAV_RESULT_ACCEPTED = 0
 MAV_RESULT_IN_PROGRESS = 5
 
+#: MAV_PARAM_EXT_TYPE_CUSTOM: the value is an opaque byte string.
+PARAM_EXT_TYPE_CUSTOM = 11
+PARAM_ACK_ACCEPTED = 0
+
+
+def _trim(field: Any) -> str:
+    """A MAVLink fixed-width char field as the string it carries."""
+    raw = field.decode("ascii", "replace") if isinstance(field, bytes) else str(field)
+    return raw.split("\x00")[0].strip()
+
+
 #: Replies this channel waits on. Everything else in the stream belongs to the telemetry source.
 _INTERESTING_REPLIES = frozenset(
-    {"COMMAND_ACK", "PARAM_VALUE", "MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"}
+    {
+        "COMMAND_ACK",
+        "PARAM_VALUE",
+        "PARAM_EXT_ACK",
+        "PARAM_EXT_VALUE",
+        "MISSION_REQUEST_INT",
+        "MISSION_REQUEST",
+        "MISSION_ACK",
+    }
 )
 
 #: Most recent replies kept while nothing is waiting for them.
@@ -912,6 +931,17 @@ def _send_trajectory(channel: MavlinkCommandChannel, payload: str, timeout: floa
     return f"ACCEPTED via MAVLink mission, {len(waypoints)} waypoints"
 
 
+def _send_text_parameter(endpoint: str):
+    """A settings endpoint whose value is a string rather than a number."""
+
+    def send(channel: MavlinkCommandChannel, payload: str, timeout: float) -> str:
+        return channel.set_text_parameter(
+            TEXT_PARAM_ENDPOINTS[endpoint], str(payload).strip(), timeout
+        )
+
+    return send
+
+
 def _send_setting_parameter(endpoint: str):
     """A settings endpoint whose MAVLink form is a parameter write."""
 
@@ -979,6 +1009,20 @@ REACH_LATCHES = {
     "/send/gotoYaw": ("yawReached", "yawSeq"),
     "/send/gotoAltitude": ("altitudeReached", "altitudeSeq"),
 }
+#: Settings whose value is a string, carried by the extended parameter protocol.
+#:
+#: PARAM_SET's value is a float, so these have no honest encoding there. PARAM_EXT_SET carries
+#: the value as bytes, which is what it exists for.
+TEXT_PARAM_ENDPOINTS = {
+    "/send/setDroneName": "WB_DRONE_NAME",
+    "/send/setVideoSource": "WB_VIDEO_SRC",
+    "/send/setMediamtxServer": "WB_MEDIAMTX",
+    "/send/setDetectionSource": "WB_DETECT_SRC",
+    "/send/setRcControlMode": "WB_RC_MODE",
+    "/send/setWebRtcResolution": "WB_RTC_RES",
+    "/send/streaming/mode": "WB_STREAM_MODE",
+}
+
 #: The same settings addressed by their webapp key, for requestSetSetting.
 SETTING_PARAMETERS = {
     "rthAltitude": PARAM_RTH_ALTITUDE,
@@ -990,9 +1034,23 @@ SETTING_PARAMETERS = {
     "edgeConfidenceThreshold": "WB_EDGE_CONF",
 }
 
+#: String settings addressed by their webapp key.
+TEXT_SETTING_PARAMETERS = {
+    "droneName": "WB_DRONE_NAME",
+    "videoSource": "WB_VIDEO_SRC",
+    "mediamtxServer": "WB_MEDIAMTX",
+    "detectionSource": "WB_DETECT_SRC",
+    "rcControlMode": "WB_RC_MODE",
+    "webrtcResolution": "WB_RTC_RES",
+    "streamingMode": "WB_STREAM_MODE",
+}
+
 
 for _endpoint in SETTING_PARAM_ENDPOINTS:
     _SPECIAL_SENDERS[_endpoint] = _send_setting_parameter(_endpoint)
+
+for _endpoint in TEXT_PARAM_ENDPOINTS:
+    _SPECIAL_SENDERS[_endpoint] = _send_text_parameter(_endpoint)
 
 
 class _FrameSink:
@@ -1238,6 +1296,36 @@ class MavlinkCommandChannel:
         if abs(reply.param_value - value) > 1e-3:
             return f"REJECTED: {name} is {reply.param_value}, not {value}"
         return f"{name} set to {reply.param_value}"
+
+    def set_text_parameter(self, name: str, value: str, timeout: float = 3.0) -> str:
+        """Write one string setting and report what the aircraft says it now holds.
+
+        PARAM_EXT_ACK echoes the current value rather than the requested one, so a write that was
+        rejected as out of range comes back showing the old value — detected here rather than
+        needing a second read.
+        """
+        mav = self._ensure_mav()
+        self._sink.buf = b""
+        mav.param_ext_set_send(
+            self.target_system,
+            COMP_ID_AUTOPILOT1,
+            name.encode()[:16],
+            value.encode()[:128],
+            PARAM_EXT_TYPE_CUSTOM,
+        )
+        with self._lock:
+            self._socket.sendto(self._sink.buf, (self.host, self.port))
+
+        reply = self._await(
+            lambda m: m.get_type() == "PARAM_EXT_ACK" and _trim(m.param_id) == name,
+            timeout,
+        )
+        if reply is None:
+            return f"REJECTED: no PARAM_EXT_ACK for {name}"
+        current = _trim(reply.param_value)
+        if reply.param_result != PARAM_ACK_ACCEPTED:
+            return f"REJECTED: {name} refused, still {current!r}"
+        return f"{name} set to {current}"
 
     def upload_plan(
         self, waypoints: list[tuple[float, ...]], speed: float, timeout: float = 6.0

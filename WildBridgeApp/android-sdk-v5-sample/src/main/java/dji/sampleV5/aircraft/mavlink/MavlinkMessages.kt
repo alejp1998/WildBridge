@@ -561,6 +561,33 @@ internal object MavlinkMessages {
             .build()
 
     /**
+     * param_id(char[16]), param_value(char[128]), param_type(u8), param_result(u8)
+     *
+     * The answer to a PARAM_EXT_SET. The value echoed back is what the setting now holds, not
+     * what was asked for, so a caller learns from the reply whether the write actually took.
+     */
+    fun paramExtAck(name: String, value: String, result: Int): ByteArray =
+        PayloadWriter()
+            .chars(name, PARAM_ID_LENGTH)
+            .chars(value, PARAM_EXT_VALUE_LENGTH)
+            .u8(Mav.PARAM_EXT_TYPE_CUSTOM)
+            .u8(result)
+            .build()
+
+    /**
+     * param_count(u16), param_index(u16), param_id(char[16]), param_value(char[128]),
+     * param_type(u8)
+     */
+    fun paramExtValue(name: String, value: String, count: Int, index: Int): ByteArray =
+        PayloadWriter()
+            .u16(count)
+            .u16(index)
+            .chars(name, PARAM_ID_LENGTH)
+            .chars(value, PARAM_EXT_VALUE_LENGTH)
+            .u8(Mav.PARAM_EXT_TYPE_CUSTOM)
+            .build()
+
+    /**
      * count(u16), target_system(u8), target_component(u8), [ext] mission_type(u8)
      *
      * Opens a plan download, and also answers MISSION_REQUEST_LIST when the store is empty — a
@@ -812,6 +839,9 @@ internal object MavlinkMessages {
     private const val STATUSTEXT_LENGTH = 50
     private const val NAME_FIELD_LENGTH = 32
     private const val PARAM_ID_LENGTH = 16
+
+    /** PARAM_EXT_SET / _VALUE / _ACK carry the value as a fixed 128-byte field. */
+    private const val PARAM_EXT_VALUE_LENGTH = 128
 
     /** GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME: delta_yaw is relative to the aircraft. */
     private const val GIMBAL_FLAGS_YAW_IN_VEHICLE_FRAME = 16

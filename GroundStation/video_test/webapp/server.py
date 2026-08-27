@@ -128,6 +128,27 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# The MAVLink panel needs the GroundStation client and pymavlink. An image built before those
+# were added must still serve the rest of the dashboard rather than failing to start, so the
+# import is optional and the panel reports its own absence.
+try:
+    from mavlink_debug import ComparisonRegistry
+
+    #: Samples both wires for the MAVLink debug panel. The listen port is separate from the
+    #: aircraft's because QGroundControl or the ROS node may already hold 14550 on this machine.
+    mavlink_comparisons: Any = ComparisonRegistry(
+        mavlink_port=int(os.environ.get("WB_WEBAPP_MAVLINK_PORT", "14552")),
+        peer_port=int(os.environ.get("WB_MAVLINK_PEER_PORT", "14550")),
+    )
+except ImportError as import_error:  # pragma: no cover - depends on how the image was built
+    mavlink_comparisons = None
+    MAVLINK_UNAVAILABLE = (
+        f"MAVLink comparison needs pymavlink and the GroundStation client ({import_error})."
+    )
+else:
+    MAVLINK_UNAVAILABLE = ""
+
+
 def make_drone(name, ip=None):
     ip = ip or FALLBACK_IPS.get(name)
     return {
@@ -778,35 +799,78 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/api/events":
-            self.send_response(200)
-            self.send_header("content-type", "text/event-stream")
-            self.send_header("cache-control", "no-cache")
-            self.send_header("connection", "keep-alive")
-            self.end_headers()
-            sse_clients.append(self)
-            try:
-                self.wfile.write(format_sse_message("state", public_state()))
-                self.wfile.flush()
-                while self in sse_clients:
-                    time.sleep(1)
-            finally:
-                if self in sse_clients:
-                    sse_clients.remove(self)
-            return
-        if path == "/api/drones":
-            self.send_json(200, public_state())
-            return
-        if path == "/api/logs":
-            self.send_json(200, {"eventLog": str(EVENT_LOG)})
-            return
-        if path == "/api/ros-status":
-            self.send_json(200, ros_status_snapshot())
-            return
-        if path.startswith("/api/drones/") and path.endswith("/settings"):
-            self.handle_settings_get(path)
+        if self._serve_api_get(path):
             return
         super().do_GET()
+
+    def _serve_api_get(self, path):
+        """The JSON routes. True when one of them answered.
+
+        A table rather than a branch chain, so adding a route is an entry rather than another
+        limb. The event stream is not in it because it holds its connection open for the life of
+        the page instead of returning a body.
+        """
+        if path == "/api/events":
+            self._stream_events()
+            return True
+
+        exact = {
+            "/api/drones": lambda: self.send_json(200, public_state()),
+            "/api/logs": lambda: self.send_json(200, {"eventLog": str(EVENT_LOG)}),
+            "/api/ros-status": lambda: self.send_json(200, ros_status_snapshot()),
+        }
+        handler = exact.get(path)
+        if handler is not None:
+            handler()
+            return True
+
+        suffixed = {
+            "/mavlink": self.handle_mavlink_get,
+            "/settings": self.handle_settings_get,
+        }
+        if path.startswith("/api/drones/"):
+            for suffix, drone_handler in suffixed.items():
+                if path.endswith(suffix):
+                    drone_handler(path)
+                    return True
+        return False
+
+    def _stream_events(self):
+        """Server-sent events, held open until the page goes away."""
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("connection", "keep-alive")
+        self.end_headers()
+        sse_clients.append(self)
+        try:
+            self.wfile.write(format_sse_message("state", public_state()))
+            self.wfile.flush()
+            while self in sse_clients:
+                time.sleep(1)
+        finally:
+            if self in sse_clients:
+                sse_clients.remove(self)
+
+    def handle_mavlink_get(self, path):
+        """Both wires read against one drone, field by field.
+
+        Deliberately not cached: the point of this view is what the two transports say *right
+        now*, and a stale answer would hide exactly the disagreements it exists to show.
+        """
+        if mavlink_comparisons is None:
+            self.send_json(501, {"error": MAVLINK_UNAVAILABLE})
+            return
+        name = unquote(path.split("/")[3])
+        drone = drones.get(name)
+        if drone is None or not drone.get("ip"):
+            self.send_json(404, {"error": f"No address known for {name}"})
+            return
+        try:
+            self.send_json(200, mavlink_comparisons.snapshot(name, drone["ip"]))
+        except OSError as error:
+            # Almost always the MAVLink port already being held by another ground station.
+            self.send_json(503, {"error": str(error)})
 
     def handle_discover_post(self):
         discover_now()

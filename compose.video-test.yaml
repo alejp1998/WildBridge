@@ -19,7 +19,10 @@ services:
   video-grid:
     image: wildbridge-video-connection-test:latest
     build:
-      context: ./GroundStation/video_test/webapp
+      # Rooted at GroundStation so the image can also carry the shared Python client the
+      # MAVLink comparison panel reads both wires through.
+      context: ./GroundStation
+      dockerfile: video_test/webapp/Dockerfile
     container_name: wildbridge_video_connection_test
     network_mode: host
     depends_on:

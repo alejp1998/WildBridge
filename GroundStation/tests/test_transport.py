@@ -18,6 +18,7 @@ from wildbridge_groundstation.transport import (
     DEFAULT_MAVLINK_PORT,
     GRIPPER_ACTION_RELEASE,
     MAV_RESULT_IN_PROGRESS,
+    PARAM_EXT_TYPE_CUSTOM,
     PX4_MODE_OFFBOARD,
     PX4_MODE_POSCTL,
     UNSUPPORTED_PREFIX,
@@ -36,6 +37,7 @@ from wildbridge_groundstation.transport import (
     Transport,
     _derive,
     _dji_heading,
+    _trim,
     apply_mavlink_message,
     decode_wildbridge_status,
     flight_mode_name,
@@ -267,10 +269,61 @@ def test_a_takeoff_carries_its_altitude_in_param7():
     assert decoded.param7 == pytest.approx(15.0)
 
 
+def test_every_setting_endpoint_has_a_mavlink_form():
+    """Numbers go through PARAM_SET, strings through PARAM_EXT_SET, and none are left behind."""
+    import wildbridge_groundstation.dji_client as client
+
+    covered = set(_COMMAND_MAP) | set(_SPECIAL_SENDERS)
+    missing = sorted(set(client.SETTING_ENDPOINTS.values()) - covered)
+    assert not missing, f"settings with no MAVLink form: {missing}"
+
+
+def test_a_string_setting_goes_out_as_param_ext_set():
+    """A server address has no honest float encoding, which is what the extended protocol is for."""
+    channel = MavlinkCommandChannel("127.0.0.1")
+    sent = []
+    channel._socket = _FakeSocket([])
+    channel._socket.sendto = lambda data, address: sent.append(data)
+    channel.set_text_parameter("WB_MEDIAMTX", "192.168.50.127:8889", timeout=0.05)
+
+    decoded = _decode(sent[0])
+    assert decoded.get_type() == "PARAM_EXT_SET"
+    assert _trim(decoded.param_id) == "WB_MEDIAMTX"
+    assert _trim(decoded.param_value) == "192.168.50.127:8889"
+    assert decoded.param_type == PARAM_EXT_TYPE_CUSTOM
+
+
+def test_a_refused_string_write_is_detected_from_the_echoed_value():
+    """PARAM_EXT_ACK echoes what the setting now holds, so a refusal needs no second read."""
+    from pymavlink.dialects.v20 import common as mavlink_common
+
+    class Sink:
+        buf = b""
+
+        def write(self, data):
+            self.buf += data
+
+    sink = Sink()
+    mavlink_common.MAVLink(sink, srcSystem=1, srcComponent=1).param_ext_ack_send(
+        b"WB_VIDEO_SRC",
+        b"drone",
+        PARAM_EXT_TYPE_CUSTOM,
+        1,  # PARAM_ACK_VALUE_UNSUPPORTED
+    )
+
+    channel = MavlinkCommandChannel("127.0.0.1")
+    channel._socket = _FakeSocket([sink.buf])
+    reply = channel.set_text_parameter("WB_VIDEO_SRC", "nonsense", timeout=1.0)
+
+    assert reply.startswith("REJECTED")
+    assert "drone" in reply, "the reply must say what the setting actually holds"
+
+
 def test_an_endpoint_with_no_mavlink_equivalent_is_refused_not_guessed():
     channel = MavlinkCommandChannel("127.0.0.1")
-    assert not channel.supports("/send/setDroneName")
-    assert channel.send("/send/setDroneName", "x").startswith(UNSUPPORTED_PREFIX)
+    # Pairing is a maintenance action with no MAVLink equivalent and no plans for one.
+    assert not channel.supports("/send/rcPairing/start")
+    assert channel.send("/send/rcPairing/start", "").startswith(UNSUPPORTED_PREFIX)
 
 
 def test_every_command_the_ros_controller_uses_has_a_mavlink_form():

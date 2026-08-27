@@ -51,6 +51,18 @@ internal interface MavlinkCommandSink {
      * the endpoint refuses names outside its allowlist before this is reached.
      */
     fun setParameter(name: String, value: Float): CommandResult
+
+    /**
+     * Write one string-valued setting, and report what it now holds.
+     *
+     * Separate from [setParameter] because these genuinely are not numbers — a drone name, a
+     * video source, a server address. The returned [CommandResult.detail] carries the current
+     * value so the acknowledgement can echo what actually took rather than what was requested.
+     */
+    fun setTextParameter(name: String, value: String): CommandResult
+
+    /** Every string-valued setting a ground station may read, as name to current value. */
+    fun textParameters(): List<Pair<String, String>>
 }
 
 /**

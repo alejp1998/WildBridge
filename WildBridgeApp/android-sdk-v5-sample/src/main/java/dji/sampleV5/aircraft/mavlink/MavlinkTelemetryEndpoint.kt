@@ -242,6 +242,10 @@ internal class MavlinkTelemetryEndpoint(
                 MavlinkInbound.parseListRequest(buffer, packet.length)?.let(::handleListRequest)
                 MavlinkInbound.parseManualControl(buffer, packet.length)?.let(::handleManualControl)
                 MavlinkInbound.parseParamSet(buffer, packet.length)?.let(::handleParamSet)
+                MavlinkInbound.parseParamExtSet(buffer, packet.length)?.let(::handleParamExtSet)
+                if (MavlinkInbound.isParamExtRequestList(buffer, packet.length)) {
+                    sendTextParameterList()
+                }
                 handleMissionFrame(buffer, packet.length)
             }
         }
@@ -910,6 +914,48 @@ internal class MavlinkTelemetryEndpoint(
                 parameters[index].first, parameters[index].second, parameters.size, index
             )
         )
+    }
+
+    /**
+     * A string-valued parameter write.
+     *
+     * Acknowledged with PARAM_EXT_ACK carrying the value the setting now holds. Echoing the
+     * current value rather than the requested one is the whole point of the ack: a caller learns
+     * from it whether the write took, without a second round trip to read it back.
+     */
+    private fun handleParamExtSet(request: MavlinkParamExtSet) {
+        val sink = commandSink
+        if (sink == null) {
+            Log.d(TAG, "Refusing text parameter write ${request.name}: commands disabled")
+            return
+        }
+        val result = runCatching { sink.setTextParameter(request.name, request.value) }
+            .getOrElse { error ->
+                Log.w(TAG, "Text parameter ${request.name} failed: ${error.message}", error)
+                CommandResult(MavlinkCommandOutcome.FAILED)
+            }
+        Log.i(TAG, "Text parameter ${request.name}=${request.value} -> ${result.outcome}")
+        val ackResult = when (result.outcome) {
+            MavlinkCommandOutcome.ACCEPTED -> Mav.PARAM_ACK_ACCEPTED
+            MavlinkCommandOutcome.DENIED -> Mav.PARAM_ACK_VALUE_UNSUPPORTED
+            else -> Mav.PARAM_ACK_FAILED
+        }
+        sendOnce(
+            MavlinkMsgId.PARAM_EXT_ACK,
+            MavlinkMessages.paramExtAck(request.name, result.detail.orEmpty(), ackResult)
+        )
+    }
+
+    private fun sendTextParameterList() {
+        val sink = commandSink ?: return
+        val parameters = runCatching { sink.textParameters() }.getOrDefault(emptyList())
+        parameters.forEachIndexed { index, (name, value) ->
+            sendOnce(
+                MavlinkMsgId.PARAM_EXT_VALUE,
+                MavlinkMessages.paramExtValue(name, value, parameters.size, index)
+            )
+        }
+        Log.i(TAG, "Published ${parameters.size} text parameters")
     }
 
     private fun sendParameterList() {

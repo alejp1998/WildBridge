@@ -6,7 +6,7 @@
   <title>WildBridge Video and Connection Testing Tool</title>
   <link rel="icon" type="image/png" href="/assets/wildbridge-icon.png">
   <link rel="apple-touch-icon" href="/assets/wildbridge-icon.png">
-  <link rel="stylesheet" href="/styles.css?v=11">
+  <link rel="stylesheet" href="/styles.css?v=12">
   <script>
     try {
       var wbTheme = localStorage.getItem('wb-theme') || 'system';
@@ -80,6 +80,10 @@
       <button class="tabButton" type="button" data-tab="publish">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
         <span>Publish</span>
+      </button>
+      <button class="tabButton" type="button" data-tab="mavlink">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h4l2-7 4 14 2-7h4"/></svg>
+        <span>MAVLink</span>
       </button>
       <button class="tabButton" type="button" data-tab="ros">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v4M12 11l-5.5 6M12 11l5.5 6"/></svg>
@@ -163,6 +167,24 @@
           </div>
         </div>
         <div id="settingsGrid" class="settingsGrid"></div>
+      </section>
+    </section>
+    <section id="mavlinkPanel" class="tabPanel" data-panel="mavlink">
+      <section class="mavlinkShell">
+        <div class="mavlinkIntro panelBand">
+          <div>
+            <h2>MAVLink vs HTTP</h2>
+            <p>The same drone read over both wires at the same moment. Every MAVLink defect in this project so far has been a frame that was structurally valid and semantically wrong &mdash; a camera heartbeat overwriting the flight mode, two gimbal fields transposed, a heading in the wrong convention &mdash; and none of them were visible in the code. They were visible here.</p>
+          </div>
+          <div class="mavlinkControls">
+            <label for="mavlinkTarget">Drone</label>
+            <select id="mavlinkTarget"></select>
+            <label class="mavlinkToggle"><input type="checkbox" id="mavlinkDiffOnly"> Disagreements only</label>
+            <button class="ghostButton" type="button" id="mavlinkRefresh">Refresh</button>
+          </div>
+        </div>
+        <div id="mavlinkSummary" class="mavlinkSummary"></div>
+        <div id="mavlinkCompare" class="mavlinkCompare"><p class="emptyState">Pick a drone to compare the two transports.</p></div>
       </section>
     </section>
     <section id="rosPanel" class="tabPanel" data-panel="ros">
@@ -291,6 +313,7 @@
           <div><dt>Telemetry Charts</dt><dd>Telemetry-derived time series: battery, satellites, altitude, distance to home, speed, Wi-Fi RSSI.</dd></div>
           <div><dt>Settings</dt><dd>Read and change each drone's DJI and app settings (RTH altitude, max height/distance, RC pairing, video source) over HTTP.</dd></div>
           <div><dt>Publish</dt><dd>The full catalog of phone HTTP endpoints (flight control, virtual stick, camera/gimbal, waypoints, sensing) for manual testing.</dd></div>
+          <div><dt>MAVLink</dt><dd>The same drone read over MAVLink and over HTTP at once, field by field, so a value that disagrees between the two wires is visible rather than inferred.</dd></div>
           <div><dt>ROS</dt><dd>Liveness and rates for every topic the <code>ros-monitor</code> container sees from <code>DjiNode</code>, plus phone HTTP reachability.</dd></div>
         </dl>
       </section>

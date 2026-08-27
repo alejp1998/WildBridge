@@ -12,6 +12,19 @@ internal object MavlinkMsgId {
     /** Inbound parameter write. */
     const val PARAM_SET = 23
 
+    /**
+     * The extended parameter protocol, which carries a value as bytes rather than as a float.
+     *
+     * WildBridge needs it for the settings that are genuinely strings — the drone's name, the
+     * video source, the MediaMTX address. Squeezing those through PARAM_SET would mean inventing
+     * a private numbering ("video source 0 means drone"), which reads fine today and is
+     * unmaintainable by anyone who was not in the room.
+     */
+    const val PARAM_EXT_REQUEST_LIST = 321
+    const val PARAM_EXT_VALUE = 322
+    const val PARAM_EXT_SET = 323
+    const val PARAM_EXT_ACK = 324
+
     /** Gimbal attitude, from the gimbal v2 microservice we already advertise. */
     const val GIMBAL_DEVICE_ATTITUDE_STATUS = 285
 
@@ -286,6 +299,14 @@ internal object Mav {
 
     /** MAV_PARAM_TYPE_REAL32. Every WildBridge parameter is a float for now. */
     const val PARAM_TYPE_REAL32 = 9
+
+    /** MAV_PARAM_EXT_TYPE_CUSTOM: the value is an opaque byte string. */
+    const val PARAM_EXT_TYPE_CUSTOM = 11
+
+    /** PARAM_ACK values. */
+    const val PARAM_ACK_ACCEPTED = 0
+    const val PARAM_ACK_VALUE_UNSUPPORTED = 1
+    const val PARAM_ACK_FAILED = 2
 }
 
 /**

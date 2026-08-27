@@ -237,6 +237,21 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         private const val PARAM_WEBRTC_FPS = "WB_RTC_FPS"
         private const val PARAM_DETECTIONS = "WB_DETECT_EN"
         private const val PARAM_EDGE_CONFIDENCE = "WB_EDGE_CONF"
+
+        /**
+         * The string-valued settings, carried by the extended parameter protocol.
+         *
+         * These are the ones with no honest float encoding — a name, a source, a server address.
+         * Squeezing them through PARAM_SET would have meant inventing a private numbering that
+         * nobody outside this file could read.
+         */
+        private const val PARAM_DRONE_NAME = "WB_DRONE_NAME"
+        private const val PARAM_VIDEO_SOURCE = "WB_VIDEO_SRC"
+        private const val PARAM_MEDIAMTX = "WB_MEDIAMTX"
+        private const val PARAM_DETECTION_SOURCE = "WB_DETECT_SRC"
+        private const val PARAM_RC_CONTROL_MODE = "WB_RC_MODE"
+        private const val PARAM_RTC_RESOLUTION = "WB_RTC_RES"
+        private const val PARAM_STREAMING_MODE = "WB_STREAM_MODE"
         private const val TAG_THERMAL = "WildBridgeThermal"
         private const val MEDIAMTX_WHIP_PORT = 8889  // mediamtx WebRTC port for WHIP publish
         private const val PREF_DRONE_NAME = "drone_name"
@@ -4331,6 +4346,45 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
 
         override fun setParameter(name: String, value: Float): CommandResult =
             applyMavlinkParameter(name, value)
+
+        override fun setTextParameter(name: String, value: String): CommandResult {
+            val applied = when (name) {
+                PARAM_DRONE_NAME -> setDroneName(value)
+                PARAM_VIDEO_SOURCE -> setVideoSource(value)
+                PARAM_MEDIAMTX -> setMediamtxServer(value)
+                PARAM_DETECTION_SOURCE -> setDetectionSource(value)
+                PARAM_RC_CONTROL_MODE -> DroneController.setRcControlMode(value)
+                PARAM_RTC_RESOLUTION -> setWebRtcResolution(value)
+                PARAM_STREAMING_MODE -> {
+                    val mode = StreamingMode.entries.firstOrNull { it.prefValue == value }
+                    if (mode == null) false else { setStreamingMode(mode); true }
+                }
+
+                else -> {
+                    Log.d(TAG, "Refusing write to unknown text parameter $name")
+                    return CommandResult(MavlinkCommandOutcome.DENIED, "$name is not writable")
+                }
+            }
+            // The detail carries the value the setting now holds, so the acknowledgement echoes
+            // what took rather than what was asked for — which is how a caller detects a value
+            // the aircraft rejected as out of range or unknown.
+            val current = textParameters().firstOrNull { it.first == name }?.second.orEmpty()
+            return if (applied) {
+                CommandResult(MavlinkCommandOutcome.ACCEPTED, current)
+            } else {
+                CommandResult(MavlinkCommandOutcome.DENIED, current)
+            }
+        }
+
+        override fun textParameters(): List<Pair<String, String>> = listOf(
+            PARAM_DRONE_NAME to droneName,
+            PARAM_VIDEO_SOURCE to getVideoSourceMode().prefValue,
+            PARAM_MEDIAMTX to getMediamtxServer(),
+            PARAM_DETECTION_SOURCE to getDetectionSource().prefValue,
+            PARAM_RC_CONTROL_MODE to DroneController.getRcControlMode(),
+            PARAM_RTC_RESOLUTION to getWebRTCResolutionPreset().prefValue,
+            PARAM_STREAMING_MODE to getStreamingMode().prefValue
+        )
 
         override fun setCameraZoom(zoomRatio: Float): CommandResult {
             if (zoomRatio <= 0f) return CommandResult(MavlinkCommandOutcome.FAILED)

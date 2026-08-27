@@ -1791,6 +1791,149 @@ document.querySelector('#guideBtn').addEventListener('click', () => { if (!guide
 document.querySelector('#guideCloseBtn').addEventListener('click', () => guideModal.close());
 guideModal.addEventListener('click', (event) => { if (event.target === guideModal) guideModal.close(); });
 
+// ---- MAVLink vs HTTP comparison -------------------------------------------------------------
+// The instrument that found every MAVLink defect in this project. Both wires are read against one
+// drone and shown field by field, because the failures here are frames that decode cleanly and
+// mean the wrong thing -- which no amount of reading either side alone will reveal.
+
+const mavlinkTarget = document.querySelector('#mavlinkTarget');
+const mavlinkDiffOnly = document.querySelector('#mavlinkDiffOnly');
+const mavlinkRefresh = document.querySelector('#mavlinkRefresh');
+const mavlinkSummary = document.querySelector('#mavlinkSummary');
+const mavlinkCompare = document.querySelector('#mavlinkCompare');
+let mavlinkTimer = null;
+
+const MAVLINK_STATUS_LABELS = {
+  agree: 'agree',
+  differ: 'differ',
+  httpOnly: 'HTTP only',
+  mavlinkOnly: 'MAVLink only',
+};
+
+function mavlinkDroneNames() {
+  // state.drones is the array the SSE state carries, and only drones with a known address can be
+  // compared: the MAVLink side has to bind a socket filtered to that aircraft.
+  return (state.drones || [])
+    .filter((drone) => drone.ip)
+    .map((drone) => drone.name)
+    .sort();
+}
+
+function refreshMavlinkTargets() {
+  const names = mavlinkDroneNames();
+  const chosen = mavlinkTarget.value;
+  mavlinkTarget.replaceChildren(
+    ...names.map((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      return option;
+    }),
+  );
+  if (names.includes(chosen)) mavlinkTarget.value = chosen;
+}
+
+async function loadMavlinkComparison() {
+  const name = mavlinkTarget.value;
+  if (!name) {
+    mavlinkCompare.replaceChildren(mavlinkEmptyState('Pick a drone to compare the two transports.'));
+    mavlinkSummary.replaceChildren();
+    return;
+  }
+  try {
+    const response = await fetch(`/api/drones/${encodeURIComponent(name)}/mavlink`);
+    const payload = await response.json();
+    if (!response.ok) {
+      mavlinkCompare.replaceChildren(mavlinkEmptyState(payload.error || 'Comparison unavailable.'));
+      mavlinkSummary.replaceChildren();
+      return;
+    }
+    renderMavlinkComparison(payload);
+  } catch (error) {
+    mavlinkCompare.replaceChildren(mavlinkEmptyState(`Comparison failed: ${error.message}`));
+  }
+}
+
+function mavlinkEmptyState(text) {
+  const note = document.createElement('p');
+  note.className = 'emptyState';
+  note.textContent = text;
+  return note;
+}
+
+function renderMavlinkComparison(payload) {
+  const rows = payload.rows || [];
+  const differing = rows.filter((row) => row.status === 'differ').length;
+  const agreeing = rows.filter((row) => row.status === 'agree').length;
+
+  mavlinkSummary.replaceChildren(
+    mavlinkStat(`${payload.mavlinkKeys}`, 'fields on MAVLink'),
+    mavlinkStat(`${payload.httpKeys}`, 'fields on HTTP'),
+    mavlinkStat(`${agreeing}`, 'agree'),
+    mavlinkStat(`${differing}`, 'disagree', differing > 0 ? 'warn' : 'good'),
+  );
+
+  const shown = mavlinkDiffOnly.checked ? rows.filter((row) => row.status !== 'agree') : rows;
+  if (!shown.length) {
+    mavlinkCompare.replaceChildren(mavlinkEmptyState('Nothing to show — the two wires agree on every field.'));
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'mavlinkTable';
+  const head = document.createElement('thead');
+  head.innerHTML = '<tr><th>Field</th><th>MAVLink</th><th>HTTP</th><th></th></tr>';
+  const body = document.createElement('tbody');
+  shown.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.className = `mavlinkRow ${row.status}`;
+    const key = document.createElement('td');
+    key.className = 'mavlinkKey';
+    key.textContent = row.key;
+    const mav = document.createElement('td');
+    mav.textContent = row.mavlink;
+    const http = document.createElement('td');
+    http.textContent = row.http;
+    const status = document.createElement('td');
+    const chip = document.createElement('span');
+    chip.className = `mavlinkChip ${row.status}`;
+    chip.textContent = MAVLINK_STATUS_LABELS[row.status] || row.status;
+    status.append(chip);
+    tr.append(key, mav, http, status);
+    body.append(tr);
+  });
+  table.append(head, body);
+  mavlinkCompare.replaceChildren(table);
+}
+
+function mavlinkStat(value, label, tone) {
+  const cell = document.createElement('div');
+  cell.className = `mavlinkStat${tone ? ` ${tone}` : ''}`;
+  const big = document.createElement('strong');
+  big.textContent = value;
+  const small = document.createElement('span');
+  small.textContent = label;
+  cell.append(big, small);
+  return cell;
+}
+
+function startMavlinkPolling() {
+  stopMavlinkPolling();
+  loadMavlinkComparison();
+  // Two seconds: fast enough to watch a value move while tilting a gimbal, slow enough that each
+  // sample is a fresh read of both wires rather than a queue of overlapping requests.
+  mavlinkTimer = setInterval(loadMavlinkComparison, 2000);
+}
+
+function stopMavlinkPolling() {
+  if (mavlinkTimer !== null) clearInterval(mavlinkTimer);
+  mavlinkTimer = null;
+}
+
+mavlinkTarget.addEventListener('change', loadMavlinkComparison);
+mavlinkDiffOnly.addEventListener('change', loadMavlinkComparison);
+mavlinkRefresh.addEventListener('click', loadMavlinkComparison);
+
 // ---- Tab activation (persisted in the URL hash so a refresh/back-button keeps the view) ----
 const validTabs = new Set(Array.from(document.querySelectorAll('.tabButton'), (button) => button.dataset.tab));
 
@@ -1802,6 +1945,14 @@ function activateTab(tab, { pushHistory = true } = {}) {
   if (tab === 'videoCharts' || tab === 'telemetryCharts') {
     updateCharts(tab);
     setTimeout(() => updateCharts(tab), 50);
+  }
+  // Only sample while the panel is visible: each request opens a live read of both wires, and
+  // leaving that running behind a hidden tab holds a socket on the aircraft's telemetry port.
+  if (tab === 'mavlink') {
+    refreshMavlinkTargets();
+    startMavlinkPolling();
+  } else {
+    stopMavlinkPolling();
   }
 }
 

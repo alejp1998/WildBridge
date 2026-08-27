@@ -27,6 +27,14 @@ internal data class MavlinkManualControl(
     val yaw: Float
 )
 
+/** A ground station writing one string-valued parameter. */
+internal data class MavlinkParamExtSet(
+    val name: String,
+    val value: String,
+    val senderSystem: Int,
+    val senderComponent: Int
+)
+
 /** A ground station writing one parameter. */
 internal data class MavlinkParamSet(
     val name: String,
@@ -127,6 +135,11 @@ internal object MavlinkInbound {
     /** param_id starts after param_value(4) + target_system(1) + target_component(1). */
     private const val PARAM_SET_ID_OFFSET = 6
     private const val PARAM_ID_LENGTH = 16
+
+    /** param_id follows target_system(1) + target_component(1) in PARAM_EXT_SET. */
+    private const val PARAM_EXT_ID_OFFSET = 2
+    private const val PARAM_EXT_VALUE_OFFSET = PARAM_EXT_ID_OFFSET + PARAM_ID_LENGTH
+    private const val PARAM_EXT_VALUE_LENGTH = 128
 
     /**
      * Parse a PARAM_REQUEST_LIST or MISSION_REQUEST_LIST, or null for anything else.
@@ -265,6 +278,41 @@ internal object MavlinkInbound {
             senderComponent = data[6].toInt() and 0xFF
         )
     }
+
+    /**
+     * A string parameter write, if this frame is one.
+     *
+     * PARAM_EXT_SET carries the value as 128 bytes rather than as a float, which is the whole
+     * reason it exists here: the settings it serves are names and addresses, not numbers. Both
+     * fields are NUL-terminated only when shorter than their field, so both are trimmed at the
+     * first NUL rather than assumed to be terminated.
+     */
+    fun parseParamExtSet(data: ByteArray, length: Int): MavlinkParamExtSet? {
+        val frame = validate(data, length) ?: return null
+        if (frame.messageId != MavlinkMsgId.PARAM_EXT_SET) return null
+        val payload = paddedPayload(data, frame.payloadLength)
+        // Wire order: target_system(u8) target_component(u8) param_id(char[16])
+        //             param_value(char[128]) param_type(u8)
+        val name = readChars(payload, PARAM_EXT_ID_OFFSET, PARAM_ID_LENGTH)
+        if (name.isEmpty()) return null
+        return MavlinkParamExtSet(
+            name = name,
+            value = readChars(payload, PARAM_EXT_VALUE_OFFSET, PARAM_EXT_VALUE_LENGTH),
+            senderSystem = data[5].toInt() and 0xFF,
+            senderComponent = data[6].toInt() and 0xFF
+        )
+    }
+
+    /** True when the frame asks for the whole extended parameter list. */
+    fun isParamExtRequestList(data: ByteArray, length: Int): Boolean {
+        val frame = validate(data, length) ?: return false
+        return frame.messageId == MavlinkMsgId.PARAM_EXT_REQUEST_LIST
+    }
+
+    private fun readChars(payload: ByteArray, offset: Int, length: Int): String =
+        String(payload.copyOfRange(offset, offset + length), Charsets.US_ASCII)
+            .substringBefore('\u0000')
+            .trim()
 
     /** True when the frame is a MISSION_CLEAR_ALL for the mission plan. */
     fun isMissionClearAll(data: ByteArray, length: Int): Boolean {
