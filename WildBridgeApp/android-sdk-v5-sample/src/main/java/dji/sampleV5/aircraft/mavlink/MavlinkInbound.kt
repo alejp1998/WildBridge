@@ -124,6 +124,9 @@ internal object MavlinkInbound {
     private const val INCOMPAT_SIGNED = 0x01
     private const val SIGNATURE_BYTES = 13
     private const val MAX_PAYLOAD = 255
+
+    /** FILE_TRANSFER_PROTOCOL leads with target_network/system/component before the FTP payload. */
+    private const val FTP_TARGET_BYTES = 3
     private const val MISSION_TYPE_OFFSET = 2
     private const val MISSION_COUNT_TYPE_OFFSET = 4
     private const val MISSION_ITEM_TYPE_OFFSET = 36
@@ -375,6 +378,31 @@ internal object MavlinkInbound {
             senderComponent = data[6].toInt() and 0xFF
         )
     }
+
+    /**
+     * Parse a FILE_TRANSFER_PROTOCOL frame. Returns the requester's system/component ids (from the
+     * frame header, so the reply can target them) plus the 251-byte FTP payload, or null when the
+     * frame is not FTP or is malformed.
+     *
+     * The message payload is the three target bytes followed by the FTP payload; trailing zero
+     * truncation is normal on MAVLink 2, so the missing bytes are zero-filled.
+     */
+    fun parseFtp(data: ByteArray, length: Int): FtpFrame? {
+        val frame = validate(data, length) ?: return null
+        if (frame.messageId != MavlinkMsgId.FILE_TRANSFER_PROTOCOL) return null
+        val payload = ByteArray(MavlinkFtp.PAYLOAD_BYTES)
+        val copied = (frame.payloadLength - FTP_TARGET_BYTES)
+            .coerceIn(0, MavlinkFtp.PAYLOAD_BYTES)
+        System.arraycopy(data, HEADER_BYTES + FTP_TARGET_BYTES, payload, 0, copied)
+        return FtpFrame(
+            requesterSystem = data[5].toInt() and 0xFF,
+            requesterComponent = data[6].toInt() and 0xFF,
+            payload = payload
+        )
+    }
+
+    /** A FILE_TRANSFER_PROTOCOL frame plus who sent it. */
+    data class FtpFrame(val requesterSystem: Int, val requesterComponent: Int, val payload: ByteArray)
 
     /**
      * Parse one datagram. Returns null when the frame is not a command, is malformed, or fails its

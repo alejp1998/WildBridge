@@ -50,7 +50,12 @@ internal class MavlinkTelemetryEndpoint(
      */
     private val motionSink: MavlinkMotionSink? = null,
     /** Flies stored plans. Null leaves missions uploadable but not startable. */
-    private val missionSink: MavlinkMissionSink? = null
+    private val missionSink: MavlinkMissionSink? = null,
+    /**
+     * Serves MAVLink FTP v1 (read-only media access). Null leaves FILE_TRANSFER_PROTOCOL
+     * unanswered, which is the pre-FTP behaviour.
+     */
+    private val ftpServer: MavlinkFtpServer? = null
 ) {
     private val framer = MavlinkFramer(config.systemId)
 
@@ -243,6 +248,16 @@ internal class MavlinkTelemetryEndpoint(
                 MavlinkInbound.parseManualControl(buffer, packet.length)?.let(::handleManualControl)
                 MavlinkInbound.parseParamSet(buffer, packet.length)?.let(::handleParamSet)
                 MavlinkInbound.parseParamExtSet(buffer, packet.length)?.let(::handleParamExtSet)
+                // MAVLink FTP: answer to whoever asked, from whatever thread finishes the work.
+                MavlinkInbound.parseFtp(buffer, packet.length)?.let { ftp ->
+                    ftpServer?.let { server ->
+                        MavlinkFtp.parse(ftp.payload)?.let { request ->
+                            server.handle(request) { reply ->
+                                sendFtpReply(reply, ftp.requesterSystem, ftp.requesterComponent, packet)
+                            }
+                        }
+                    }
+                }
                 if (MavlinkInbound.isParamExtRequestList(buffer, packet.length)) {
                     sendTextParameterList()
                 }
@@ -1152,6 +1167,35 @@ internal class MavlinkTelemetryEndpoint(
         )
         Log.i(TAG, "Advertised video stream ${stream.uri}")
         return Mav.RESULT_ACCEPTED
+    }
+
+    /**
+     * Answer an FTP request back to its sender, with the reply's target set to the requester's
+     * ids. Unlike [sendOnce], this goes to exactly one address — the client that asked — and is
+     * safe to call from the FTP worker thread.
+     */
+    private fun sendFtpReply(
+        ftpPayload: ByteArray,
+        targetSystem: Int,
+        targetComponent: Int,
+        from: DatagramPacket
+    ) {
+        val bound = socket ?: return
+        if (bound.isClosed) return
+        val message = ByteArray(MavlinkFtp.MESSAGE_PAYLOAD_BYTES)
+        message[0] = 0 // target_network
+        message[1] = targetSystem.toByte()
+        message[2] = targetComponent.toByte()
+        System.arraycopy(ftpPayload, 0, message, MavlinkFtp.TARGET_BYTES, ftpPayload.size)
+        val frame = framer.frame(MavlinkMsgId.FILE_TRANSFER_PROTOCOL, message)
+        val address = InetSocketAddress(from.address, from.port)
+        runCatching {
+            bound.send(DatagramPacket(frame, frame.size, address))
+        }.onFailure { error ->
+            if (error is IOException) {
+                Log.d(TAG, "FTP reply to $address failed: ${error.message}")
+            }
+        }
     }
 
     private fun sendOnce(messageId: Int, payload: ByteArray, fromCamera: Boolean = false) {

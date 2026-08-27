@@ -96,6 +96,7 @@ import dji.sampleV5.aircraft.mavlink.PendingKind
 import dji.sampleV5.aircraft.mavlink.CommandProgress
 import dji.sampleV5.aircraft.mavlink.MavlinkVideoStream
 import dji.sampleV5.aircraft.mavlink.MavlinkTelemetryEndpoint
+import dji.sampleV5.aircraft.mavlink.MavlinkFtpServer
 import dji.sampleV5.aircraft.server.TelemetryServer
 import dji.sampleV5.aircraft.webrtc.WebRTCMediaOptions
 import dji.sampleV5.aircraft.webrtc.WebRTCStreamer
@@ -389,6 +390,12 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
      * and overlapping captures would confuse which file belongs to which command.
      */
     private val captureExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /**
+     * MAVLink FTP worker. Two threads so a slow file download does not block a directory listing:
+     * both pull the same DJI media pipeline, but the SDK serialises the pulls themselves.
+     */
+    private val ftpExecutor = java.util.concurrent.Executors.newFixedThreadPool(2)
     private var webRTCStreamer: WebRTCStreamer? = null
     @Volatile private var lastWhipUrl: String? = null  // Remembered for FPS/Quality mode restarts
     @Volatile private var lastClientIp: String? = null
@@ -3785,6 +3792,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             mavlinkEndpoint?.stop()
             mavlinkEndpoint = null
             captureExecutor.shutdownNow()
+            ftpExecutor.shutdownNow()
             // Unregister the settings backup listener and stop its writer: the SharedPreferences
             // singleton otherwise keeps the listener (and the activity through it) alive, and the
             // executor would keep writing after destroy.
@@ -5069,6 +5077,16 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
             return
         }
         runCatching {
+            val ftpServer = MavlinkFtpServer(
+                object : MavlinkFtpServer.FtpFileSource {
+                    override fun listFiles(): List<Pair<String, Long>> =
+                        Payload.listMediaFiles(mediaVM)
+
+                    override fun readFileBytes(name: String): ByteArray? =
+                        Payload.downloadMediaBytes(mediaVM, name)
+                },
+                ftpExecutor
+            )
             val endpoint = MavlinkTelemetryEndpoint(
                 config,
                 ::buildMavlinkSnapshot,
@@ -5076,7 +5094,8 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 ::mavlinkParameters,
                 mavlinkCommandSink,
                 mavlinkMotionSink,
-                mavlinkMissionSink
+                mavlinkMissionSink,
+                ftpServer
             )
             endpoint.onPeerDiscovered = { peer ->
                 Log.i(TAG, "MAVLink ground station at $peer")

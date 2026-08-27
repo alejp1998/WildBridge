@@ -68,8 +68,13 @@ HTTP_ONLY_BY_DESIGN: dict[str, str] = {
     ),
     "/send/autoSensing/start": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
     "/send/autoSensing/stop": "AutoSensing enablement is a phone-side DJI SDK concern; no MAVLink command.",
-    "/send/listMedia": "Media listing walks the SD card; MAVLink FTP is the planned replacement.",
-    "/send/downloadMediaByName": "Media download streams a file off the SD card; MAVLink FTP is the planned replacement.",
+    # Media stays on HTTP even though MAVLink FTP can list and read the card: FTP moves 239
+    # bytes per request-reply round trip (tens of KB/s at best), so a multi-megabyte JPEG over
+    # FTP is minutes of stop-and-wait. HTTP over the same Wi-Fi saturates the link (MB/s), so
+    # it is the transfer path for media. MAVLink FTP exists for small transfers and for links
+    # where only MAVLink is reachable; it is a complement, not the replacement, for HTTP media.
+    "/send/listMedia": "Media listing walks the SD card; HTTP stays the fast path for media on Wi-Fi.",
+    "/send/downloadMediaByName": "Media download streams a file off the SD card; HTTP stays the fast path for media on Wi-Fi.",
 }
 
 

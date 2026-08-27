@@ -711,6 +711,32 @@ object Payload {
         return "{\"count\":${files.size},\"files\":[$items]}"
     }
 
+    // Name -> size for every file on the card, refreshed until quiescent. The MAVLink FTP server
+    // lists with this so a client can browse the card without the JSON shape of listAllMedia.
+    // Blocking, call from a worker thread.
+    fun listMediaFiles(mediaVM: MediaVM): List<Pair<String, Long>> {
+        setupNewMediaListener()
+
+        val deadline = System.currentTimeMillis() + CAPTURE_OVERALL_TIMEOUT_MS
+        var files = flattenMedia(mediaVM.mediaFileListData.value?.data)
+        while (System.currentTimeMillis() < deadline) {
+            val next = flattenMedia(mediaVM.pullAndAwait(MEDIA_PULL_TIMEOUT_MS))
+            if (next.size == files.size && next.isNotEmpty()) {
+                files = next
+                break
+            }
+            files = next
+        }
+        return files.values.map { it.fileName to it.fileSize }
+    }
+
+    // Download one named file into memory, or null when it cannot be resolved or downloaded.
+    // The MAVLink FTP server holds the result for a read session. Blocking, call from a worker.
+    fun downloadMediaBytes(mediaVM: MediaVM, fileName: String): ByteArray? {
+        val mediaFile = findMediaFile(mediaVM, fileName) ?: return null
+        return downloadToBytes(mediaFile)
+    }
+
     // Resolve a file by name from the live SD-card list and stream it back as image/jpeg. Works for
     // any file on the card. Blocking, call from a worker thread.
     fun sendMediaFileByName(mediaVM: MediaVM, fileName: String, outputStream: OutputStream) {

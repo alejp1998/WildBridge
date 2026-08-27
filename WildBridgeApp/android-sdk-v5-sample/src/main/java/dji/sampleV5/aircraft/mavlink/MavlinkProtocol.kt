@@ -84,6 +84,9 @@ internal object MavlinkMsgId {
     const val COMMAND_INT = 75
     const val COMMAND_LONG = 76
     const val COMMAND_ACK = 77
+
+    /** MAVLink FTP v1 file transfer, see MavlinkFtp. */
+    const val FILE_TRANSFER_PROTOCOL = 110
 }
 
 /**
@@ -297,6 +300,9 @@ internal object Mav {
     const val CAP_COMMAND_INT = 8L
     const val CAP_MAVLINK2 = 8192L
 
+    /** MAV_PROTOCOL_CAPABILITY_FTP: this component serves MAVLink FTP v1 (see MavlinkFtp). */
+    const val CAP_FTP = 32L
+
     /** MAVLink wire-format version reported in HEARTBEAT. Always 3 for MAVLink 2. */
     const val MAVLINK_VERSION = 3
 
@@ -348,6 +354,11 @@ internal class PayloadWriter(capacity: Int = MAX_PAYLOAD) {
     }
 
     fun zeros(count: Int) = apply { repeat(count) { buffer.put(0) } }
+
+    /** Raw bytes, zero-padded to [length] when shorter than it. */
+    fun bytes(data: ByteArray, length: Int) = apply {
+        for (i in 0 until length) buffer.put(if (i < data.size) data[i] else 0)
+    }
 
     fun build(): ByteArray = ByteArray(buffer.position()).also {
         buffer.flip()

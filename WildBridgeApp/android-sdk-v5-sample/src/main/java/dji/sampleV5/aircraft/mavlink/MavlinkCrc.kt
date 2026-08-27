@@ -53,6 +53,8 @@ internal object MavlinkCrc {
         MavlinkMsgId.MANUAL_CONTROL to 243,
         MavlinkMsgId.PARAM_SET to 168,
         MavlinkMsgId.PARAM_EXT_REQUEST_LIST to 88,
+        // Received, not sent — an inbound FTP request is checksum-validated with this.
+        MavlinkMsgId.FILE_TRANSFER_PROTOCOL to 84,
         MavlinkMsgId.PARAM_EXT_VALUE to 243,
         MavlinkMsgId.PARAM_EXT_SET to 78,
         MavlinkMsgId.PARAM_EXT_ACK to 132,
