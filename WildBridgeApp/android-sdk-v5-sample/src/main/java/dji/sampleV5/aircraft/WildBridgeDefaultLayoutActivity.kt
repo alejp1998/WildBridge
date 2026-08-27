@@ -15,6 +15,7 @@ import android.util.Log
 import android.widget.Toast
 import android.widget.TextView
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -557,6 +558,13 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
     private val flightModeKey: DJIKey<FlightMode> = FlightControllerKey.KeyFlightMode.create()
     private val isFlyingKey: DJIKey<Boolean> = FlightControllerKey.KeyIsFlying.create()
 
+    // Aircraft idle (low-power / eco) detection: motors off + on ground + connected.
+    private val areMotorsOnKey: DJIKey<Boolean> = FlightControllerKey.KeyAreMotorsOn.create()
+    private val idleDetectDebounceMs = 30_000L
+    @Volatile private var motorsOn = true
+    @Volatile private var idleDetectArmed = false
+    private val showIdleOverlayRunnable = Runnable { onIdleDetectDebounceElapsed() }
+
 
 
     @Volatile override var lrfTargetLocation: LocationCoordinate3D? = null
@@ -646,6 +654,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         setupEdgeDetectionToggle()
         updateDetectionTelemetryState()
         setupAircraftConnectionListener()
+        setupAircraftIdleMonitor()
         setupVideoSourceState()
         setupMockVideoPreview()
         setupPhoneVideoPreview()
@@ -1505,6 +1514,7 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
         updatePhonePreviewVisibility()
         refreshMockTelemetryMode()
         invalidateOptionsMenu()
+        reevaluateAircraftIdle()
     }
 
     private fun shouldSwitchToDroneVideoSource(
@@ -2896,6 +2906,103 @@ class WildBridgeDefaultLayoutActivity : DefaultLayoutActivity(), WildBridgeComma
                 mainHandler.post { DroneController.activateManualOverride() }
             }
         }
+    }
+
+    // ==================== Aircraft idle (low-power / eco) detection ====================
+
+    /**
+     * Detects the aircraft sitting idle on the ground (motors off, connected, not airborne)
+     * and offers to exit the low-power / eco state by starting the motors at ground idle
+     * (the programmatic equivalent of the manual both-sticks-down-and-inwards gesture).
+     * The overlay is delayed by [idleDetectDebounceMs] so transient states never flash it.
+     */
+    private fun setupAircraftIdleMonitor() {
+        motorsOn = KeyManager.getInstance().getValue(areMotorsOnKey) ?: true
+        KeyManager.getInstance().listen(areMotorsOnKey, this) { _, newValue ->
+            mainHandler.post {
+                motorsOn = newValue ?: true
+                reevaluateAircraftIdle()
+            }
+        }
+        findViewById<Button>(R.id.button_exit_idle_mode)?.setOnClickListener { confirmExitIdleMode() }
+        reevaluateAircraftIdle()
+    }
+
+    private fun isAircraftIdle(): Boolean =
+        aircraftConnected && !motorsOn && !DroneController.isAirborne
+
+    private fun reevaluateAircraftIdle() {
+        val isIdle = isAircraftIdle()
+        if (isIdle && !idleDetectArmed) {
+            idleDetectArmed = true
+            mainHandler.postDelayed(showIdleOverlayRunnable, idleDetectDebounceMs)
+        } else if (!isIdle && idleDetectArmed) {
+            idleDetectArmed = false
+            mainHandler.removeCallbacks(showIdleOverlayRunnable)
+            showIdleOverlay(false)
+        }
+    }
+
+    private fun onIdleDetectDebounceElapsed() {
+        idleDetectArmed = false
+        if (isAircraftIdle()) {
+            showIdleOverlay(true)
+        }
+    }
+
+    private fun showIdleOverlay(visible: Boolean) {
+        findViewById<View>(R.id.aircraft_idle_overlay)?.let { overlay ->
+            overlay.visibility = if (visible) View.VISIBLE else View.GONE
+        }
+    }
+
+    private fun confirmExitIdleMode() {
+        AlertDialog.Builder(this)
+            .setTitle("Exit idle mode?")
+            .setMessage(
+                "The aircraft is idle on the ground. Exiting idle mode starts the motors at " +
+                    "ground idle (the same as moving both sticks down and inwards to start motors " +
+                    "manually).\n\n" +
+                    "BEFORE CONTINUING, verify the aircraft:\n" +
+                    "• is on a flat, safe surface\n" +
+                    "• has propellers clear of people, animals and objects\n" +
+                    "• is not being held by anyone\n\n" +
+                    "The motors will spin as soon as you confirm."
+            )
+            .setPositiveButton("START MOTORS") { _, _ -> performExitIdleMode() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun performExitIdleMode() {
+        KeyManager.getInstance()
+            .performAction(
+                KeyTools.createKey(FlightControllerKey.KeyTurnOnTheMotor),
+                object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
+                    override fun onSuccess(result: EmptyMsg?) {
+                        mainHandler.post {
+                            Toast.makeText(
+                                this@WildBridgeDefaultLayoutActivity,
+                                "Motors started — idle mode exited",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        Log.i(TAG, "Aircraft idle mode exited (motors started)")
+                    }
+
+                    override fun onFailure(error: IDJIError) {
+                        val message = "Failed to start motors: ${error.description()}"
+                        mainHandler.post {
+                            Toast.makeText(
+                                this@WildBridgeDefaultLayoutActivity,
+                                message,
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        Log.e(TAG, message)
+                    }
+                }
+            )
     }
 
     private fun setupTelemetryListeners() {
