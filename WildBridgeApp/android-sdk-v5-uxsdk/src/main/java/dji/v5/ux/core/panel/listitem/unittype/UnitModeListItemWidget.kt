@@ -226,7 +226,7 @@ open class UnitModeListItemWidget @JvmOverloads constructor(
         }
         val textView = view.findViewById<TextView>(R.id.textview_dialog_content)
         textView.setText(getSpannableString(), TextView.BufferType.SPANNABLE)
-        neverShowAgainCheckBox.setOnCheckedChangeListener { _: CompoundButton?, checked: Boolean ->
+        neverShowAgainCheckBox.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
             GlobalPreferencesManager.getInstance().isUnitModeDialogNeverShown = checked
             uiUpdateStateProcessor.onNext(UIState.NeverShowAgainCheckChanged(checked))
         }

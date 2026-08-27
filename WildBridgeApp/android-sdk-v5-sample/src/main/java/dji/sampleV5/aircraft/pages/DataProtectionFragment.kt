@@ -41,13 +41,13 @@ class DataProtectionFragment : DJIFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         binding?.productImprovementSwitch?.isChecked = diagnosticVm.isAgreeToProductImprovement()
-        binding?.productImprovementSwitch?.setOnCheckedChangeListener { _: CompoundButton?,
+        binding?.productImprovementSwitch?.setOnCheckedChangeListener { _: CompoundButton,
             isChecked: Boolean ->
             diagnosticVm.agreeToProductImprovement(isChecked)
         }
 
         binding?.msdkLogSwitch?.isChecked = diagnosticVm.isLogEnable()
-        binding?.msdkLogSwitch?.setOnCheckedChangeListener { _: CompoundButton?,
+        binding?.msdkLogSwitch?.setOnCheckedChangeListener { _: CompoundButton,
             isChecked: Boolean ->
             diagnosticVm.enableLog(isChecked)
         }

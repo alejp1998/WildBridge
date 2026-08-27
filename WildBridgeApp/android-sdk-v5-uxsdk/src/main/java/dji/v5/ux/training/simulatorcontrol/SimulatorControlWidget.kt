@@ -861,7 +861,7 @@ open class SimulatorControlWidget @JvmOverloads constructor(
         longitudeEditText.filters = arrayOf<InputFilter>(EditTextNumberInputFilter("-180", "180"))
         loadPresetTextView.setOnClickListener(this)
         savePresetTextView.setOnClickListener(this)
-        simulatorSwitch.setOnCheckedChangeListener { _: CompoundButton?, isChecked: Boolean -> handleSwitchChange(isChecked) }
+        simulatorSwitch.setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean -> handleSwitchChange(isChecked) }
         valueTextColor = getColor(R.color.uxsdk_blue)
         titleTextColor = getColor(R.color.uxsdk_white)
         headerTextColor = getColor(R.color.uxsdk_white)

@@ -121,7 +121,7 @@ class UpgradeFragment : DJIFragment() {
 
         binding?.rgComponentSelect?.setOnCheckedChangeListener(object :
             RadioGroup.OnCheckedChangeListener {
-            override fun onCheckedChanged(view: RadioGroup?, checkId: Int) {
+            override fun onCheckedChanged(view: RadioGroup, checkId: Int) {
                 when (checkId) {
                     R.id.rb_aircraft -> {
                         componentType = ComponentType.AIRCRAFT

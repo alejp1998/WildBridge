@@ -22,7 +22,7 @@ ext {
     deps.maplibreSdk = 'org.maplibre.gl:android-sdk:10.3.1'
     deps.lottie = 'com.airbnb.android:lottie:3.3.1' // Used in the RTK scan page for animations
     deps.cardview = 'androidx.cardview:cardview:1.0.0' // Used in PopoverView
-    deps.material = 'com.google.android.material:material:1.0.0' // Used by AvoidanceShortcutWidget
+    deps.material = 'com.google.android.material:material:1.14.0' // Used by AvoidanceShortcutWidget
     deps.lynx = 'com.github.pedrovgs:lynx:1.1.0' // Displays logcat in-app
 
     /* RTK settings page dependencies — start */
@@ -40,29 +40,29 @@ ext {
     deps.playservicesbase = 'com.google.android.gms:play-services-base:16.0.0'
 
     //androidx
-    deps.fragment = 'androidx.fragment:fragment:1.3.6'
-    deps.aacCommon = 'androidx.arch.core:core-common:2.1.0'
-    deps.aacRuntime = 'androidx.arch.core:core-runtime:2.1.0'
-    deps.annotation = 'androidx.annotation:annotation:1.1.0'
-    deps.appcompat = 'androidx.appcompat:appcompat:1.3.1'
-    deps.constraintLayout = 'androidx.constraintlayout:constraintlayout:2.1.4'
+    deps.fragment = 'androidx.fragment:fragment:1.9.0'
+    deps.aacCommon = 'androidx.arch.core:core-common:2.2.0'
+    deps.aacRuntime = 'androidx.arch.core:core-runtime:2.2.0'
+    deps.annotation = 'androidx.annotation:annotation:1.9.1'
+    deps.appcompat = 'androidx.appcompat:appcompat:1.8.0'
+    deps.constraintLayout = 'androidx.constraintlayout:constraintlayout:2.2.2'
     deps.multidex = 'androidx.multidex:multidex:2.0.1'
-    deps.recyclerview = 'androidx.recyclerview:recyclerview:1.1.0'
-    deps.lifecycleJava8 = 'androidx.lifecycle:lifecycle-common-java8:2.3.1'
-    deps.lifecycleRuntime = 'androidx.lifecycle:lifecycle-runtime:2.3.1'
-    deps.lifecycleViewModel = 'androidx.lifecycle:lifecycle-viewmodel:2.3.1'
-    deps.lifecycleLiveData = 'androidx.lifecycle:lifecycle-livedata:2.3.1'
-    deps.lifecycleProcess = 'androidx.lifecycle:lifecycle-process:2.3.1'
-    deps.room = 'androidx.room:room-runtime:2.4.1'
-    deps.room_rxjava = 'androidx.room:room-rxjava3:2.4.1'
-    deps.room_compiler = 'androidx.room:room-compiler:2.4.1'
+    deps.recyclerview = 'androidx.recyclerview:recyclerview:1.4.0'
+    deps.lifecycleJava8 = 'androidx.lifecycle:lifecycle-common-java8:2.11.0'
+    deps.lifecycleRuntime = 'androidx.lifecycle:lifecycle-runtime:2.11.0'
+    deps.lifecycleViewModel = 'androidx.lifecycle:lifecycle-viewmodel:2.11.0'
+    deps.lifecycleLiveData = 'androidx.lifecycle:lifecycle-livedata:2.11.0'
+    deps.lifecycleProcess = 'androidx.lifecycle:lifecycle-process:2.11.0'
+    deps.room = 'androidx.room:room-runtime:2.8.4'
+    deps.room_rxjava = 'androidx.room:room-rxjava3:2.8.4'
+    deps.room_compiler = 'androidx.room:room-compiler:2.8.4'
     deps.legacySupport = 'androidx.legacy:legacy-support-v4:1.0.0'
     deps.media = 'androidx.media:media:1.0.0'
     deps.dynamicanimation = 'androidx.dynamicanimation:dynamicanimation:1.0.0'
-    deps.ktxCore = "androidx.core:core-ktx:1.3.2"
-    deps.ktxFrag = "androidx.fragment:fragment-ktx:1.3.3"
-    deps.ktxNavigation = "androidx.navigation:navigation-fragment-ktx:2.5.3"
-    deps.ktxNavigationUi = "androidx.navigation:navigation-ui-ktx:2.5.3"
+    deps.ktxCore = "androidx.core:core-ktx:1.17.0"
+    deps.ktxFrag = "androidx.fragment:fragment-ktx:1.9.0"
+    deps.ktxNavigation = "androidx.navigation:navigation-fragment-ktx:2.10.0"
+    deps.ktxNavigationUi = "androidx.navigation:navigation-ui-ktx:2.10.0"
     deps.documentfile = 'androidx.documentfile:documentfile:1.0.1'
     // XML parsing
     deps.dom = 'org.dom4j:dom4j:2.2.0'

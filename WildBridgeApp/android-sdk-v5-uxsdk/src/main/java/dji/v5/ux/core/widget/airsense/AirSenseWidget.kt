@@ -313,7 +313,7 @@ open class AirSenseWidget @JvmOverloads constructor(
             View.inflate(context, R.layout.uxsdk_layout_dialog_checkbox, null)
         }
         val dontShowAgainCheckBox = termsView.findViewById<CheckBox>(R.id.checkbox_dont_show_again)
-        dontShowAgainCheckBox.setOnCheckedChangeListener { _: CompoundButton?, checked: Boolean ->
+        dontShowAgainCheckBox.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
             GlobalPreferencesManager.getInstance().isAirSenseTermsNeverShown = checked
             uiUpdateStateProcessor.onNext(NeverShowAgainCheckChanged(checked))
         }
