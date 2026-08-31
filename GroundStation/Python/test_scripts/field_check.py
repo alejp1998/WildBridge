@@ -38,7 +38,6 @@ from typing import Any
 from wildbridge_groundstation.transport import (
     MavlinkCommandChannel,
     MavlinkTelemetrySource,
-    flight_mode_name,
     mavlink_peer_port_from_env,
     mavlink_port_from_env,
 )
