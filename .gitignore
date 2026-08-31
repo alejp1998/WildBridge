@@ -42,6 +42,11 @@ venv/
 *.egg-info/
 GroundStation/Python/capture_*/
 
+# Node / Starlight docs site
+node_modules/
+dist/
+.astro/
+
 # Misc
 *.pt
 *.MP4

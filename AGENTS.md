@@ -62,6 +62,19 @@ docker compose -f GroundStation/video_test/compose.yaml down
 
 Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 
+### Documentation site
+
+```bash
+npm install
+npm run dev      # local preview at http://localhost:4321/WildBridge/
+npm run build    # production build into dist/ (validate doc edits with this)
+```
+
+- Starlight (Astro) site at the repo root. Content lives in `src/content/docs/` (`.md`/`.mdx`); the sidebar is configured in `astro.config.mjs`; `src/content.config.ts` wires the Starlight content collection.
+- Images are **not duplicated**: pages reference the shared copies under `docs/images/`.
+- `.github/workflows/docs.yml` builds and deploys to GitHub Pages on pushes to `main` (repo setting: Pages → Source = GitHub Actions). The deployed URL follows the fork that runs it, e.g. `https://<owner>.github.io/WildBridge/` — `astro.config.mjs` sets `site`/`base` for `wilddrone.github.io`; adjust when deploying from another fork.
+- New pages must be added to the `sidebar` in `astro.config.mjs`; keep page slugs kebab-case.
+
 ## Project Structure
 
 | Path | Purpose |
@@ -79,6 +92,9 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | `GroundStation/qgc/` | QGroundControl MAVLink Actions config — Takeoff/Land/RTL Fly View buttons (`wildbridge-actions.json`) |
 | `scripts/check_radon_complexity.py` | Complexity gate used by pre-commit/CI |
 | `GroundStation/video_test/compose.yaml` | MediaMTX + dashboard compose file |
+| `src/content/docs/` | Starlight docs site content (getting-started, http-api, telemetry, mavlink, ros, operations, field-test) |
+| `astro.config.mjs` | Starlight site config: sidebar, edit links, base path |
+| `.github/workflows/docs.yml` | Builds the Starlight site and deploys it to GitHub Pages on `main` |
 | `scripts/verify-integration.sh` | Merge-integrity check for the integration branch (see below) |
 
 ## Configuration Notes

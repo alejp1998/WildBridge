@@ -1,4 +1,8 @@
-# Field test: verifying the MAVLink implementation
+---
+title: Field Test
+description: The procedure for verifying the MAVLink implementation against a real aircraft.
+breadcrumb: Operations
+---
 
 Everything here has been checked on a bench against a real aircraft **except the flight**. The
 onboard mission sequencer, the arrival dwell, the take-off altitude climb and the re-evaluated
@@ -13,8 +17,6 @@ Three tools, in the order you'll want them:
 | QGroundControl | Proves the aircraft is a *standard* MAVLink vehicle, not just one this ground station understands |
 | The dashboard's **MAVLink** tab | Runs both wires side by side and shows where they disagree — the only place this project's bugs have ever been visible |
 
----
-
 ## Before leaving
 
 ```bash
@@ -26,8 +28,6 @@ export WB_MAVLINK_SIGNING_KEY=...   # optional; with it you are the Safety Compu
 Check the phone and the ground station are on the **same build of the dialect**. A mismatch is
 refused on the checksum, so fields go *missing* rather than wrong — which reads like a weak link
 and is not one.
-
----
 
 ## 1. Link only — safe with props on
 
@@ -101,8 +101,6 @@ Proves an unsigned command is refused once a signed one has latched authority to
 Computer, and that only a signed release hands it back. Verified against pymavlink's signer, but
 no real Safety Computer has ever sent one.
 
----
-
 ## 6. Flight
 
 ```bash
@@ -151,8 +149,6 @@ rotating** — a zero-length leg has no bearing, and the nose-forward controller
 Also worth watching: a goto sends `yaw = NaN`, "don't change yaw". The arrival heading was
 hardcoded to zero, so the aircraft used to finish by rotating to north. It should now hold the
 heading it already had.
-
----
 
 ## Keep this open while flying
 

@@ -1,0 +1,92 @@
+---
+title: WildBridge
+description: Ground station interface for lightweight multi-drone control and telemetry on DJI platforms.
+template: splash
+hero:
+  tagline: Turn any DJI remote controller into a networked drone server
+  image:
+    file: ../../../docs/images/WildBridge_icon.png
+  actions:
+    # NOTE: hero links are frontmatter strings, so the site base is hardcoded.
+    - text: Get started
+      link: /WildBridge/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: HTTP API
+      link: /WildBridge/http-api/
+      icon: open-book
+    - text: GitHub
+      link: https://github.com/WildDrone/WildBridge
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+WildBridge is an open-source Android application (Kotlin, DJI Mobile SDK V5) that runs on the DJI Remote Controller and exposes drone telemetry, control, and video streaming over a local Wi-Fi network. Any ground station that can speak HTTP, TCP, or MAVLink 2 can fly a DJI drone — no DJI SDK required.
+
+![WildBridge System Architecture](../../../docs/images/WildBridgeDiagram.png)
+
+*Multi-drone setup: each RC runs WildBridge and exposes HTTP commands (port 8080), TCP telemetry (port 8081), discovery, and WHIP/WHEP video publishing through MediaMTX.*
+
+## Explore the docs
+
+<CardGrid stagger>
+	<LinkCard
+		title="Getting Started"
+		description="Install the app on your RC, build from source, and connect your first ground station."
+		href={`${import.meta.env.BASE_URL}getting-started/`}
+	/>
+	<LinkCard
+		title="Ground Station"
+		description="The Python interface (DJIInterface) and the multi-drone video dashboard."
+		href={`${import.meta.env.BASE_URL}groundstation/`}
+	/>
+	<LinkCard
+		title="HTTP API"
+		description="Every control and status endpoint on port 8080, including the two-computer safety model."
+		href={`${import.meta.env.BASE_URL}http-api/`}
+	/>
+	<LinkCard
+		title="Telemetry"
+		description="The newline-delimited JSON stream on port 8081, field by field."
+		href={`${import.meta.env.BASE_URL}telemetry/`}
+	/>
+	<LinkCard
+		title="MAVLink 2"
+		description="Fly WildBridge drones from QGroundControl, MAVSDK, or pymavlink — no plugin."
+		href={`${import.meta.env.BASE_URL}mavlink/`}
+	/>
+	<LinkCard
+		title="ROS 2"
+		description="45+ topics per drone under dynamic namespaces, with auto-discovery launch files."
+		href={`${import.meta.env.BASE_URL}ros/`}
+	/>
+	<LinkCard
+		title="Logs & Troubleshooting"
+		description="Flight logging locations, common connection issues, and the project layout."
+		href={`${import.meta.env.BASE_URL}operations/`}
+	/>
+	<LinkCard
+		title="Field Test"
+		description="The procedure for verifying the MAVLink implementation against a real aircraft."
+		href={`${import.meta.env.BASE_URL}field-test/`}
+	/>
+</CardGrid>
+
+## Why WildBridge?
+
+<CardGrid stagger>
+	<Card title="Protocols, not SDKs" icon="terminal">
+		REST commands, streaming JSON telemetry, a full MAVLink 2 vehicle, and WHIP/WHEP video. Integrate from Python, ROS 2, QGroundControl, MAVSDK — anything.
+	</Card>
+	<Card title="Multi-drone by design" icon="rocket">
+		Several aircraft coexist on one LAN. Auto-discovery finds each drone, and ROS namespaces follow the drone's own name.
+	</Card>
+	<Card title="Two-computer safety" icon="setting">
+		A Safety Computer can seize command authority from the Pilot Computer at any time, and only it can hand control back.
+	</Card>
+	<Card title="Mission-proven" icon="open-book">
+		Zebra herd monitoring, wildfire detection (XPRIZE Wildfire semi-finalist), and wind-field profiling.
+	</Card>
+</CardGrid>
