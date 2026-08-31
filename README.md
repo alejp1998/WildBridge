@@ -179,7 +179,7 @@ To only check which APK will be used:
 ### Ground Station Dependencies
 
 ```bash
-pip install -r GroundStation/Python/requirements.txt   # Python interface
+pip install requests                                   # Python interface (requests only)
 pip install -r GroundStation/ROS/requirements.txt      # ROS 2 interface
 ```
 
