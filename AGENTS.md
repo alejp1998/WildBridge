@@ -79,7 +79,7 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | `GroundStation/qgc/` | QGroundControl MAVLink Actions config — Takeoff/Land/RTL Fly View buttons (`wildbridge-actions.json`) |
 | `scripts/check_radon_complexity.py` | Complexity gate used by pre-commit/CI |
 | `GroundStation/video_test/compose.yaml` | MediaMTX + dashboard compose file |
-| `verify-integration.sh` | Merge-integrity check for the integration branch (see below) |
+| `scripts/verify-integration.sh` | Merge-integrity check for the integration branch (see below) |
 
 ## Configuration Notes
 
@@ -127,6 +127,6 @@ Android/Kotlin quality is owned by the Gradle build (`./gradlew :app:compileDebu
 
 ## Current Branch: `integration/xprize-biomass`
 
-- `verify-integration.sh` verifies the rebuild-forward branch against a pinned-base 3-way merge of the XPRIZE base and the upstream fork. The correct merge base is `7d49349` (immediately before PR #12); letting git choose a base walks back and manufactures phantom conflicts that can silently drop XPRIZE changes.
+- `scripts/verify-integration.sh` verifies the rebuild-forward branch against a pinned-base 3-way merge of the XPRIZE base and the upstream fork. The correct merge base is `7d49349` (immediately before PR #12); letting git choose a base walks back and manufactures phantom conflicts that can silently drop XPRIZE changes.
 - MAVROS-related paths (`wildbridge_mavros`, `mavlink_proxy`) are intentionally removed — they are excluded from the verify script's diff and should not be "restored" during merges.
-- When touching the merge/verify workflow, run `./verify-integration.sh` and review the printed differing paths.
+- When touching the merge/verify workflow, run `./scripts/verify-integration.sh` and review the printed differing paths.

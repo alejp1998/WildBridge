@@ -24,6 +24,6 @@ GroundStation/ROS/wildbridge_bringup
 !GroundStation/ROS/wildbridge_bringup/launch/auto_discovery_native.launch.py
 GroundStation/ROS/requirements.txt
 GroundStation/video_test/compose.yaml
-verify-integration.sh
+scripts/verify-integration.sh
 README.md
 LICENSE
