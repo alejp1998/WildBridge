@@ -179,7 +179,7 @@ To only check which APK will be used:
 ### Ground Station Dependencies
 
 ```bash
-pip install requests                                   # Python interface (requests only)
+pip install -e GroundStation/Python                     # Python interface
 pip install -r GroundStation/ROS/requirements.txt      # ROS 2 interface
 ```
 
@@ -601,10 +601,10 @@ WildBridge reports `MAV_AUTOPILOT_PX4`. It does not run PX4 — the claim exists
 
 ```bash
 cd GroundStation/Python
-PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP>                    # listens only
-PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP> --phase ground     # parameter writes
-PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP> --phase payload --move
-PYTHONPATH=. python test_scripts/field_check.py <PHONE_IP> --phase flight --fly
+python test_scripts/field_check.py <PHONE_IP>                    # listens only
+python test_scripts/field_check.py <PHONE_IP> --phase ground     # parameter writes
+python test_scripts/field_check.py <PHONE_IP> --phase payload --move
+python test_scripts/field_check.py <PHONE_IP> --phase flight --fly
 ```
 
 Checks are grouped by what they can move, and the script will not cross a group boundary without being told to: it sends nothing at all by default, needs `--move` before the gimbal or camera responds, and only prints the flight list under `--fly`.

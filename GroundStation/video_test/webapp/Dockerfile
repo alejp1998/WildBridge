@@ -10,7 +10,13 @@ RUN pip3 install --no-cache-dir "pymavlink>=2.4.49" "requests>=2.31"
 
 # The shared GroundStation client, so the panel reads both wires through the same code the rest
 # of the ground station uses rather than a second implementation that could drift from it.
-COPY Python/wildbridge_groundstation ./wildbridge_groundstation
+# Installed as a distribution rather than copied onto sys.path by directory position.
+COPY Python/pyproject.toml \
+     Python/wildbridge_groundstation \
+     Python/djiInterfaceSafety.py \
+     Python/wildbridge_dji_helpers.py \
+     ./Python/
+RUN pip3 install --no-cache-dir /app/Python
 
 COPY video_test/webapp/server.py ./server.py
 COPY video_test/webapp/mavlink_debug.py ./mavlink_debug.py

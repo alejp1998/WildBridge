@@ -33,7 +33,7 @@ WildBridge is an open-source Android ground-station app (Kotlin + DJI Mobile SDK
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install requests                                # the only runtime dep of the Python clients
+pip install -e GroundStation/Python                # shared client; pulls in requests
 pip install -r GroundStation/ROS/requirements.txt   # only if working on ROS bits
 pip install pymavlink                               # only for mavlink_listen.py
 pytest GroundStation/tests -q

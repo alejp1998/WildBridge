@@ -3,7 +3,6 @@ FROM ros:humble
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/Python:${PYTHONPATH}
 
 # Create the dds logs directory with proper permissions
 RUN mkdir -p /.dds/log && chmod 777 /.dds/log
@@ -36,6 +35,10 @@ COPY ROS /ros2_ws/src/
 
 # Copy helper scripts
 COPY Python /app/Python
+
+# Install the shared client as a real distribution, so the ROS nodes and any
+# script in the image import it from site-packages without PYTHONPATH hacks.
+RUN pip3 install --no-cache-dir /app/Python
 
 # Build the ROS workspace
 RUN /bin/bash -c "source /opt/ros/humble/setup.bash && colcon build --symlink-install"

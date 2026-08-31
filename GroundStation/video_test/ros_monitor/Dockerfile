@@ -4,7 +4,6 @@
 FROM ros:humble-ros-base
 
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/opt/wildbridge/groundstation:/opt/wildbridge/ros_monitor
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip python3-colcon-common-extensions \
@@ -13,8 +12,10 @@ RUN apt-get update \
 COPY GroundStation/video_test/ros_monitor/requirements.txt /opt/wildbridge/requirements.txt
 RUN pip3 install --no-cache-dir -r /opt/wildbridge/requirements.txt
 
-# Shared GroundStation client used by the ROS controller
-COPY GroundStation/Python/wildbridge_groundstation /opt/wildbridge/groundstation/wildbridge_groundstation
+# Shared GroundStation client used by the ROS controller and the monitor.
+# Installed as a distribution, so both import it from site-packages.
+COPY GroundStation/Python /opt/wildbridge/groundstation
+RUN pip3 install --no-cache-dir /opt/wildbridge/groundstation
 
 # ROS dji_controller node (publishes telemetry + state/settings), built as a
 # real colcon package so `ros2 launch`/`ros2 run` can resolve its `dji_node`
