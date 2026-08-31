@@ -5,7 +5,7 @@ State as of the end of this session. Everything described here is committed and 
 - **WildBridge**: `feat/mavlink-telemetry` → `origin` (`alejp1998/WildBridge`)
 - **Swarm-Steward**: `feat/wildbridge-mavlink-transport` → `origin` (`alejp1998/dialogue-swarm`)
 
-The design reasoning lives in [COMMAND_CORE_REFACTOR.md](COMMAND_CORE_REFACTOR.md) and in the
+The design reasoning lives in [docs/COMMAND_CORE_REFACTOR.md](docs/COMMAND_CORE_REFACTOR.md) and in the
 shared artifact at <https://claude.ai/code/artifact/c84b887a-1c2a-4caa-8c34-b97fe3b86ba9>. This
 file is the operational picture: what works, what has never been exercised, and how to pick it up.
 

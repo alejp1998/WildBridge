@@ -597,7 +597,7 @@ WildBridge reports `MAV_AUTOPILOT_PX4`. It does not run PX4 — the claim exists
 
 #### Field testing
 
-[`FIELD_TEST.md`](FIELD_TEST.md) is the procedure for verifying all of this against a real aircraft. The ground half runs itself:
+[`docs/FIELD_TEST.md`](docs/FIELD_TEST.md) is the procedure for verifying all of this against a real aircraft. The ground half runs itself:
 
 ```bash
 cd GroundStation/Python
