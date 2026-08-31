@@ -9,6 +9,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 
+# Ubuntu 22.04 ships pip 22, which cannot build PEP 621 projects and installs
+# an empty "UNKNOWN" distribution; upgrade before installing anything local.
+RUN python3 -m pip install --no-cache-dir --upgrade pip
+
 COPY GroundStation/video_test/ros_monitor/requirements.txt /opt/wildbridge/requirements.txt
 RUN pip3 install --no-cache-dir -r /opt/wildbridge/requirements.txt
 

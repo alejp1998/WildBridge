@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y \
     net-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Ubuntu 22.04 ships pip 22, which cannot build PEP 621 projects and installs
+# an empty "UNKNOWN" distribution; upgrade before installing anything local.
+RUN python3 -m pip install --no-cache-dir --upgrade pip
+
 # Copy requirements
 COPY ROS/requirements.txt /tmp/ros_requirements.txt
 
