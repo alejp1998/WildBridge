@@ -67,7 +67,7 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | Path | Purpose |
 |------|---------|
 | `WildBridgeApp/android-sdk-v5-as/` | Android build root (`:sample`, `:uxsdk`); WildBridge additions in `webrtc/`, `formation/`, `controller/`, `server/`, `logger/` packages |
-| `WildBridgeApp/android-sdk-v5-sample/` | App source (`com.wildbridge.rc`), navigation graph, WildBridgeDefaultLayoutActivity |
+| `WildBridgeApp/wildbridge-app/` | App source (`com.wildbridge.rc`), navigation graph, WildBridgeDefaultLayoutActivity |
 | `GroundStation/Python/wildbridge_groundstation/` | Shared Python helper package (dji_client, dji_helpers, mavlink_helpers, transport) |
 | `GroundStation/mavlink/wildbridge.xml` | The WildBridge MAVLink dialect. Source of truth for `WILDBRIDGE_STATUS`; regenerate with mavgen and update the struct, size and CRC_EXTRA in `transport.py` together |
 | `GroundStation/Python/djiInterfaceSafety.py` | Safety-authority handling for the two-computer model |

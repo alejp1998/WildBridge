@@ -112,7 +112,9 @@ android {
     androidComponents {
         onVariants(selector().all()) { variant ->
             variant.outputs.forEach { output ->
-                output.outputFileName.set("app-${variant.name}.apk")
+                // Flavor already separates output directories, so the file name only needs the
+                // build type: WildBridge-debug.apk, WildBridge-release.apk.
+                output.outputFileName.set("WildBridge-${variant.buildType}.apk")
             }
         }
     }

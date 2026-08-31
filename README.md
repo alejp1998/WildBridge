@@ -151,8 +151,8 @@ cd WildBridge/WildBridgeApp/android-sdk-v5-as
 The debug APKs are written to:
 
 ```text
-WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/current/debug/app-currentDebug.apk
-WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/demoBiomass/debug/app-demoBiomassDebug.apk
+WildBridgeApp/wildbridge-app/build/outputs/apk/current/debug/WildBridge-debug.apk
+WildBridgeApp/wildbridge-app/build/outputs/apk/demoBiomass/debug/WildBridge-debug.apk
 ```
 
 To build/install a selected variant when an Android device is connected over ADB:
@@ -772,7 +772,7 @@ WildBridge/
 ├── WildBridgeApp/
 │   ├── android-sdk-v5-as/               # Main Android project (open this in Android Studio)
 │   │   └── local.properties             # Place AIRCRAFT_API_KEY here
-│   ├── android-sdk-v5-sample/           # Full sample app with WildBridge additions
+│   ├── wildbridge-app/                 # WildBridge Android app (com.wildbridge.rc)
 │   │   └── src/main/
 │   │       └── java/com/wildbridge/rc/
 │   │           ├── WildBridgeDefaultLayoutActivity.kt

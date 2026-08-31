@@ -41,7 +41,7 @@ allprojects {
 
 }
 
-def sampleJavaSource = file('../android-sdk-v5-sample/src/main/java')
+def sampleJavaSource = file('../wildbridge-app/src/main/java')
 def uxsdkJavaSource = file('../android-sdk-v5-uxsdk/src/main/java')
 def detektTaskClass = buildscript.classLoader.loadClass('io.gitlab.arturbosch.detekt.Detekt')
 

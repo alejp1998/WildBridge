@@ -21,5 +21,5 @@ This keeps DJI sample and UXSDK findings separate from the code we can act on. U
 ## Reports
 
 - Detekt: `build/reports/detekt/`
-- Android Lint sample app: `../android-sdk-v5-sample/build/reports/lint-results-debug.html`
+- Android Lint app: `../wildbridge-app/build/reports/lint-results-debug.html`
 - Android Lint UXSDK: `../android-sdk-v5-uxsdk/build/reports/lint-results-debug.html`

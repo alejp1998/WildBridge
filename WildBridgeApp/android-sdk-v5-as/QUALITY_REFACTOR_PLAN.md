@@ -8,7 +8,7 @@ Run commands from `WildBridgeApp/android-sdk-v5-as`.
 
 We should treat these as two separate streams:
 
-- WildBridge-owned code: `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/` custom packages such as `webrtc`, `edge`, `controller`, `formation`, `logger`, `server`, and `WildBridgeDefaultLayoutActivity.kt`.
+- WildBridge-owned code: `../wildbridge-app/src/main/java/com/wildbridge/rc/` custom packages such as `webrtc`, `edge`, `controller`, `formation`, `logger`, `server`, and `WildBridgeDefaultLayoutActivity.kt`.
 - DJI/vendor code: `../android-sdk-v5-uxsdk/` and DJI sample areas that we mostly inherit. We still report on them, but we do not spend refactor effort there unless we intentionally maintain a local patch.
 
 The important tasks are:
@@ -77,7 +77,7 @@ Reports to inspect:
 
 - WildBridge Detekt: `build/reports/detekt/wildbridge.html`
 - DJI/vendor Detekt: `build/reports/detekt/dji.html`
-- Sample Android Lint: `../android-sdk-v5-sample/build/reports/lint-results-debug.html`
+- Android Lint: `../wildbridge-app/build/reports/lint-results-debug.html`
 - UXSDK Android Lint: `../android-sdk-v5-uxsdk/build/reports/lint-results-debug.html`
 
 ## Main Issues To Fix
@@ -86,7 +86,7 @@ Reports to inspect:
 
 Primary file:
 
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/WildBridgeDefaultLayoutActivity.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/WildBridgeDefaultLayoutActivity.kt`
 
 Main symptoms:
 
@@ -132,10 +132,10 @@ Done already:
 
 Primary files:
 
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/WebRTCStreamer.kt`
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/WhipPublisher.kt`
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/SharedDJIFrameSource.kt`
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/SharedPhoneCameraFrameSource.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/webrtc/WebRTCStreamer.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/webrtc/WhipPublisher.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/webrtc/SharedDJIFrameSource.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/webrtc/SharedPhoneCameraFrameSource.kt`
 
 Main symptoms:
 
@@ -179,8 +179,8 @@ Done already:
 
 Primary files:
 
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/edge/EdgeDetectionController.kt`
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/edge/YoloTfliteDetector.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/edge/EdgeDetectionController.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/edge/YoloTfliteDetector.kt`
 
 Main symptoms:
 
@@ -211,9 +211,9 @@ Done already:
 
 Primary files:
 
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/controller/DroneController.kt`
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/controller/FormationController.kt`
-- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/controller/PID.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/controller/DroneController.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/controller/FormationController.kt`
+- `../wildbridge-app/src/main/java/com/wildbridge/rc/controller/PID.kt`
 
 Main symptoms:
 
@@ -282,7 +282,7 @@ What we should do:
 
 Primary reports:
 
-- `../android-sdk-v5-sample/build/reports/lint-results-debug.html`
+- `../wildbridge-app/build/reports/lint-results-debug.html`
 - `../android-sdk-v5-uxsdk/build/reports/lint-results-debug.html`
 
 Why this matters:

@@ -60,7 +60,7 @@ else
   PACKAGE_NAME="com.wildbridge.rc"
 fi
 TASK_NAME="assemble${VARIANT^}Debug"
-APK_PATH="$ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT/debug/app-${VARIANT}Debug.apk"
+APK_PATH="$ROOT_DIR/../wildbridge-app/build/outputs/apk/$VARIANT/debug/WildBridge-debug.apk"
 LAUNCH_ACTIVITY="com.wildbridge.rc.DJIAircraftMainActivity"
 
 use_android_sdk() {
@@ -146,12 +146,12 @@ if [[ ! -f "$APK_PATH" ]]; then
 fi
 
 if [[ ! -f "$APK_PATH" ]]; then
-  APK_PATH="$(find "$ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT" -type f -name "app-${VARIANT}Debug.apk" -print -quit 2>/dev/null || true)"
+  APK_PATH="$(find "$ROOT_DIR/../wildbridge-app/build/outputs/apk/$VARIANT" -type f -name "WildBridge-debug.apk" -print -quit 2>/dev/null || true)"
 fi
 
 if [[ -z "$APK_PATH" || ! -f "$APK_PATH" ]]; then
   echo "APK not found after build for variant: $VARIANT" >&2
-  echo "Expected under: $ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT" >&2
+  echo "Expected under: $ROOT_DIR/../wildbridge-app/build/outputs/apk/$VARIANT" >&2
   exit 1
 fi
 
