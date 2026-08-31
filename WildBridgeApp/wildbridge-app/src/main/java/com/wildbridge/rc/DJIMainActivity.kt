@@ -152,7 +152,7 @@ abstract class DJIMainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateWildBridgeBuildInfo() {
+    protected fun updateWildBridgeBuildInfo() {
         val preferences = getSharedPreferences(WILDBRIDGE_PREFS_NAME, MODE_PRIVATE)
         val droneName = preferences.getString(WILDBRIDGE_PREF_DRONE_NAME, WILDBRIDGE_DEFAULT_DRONE_NAME)
             ?.takeIf { it.isNotBlank() }

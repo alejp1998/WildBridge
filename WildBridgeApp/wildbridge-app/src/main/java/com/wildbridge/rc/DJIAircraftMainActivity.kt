@@ -1,9 +1,11 @@
 package com.wildbridge.rc
 
+import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.appcompat.app.AlertDialog
+import com.wildbridge.rc.settings.WildBridgeOnboarding
 import dji.v5.common.utils.GeoidManager
 import dji.sdk.keyvalue.key.ProductKey
 import dji.sdk.keyvalue.value.product.ProductType
@@ -117,6 +119,16 @@ class DJIAircraftMainActivity : DJIMainActivity() {
 
     override fun onResume() {
         super.onResume()
+        // First-run prompts (file access + settings restore) live on the initial screen so the
+        // operator handles them before a drone is connected; per-process guards make re-shows
+        // a no-op.
+        WildBridgeOnboarding.offerOnFirstRun(
+            this,
+            getSharedPreferences("WildBridgePrefs", Context.MODE_PRIVATE),
+        ) {
+            // A restored drone name should appear on this screen right away.
+            updateWildBridgeBuildInfo()
+        }
         scheduleNoDroneRecoveryPrompt()
         startConnectionWatcher()
     }
