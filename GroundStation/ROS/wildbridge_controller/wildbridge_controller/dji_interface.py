@@ -1,10 +1,10 @@
 """
 WildBridge - DJI Interface Module
 
-ROS dji_controller compatibility wrapper around the shared GroundStation DJI client.
+ROS wildbridge_controller compatibility wrapper around the shared GroundStation DJI client.
 
 Authors: Edouard G.A. Rolland, Kilian Meier, Alejandro Jarabo-Peñas
-Project: WildDrone
+Project: WildBridge
 Institution: University of Bristol, University of Southern Denmark (SDU)
 License: MIT
 
@@ -151,7 +151,7 @@ def discover_drone(timeout=5.0, verbose=True):
 
 
 class DJIInterface(_SharedDJIInterface):
-    """Backward-compatible ROS dji_controller DJI client."""
+    """Backward-compatible ROS wildbridge_controller DJI client."""
 
     def __init__(self, IP_RC=""):
         super().__init__(IP_RC, discover_callback=discover_drone)

@@ -10,6 +10,9 @@ license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = ["requests"]
 
+[project.scripts]
+wildbridge-mavlink-listen = "wildbridge_groundstation.mavlink_listen:main"
+
 [tool.setuptools]
 # The loose modules keep their historical import paths (djiInterfaceSafety,
 # wildbridge_dji_helpers) so existing callers and scripts keep working after

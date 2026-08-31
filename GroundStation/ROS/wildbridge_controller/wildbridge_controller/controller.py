@@ -1,9 +1,9 @@
 """
 Author: Edouard Rolland
-Project: WildDrone
+Project: WildBridge
 Contact: edr@mmmi.sdu.dk
 
-This file was written as part of the WildDrone project and implements a ROS 2 node for controlling a DJI drone
+This file was written as part of the WildBridge project and implements a ROS 2 node for controlling a DJI drone
 via the WildBridge app. The node handles both command reception and telemetry publishing.
 """
 
@@ -21,7 +21,7 @@ from requests.exceptions import RequestException
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool, Empty, Float64, Float64MultiArray, Int32, String
 
-from dji_controller.submodules.dji_interface import DJIInterface, get_config
+from wildbridge_controller.dji_interface import DJIInterface, get_config
 
 # How often to check for a new telemetry snapshot. This is the poll rate, not the publish rate:
 # publishing happens only when the drone has sent something new, so a short period buys low

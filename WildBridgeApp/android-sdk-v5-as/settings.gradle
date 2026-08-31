@@ -1,3 +1,5 @@
+rootProject.name = 'WildBridgeApp'
+
 include ':sample'
 project(':sample').projectDir = new File(rootProject.projectDir, '../android-sdk-v5-sample')
 

@@ -14,7 +14,7 @@ Initial result on 2026-05-29:
 
 - `python3 --version`: Python 3.14.4
 - `compileall`: passes
-- `python3 -m pytest GroundStation/ROS/dji_controller/test GroundStation/ROS/drone_videofeed/test -q`: blocked, `pytest` is not installed
+- `python3 -m pytest GroundStation/ROS/wildbridge_controller/test GroundStation/ROS/wildbridge_videofeed/test -q`: blocked, `pytest` is not installed
 - `python3 -m pip show ...`: blocked, this Python has no `pip` module
 - `ruff`, `black`, `pre-commit`, `flake8`, `pydocstyle`, and `colcon` are not on `PATH`
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """WildBridge ROS topic monitor.
 
-Watches the live ROS graph for `dji_node_*` nodes (one per drone, namespaced
-under its name — see launch_controllers.py and
-GroundStation/ROS/wildview_bringup/launch/auto_discovery_native.launch.py),
+Watches the live ROS graph for `wildbridge_controller_*` nodes (one per drone,
+namespaced under its name — see
+GroundStation/ROS/wildbridge_bringup/launch/auto_discovery_native.launch.py),
 subscribes to each drone's topics under its own namespace, tracks per-topic
 publish metrics (rate, last value, freshness) per drone, probes each drone's
 phone HTTP surface, and reports the result to the WildBridge webapp via
@@ -192,7 +192,9 @@ class RosMonitor(Node):
         except Exception:
             return
         active = {
-            ns.strip("/") for name, ns in nodes if name.startswith("dji_node") and ns.strip("/")
+            ns.strip("/")
+            for name, ns in nodes
+            if name.startswith("wildbridge_controller") and ns.strip("/")
         }
         for namespace in active - self.drone_stats.keys():
             self._attach_drone(namespace)

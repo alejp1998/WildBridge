@@ -20,13 +20,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Auto-discover WildBridge drones and launch one namespaced DjiNode
-# controller per drone (publishes telemetry + state/settings under
+# Auto-discover WildBridge drones and launch one namespaced wildbridge_controller
+# node per drone (publishes telemetry + state/settings under
 # /<drone>/...), re-scanning periodically for newly joined drones, unless
 # disabled. This is the same auto_discovery_native.launch.py the rest of the
-# ROS 2 stack uses (see GroundStation/ROS/wildview_bringup).
+# ROS 2 stack uses (see GroundStation/ROS/wildbridge_bringup).
 if [[ "${ROS_RUN_CONTROLLER:-1}" == "1" ]]; then
-  echo "[ros-monitor] discovering drones and starting namespaced dji_node controllers"
+  echo "[ros-monitor] discovering drones and starting namespaced wildbridge_controller nodes"
   ros2 launch /opt/wildbridge/launch/auto_discovery_native.launch.py &
   CONTROLLER_PID=$!
 fi

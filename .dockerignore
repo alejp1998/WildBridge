@@ -17,10 +17,10 @@ GroundStation/video_test/logs
 GroundStation/video_test/webapp
 GroundStation/tests
 GroundStation/Python/test_scripts
-GroundStation/ROS/drone_videofeed
-GroundStation/ROS/wildview_bringup
+GroundStation/ROS/wildbridge_videofeed
+GroundStation/ROS/wildbridge_bringup
 # ...except the launch file the ros-monitor image reuses for auto-discovery.
-!GroundStation/ROS/wildview_bringup/launch/auto_discovery_native.launch.py
+!GroundStation/ROS/wildbridge_bringup/launch/auto_discovery_native.launch.py
 GroundStation/ROS/requirements.txt
 compose.video-test.yaml
 verify-integration.sh

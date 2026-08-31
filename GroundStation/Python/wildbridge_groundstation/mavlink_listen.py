@@ -6,10 +6,11 @@ at what rate. Read-only — it never transmits, so it cannot influence the aircr
 
 Usage::
 
-    python mavlink_listen.py                 # listen on 0.0.0.0:14550
-    python mavlink_listen.py --port 14550    # same, explicit
-    python mavlink_listen.py --summary 5     # print a rate summary every 5 seconds
-    python mavlink_listen.py --modes         # ask for the flight-mode list and print it
+    wildbridge-mavlink-listen                 # listen on 0.0.0.0:14550
+    wildbridge-mavlink-listen --port 14550    # same, explicit
+    wildbridge-mavlink-listen --summary 5     # print a rate summary every 5 seconds
+    wildbridge-mavlink-listen --modes         # ask for the flight-mode list and print it
+    python -m wildbridge_groundstation.mavlink_listen --summary 5   # same, without the console script
 
 Requires pymavlink (``pip install pymavlink``). It is not a dependency of the rest of the
 GroundStation code, so this script degrades with a clear message rather than a traceback.

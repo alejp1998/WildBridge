@@ -41,19 +41,19 @@ def generate_launch_description():
 
     drone = drones[0]
 
-    rtsp_node = Node(
-        package="drone_videofeed",
-        executable="rtsp_node",
+    video_node = Node(
+        package="wildbridge_videofeed",
+        executable="wildbridge_videofeed",
         namespace=drone["namespace"],
         parameters=[{"ip_rc": drone["ip_rc"]}],
     )
-    ld.add_action(rtsp_node)
+    ld.add_action(video_node)
 
     # Add drone nodes dynamically
     for drone in drones:
         node = Node(
-            package="dji_controller",
-            executable="dji_node",
+            package="wildbridge_controller",
+            executable="wildbridge_controller",
             namespace=drone["namespace"],
             parameters=[{"ip_rc": drone["ip_rc"]}],
         )

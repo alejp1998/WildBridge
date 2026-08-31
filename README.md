@@ -470,7 +470,7 @@ This axis is independent of the RC manual-override latch: that one tracks the ph
 the sticks, this one tracks which computer commands the server.
 
 ```python
-from djiInterfaceSafety import DJIInterfaceSafety
+from wildbridge_groundstation.safety import DJIInterfaceSafety
 
 safety = DJIInterfaceSafety("192.168.1.100")   # every command carries the token
 safety.requestSendGotoAltitude(30.0)           # first command seizes control
@@ -586,7 +586,7 @@ A fleet needs one port per aircraft for the same reason.
 
 ```bash
 pip install pymavlink
-python GroundStation/Python/mavlink_listen.py --summary 5
+wildbridge-mavlink-listen --summary 5
 ```
 
 It prints the first instance of each message with decoded values, then a rate summary, and reports malformed frames loudly as `BAD_DATA`. It never transmits.
@@ -642,17 +642,18 @@ This replaces the older direct RC-hosted WebSocket-signaling viewer. That sample
 
 ## ROS 2 Integration
 
-Full ROS 2 Humble package. The `dji_controller` node publishes all telemetry fields as individual topics and subscribes to command topics. It checks for new telemetry at 20 Hz but publishes only when the drone has actually sent a new snapshot, so the topic rate follows the aircraft's telemetry interval (default ~2 Hz) rather than repeating each sample.
+Full ROS 2 Humble package. The `wildbridge_controller` node publishes all telemetry fields as individual topics and subscribes to command topics. It checks for new telemetry at 20 Hz but publishes only when the drone has actually sent a new snapshot, so the topic rate follows the aircraft's telemetry interval (default ~2 Hz) rather than repeating each sample.
 
 ### Package Structure
 
 ```text
 GroundStation/ROS/
-├── dji_controller/          # Main control + telemetry node
+├── wildbridge_controller/   # Main control + telemetry node
 │   ├── controller.py        # DjiNode: 45+ topics, publishes on new telemetry
-│   └── submodules/dji_interface.py
-└── wildview_bringup/
-    ├── auto_discovery_native.launch.py  # one namespaced dji_node per discovered drone, re-scans periodically
+│   └── dji_interface.py
+├── wildbridge_videofeed/    # RTSP video feed -> sensor_msgs/Image
+└── wildbridge_bringup/
+    ├── auto_discovery_native.launch.py  # one namespaced wildbridge_controller per discovered drone, re-scans periodically
     ├── swarm_connection.launch.py
     └── config/parameters.yaml
 ```
@@ -753,7 +754,7 @@ The image is based on `ros:humble` with CycloneDDS, `cv-bridge`, `vision-opencv`
 ```bash
 cd GroundStation/ROS
 colcon build --symlink-install && source install/setup.bash
-ros2 launch wildview_bringup auto_discovery_native.launch.py
+ros2 launch wildbridge_bringup auto_discovery_native.launch.py
 
 # Example commands (namespace is the drone's own name, e.g. "mini1")
 ros2 topic pub /mini1/command/takeoff std_msgs/msg/Empty "{}"
@@ -783,16 +784,16 @@ WildBridge/
 └── GroundStation/
     ├── Python/
     │   ├── wildbridge_groundstation/    # Canonical DJI client (HTTP + TCP telemetry)
-    │   ├── djiInterfaceSafety.py        # Safety Computer client (token on every command)
+    │   ├── djiInterfaceSafety.py        # Legacy import shim for wildbridge_groundstation.safety
     │   └── test_scripts/                # Authority and capture/download test scripts
     ├── Dockerfile                       # ros:humble + CycloneDDS container
     ├── entrypoint.sh                    # Container entry point
     ├── run_docker.sh                    # Docker run helper
     ├── video_test/                      # MediaMTX + multi-drone video dashboard
     └── ROS/
-        ├── dji_controller/              # ROS 2 control + telemetry node
-        ├── drone_videofeed/             # Video feed node
-        └── wildview_bringup/            # Launch files and config
+        ├── wildbridge_controller/       # ROS 2 control + telemetry node
+        ├── wildbridge_videofeed/        # Video feed node
+        └── wildbridge_bringup/          # Launch files and config
 ```
 
 ---

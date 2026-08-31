@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "drone_videofeed"
+package_name = "wildbridge_videofeed"
 
 setup(
     name=package_name,
@@ -17,6 +17,6 @@ setup(
     description="WildBridge ROS 2 node publishing the DJI drone RTSP video feed as sensor_msgs/Image",
     license="MIT",
     entry_points={
-        "console_scripts": ["rtsp_node = drone_videofeed.rtsp:main"],
+        "console_scripts": ["wildbridge_videofeed = wildbridge_videofeed.rtsp:main"],
     },
 )

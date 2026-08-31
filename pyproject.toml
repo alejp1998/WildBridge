@@ -32,11 +32,11 @@ max-complexity = 10
 "GroundStation/ROS/**/test/**" = ["B", "N", "E402"]
 "GroundStation/ROS/**/launch/**" = ["E402"]
 # DJIInterface and its subclasses expose a camelCase API that mirrors the DJI SDK's own naming.
-# Renaming would break every caller and, for djiInterfaceSafety, the override contract with the
+# Renaming would break every caller and, for safety.py, the override contract with the
 # parent class it extends.
-"GroundStation/Python/djiInterfaceSafety.py" = ["N802", "N803"]
+"GroundStation/Python/wildbridge_groundstation/safety.py" = ["N802", "N803"]
 "GroundStation/Python/wildbridge_groundstation/dji_client.py" = ["N802", "N803"]
-"GroundStation/ROS/dji_controller/dji_controller/submodules/dji_interface.py" = ["N802", "N803"]
+"GroundStation/ROS/wildbridge_controller/wildbridge_controller/dji_interface.py" = ["N802", "N803"]
 
 [tool.ruff.format]
 quote-style = "double"

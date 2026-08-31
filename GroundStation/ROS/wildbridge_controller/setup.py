@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "dji_controller"
+package_name = "wildbridge_controller"
 
 setup(
     name=package_name,
@@ -17,6 +17,6 @@ setup(
     description="WildBridge ROS 2 node driving one DJI drone through the WildBridge HTTP command and telemetry interface",
     license="MIT",
     entry_points={
-        "console_scripts": ["dji_node = dji_controller.controller:main"],
+        "console_scripts": ["wildbridge_controller = wildbridge_controller.controller:main"],
     },
 )
