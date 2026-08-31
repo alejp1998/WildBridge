@@ -1,5 +1,5 @@
 <div align="center">
-    <img src="WildBridgeReadmePics/WildBridge_icon.png" alt="WildBridge App Icon" width="300" height="300">
+    <img src="docs/images/WildBridge_icon.png" alt="WildBridge App Icon" width="300" height="300">
 </div>
 
 <div align="center">
@@ -23,7 +23,7 @@ WildBridge is an **open-source Android application** (Kotlin, DJI Mobile SDK V5)
 
 Each drone connects to its RC via DJI OcuSync (2.4/5 GHz). The RC connects to the ground station over a 2.4/5 GHz LAN. Multiple WildBridge instances can coexist on the same LAN, enabling multi-drone configurations without any app modification.
 
-![WildBridge System Architecture](WildBridgeReadmePics/WildBridgeDiagram.png)
+![WildBridge System Architecture](docs/images/WildBridgeDiagram.png)
 *Multi-drone setup: each RC runs WildBridge and exposes standard HTTP commands (port 8080), TCP telemetry (port 8081), discovery, and WebRTC video publishing through the current WHIP/WHEP MediaMTX workflow.*
 
 ---
@@ -77,7 +77,7 @@ Each drone connects to its RC via DJI OcuSync (2.4/5 GHz). The RC connects to th
 
 WildBridge runs on the RC's built-in Android display or on the Android display connected to the DJI controller. The main default layout starts the HTTP server, TCP telemetry stream, discovery services, flight logging, and video publishing components automatically — no separate video sample page is required.
 
-![WildBridge default layout on Mini 4](WildBridgeReadmePics/DefaultLayoutMini4.jpg)
+![WildBridge default layout on Mini 4](docs/images/DefaultLayoutMini4.jpg)
 
 The left-side WildBridge panel provides the controls most often used during research flights:
 
@@ -262,9 +262,9 @@ Settings can be viewed and changed for each drone from the **Settings** tab: it 
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="WildBridgeReadmePics/VideoTestTab.png" width="100%"></td>
-    <td align="center" width="33%"><img src="WildBridgeReadmePics/HealthTab.png" width="100%"></td>
-    <td align="center" width="33%"><img src="WildBridgeReadmePics/VideoChartsTab.png" width="100%"></td>
+    <td align="center" width="33%"><img src="docs/images/VideoTestTab.png" width="100%"></td>
+    <td align="center" width="33%"><img src="docs/images/HealthTab.png" width="100%"></td>
+    <td align="center" width="33%"><img src="docs/images/VideoChartsTab.png" width="100%"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Video</b><br>Live WHIP/WHEP tiles per drone with quick FPS/loss/telemetry stats</sub></td>
@@ -273,9 +273,9 @@ Settings can be viewed and changed for each drone from the **Settings** tab: it 
   </tr>
   <tr><td colspan="3">&nbsp;</td></tr>
   <tr>
-    <td align="center"><img src="WildBridgeReadmePics/TelemetryTab.png" width="100%"></td>
-    <td align="center"><img src="WildBridgeReadmePics/TelemetryChartsTab.png" width="100%"></td>
-    <td align="center"><img src="WildBridgeReadmePics/SettingsTab.png" width="100%"></td>
+    <td align="center"><img src="docs/images/TelemetryTab.png" width="100%"></td>
+    <td align="center"><img src="docs/images/TelemetryChartsTab.png" width="100%"></td>
+    <td align="center"><img src="docs/images/SettingsTab.png" width="100%"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Telemetry</b><br>Full nested live state tree per drone</sub></td>
@@ -284,9 +284,9 @@ Settings can be viewed and changed for each drone from the **Settings** tab: it 
   </tr>
   <tr><td colspan="3">&nbsp;</td></tr>
   <tr>
-    <td align="center"><img src="WildBridgeReadmePics/PublishTab.png" width="100%"></td>
-    <td align="center"><img src="WildBridgeReadmePics/MavlinkTab.png" width="100%"></td>
-    <td align="center"><img src="WildBridgeReadmePics/RosTab.png" width="100%"></td>
+    <td align="center"><img src="docs/images/PublishTab.png" width="100%"></td>
+    <td align="center"><img src="docs/images/MavlinkTab.png" width="100%"></td>
+    <td align="center"><img src="docs/images/RosTab.png" width="100%"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>HTTP</b><br>The full <code>/send/</code> catalogue, each entry marked if it also has a MAVLink form</sub></td>
@@ -448,7 +448,7 @@ Two computers can drive the same drone over HTTP. Which one is in command is dec
 | carries the valid `X-Safety-Token` | **Safety Computer** |
 | anything else (no header, wrong token) | **Pilot Computer** |
 
-![Two-Computer Safety Control — request flow](WildBridgeReadmePics/two-computer-safety-control-Request%20flow.drawio.png)
+![Two-Computer Safety Control — request flow](docs/images/two-computer-safety-control-Request%20flow.drawio.png)
 *How a single HTTP command is arbitrated: the `X-Safety-Token` header classifies the request, `ControlAuthority` holds one in-memory latch, and the first Safety command seizes control and cancels whatever the Pilot was flying.*
 
 Rules enforced by the app on every `/send/*` command:
