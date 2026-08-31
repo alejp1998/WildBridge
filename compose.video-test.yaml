@@ -1,20 +1,15 @@
 services:
   mediamtx:
-    image: wildbridge-mediamtx:latest
-    build:
-      context: ./GroundStation/video_test/mediamtx
+    # Stock image is scratch-based (no shell or wget), so a healthcheck would force a custom
+    # busybox image. Not needed: the webapp polls the MediaMTX API in a daemon thread and
+    # retries, so a plain start-order dependency is enough (same as the dialogue-swarm stack).
+    image: bluenviron/mediamtx:latest
     container_name: wildbridge_mediamtx
     network_mode: host
     environment:
       - MTX_WEBRTCLOCALUDPADDRESS=${MEDIAMTX_WEBRTC_UDP_ADDRESS:-:8189}
     volumes:
       - ./GroundStation/video_test/mediamtx.yml:/mediamtx.yml:ro
-    healthcheck:
-      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "-", "http://127.0.0.1:9997/v3/paths/list"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
   video-grid:
     image: wildbridge-video-grid:latest
@@ -27,7 +22,7 @@ services:
     network_mode: host
     depends_on:
       mediamtx:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,os; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8090')+'/api/drones', timeout=5)"]
       interval: 15s
