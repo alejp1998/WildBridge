@@ -4,7 +4,7 @@ package_name = "drone_videofeed"
 
 setup(
     name=package_name,
-    version="0.0.0",
+    version="0.1.0",
     packages=find_packages(exclude=["test"]),
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -14,8 +14,8 @@ setup(
     zip_safe=True,
     maintainer="edr",
     maintainer_email="65714311+edouardrolland@users.noreply.github.com",
-    description="TODO: Package description",
-    license="TODO: License declaration",
+    description="WildBridge ROS 2 node publishing the DJI drone RTSP video feed as sensor_msgs/Image",
+    license="MIT",
     entry_points={
         "console_scripts": ["rtsp_node = drone_videofeed.rtsp:main"],
     },

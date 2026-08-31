@@ -2,10 +2,10 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>drone_videofeed</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <version>0.1.0</version>
+  <description>WildBridge ROS 2 node publishing the DJI drone RTSP video feed as sensor_msgs/Image</description>
   <maintainer email="65714311+edouardrolland@users.noreply.github.com">edr</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <depend>rclpy</depend>
 
