@@ -118,6 +118,12 @@ Android/Kotlin quality is owned by the Gradle build (`./gradlew :sample:compileD
 - Keep generated/runtime artifacts out of Git.
 - Safety-critical changes (authority takeover, virtual-stick, control loops, RTH) deserve extra tests and explicit review; never weaken the takeover semantics.
 
+## Commit Attribution
+
+- Do **not** add `Co-Authored-By:` lines for AI assistants to commit messages.
+- If acknowledging AI assistance, append a short plain-text comment at the very end of the commit message naming the model that helped, e.g. `AI-assisted by Claude Opus 5.` or `AI-assisted by GitHub Copilot (DeepSeek V4 Pro).` (use the actual model name).
+- Other human `Co-Authored-By:` trailers are fine and must be kept.
+
 ## Current Branch: `integration/xprize-biomass`
 
 - `verify-integration.sh` verifies the rebuild-forward branch against a pinned-base 3-way merge of the XPRIZE base and the upstream fork. The correct merge base is `7d49349` (immediately before PR #12); letting git choose a base walks back and manufactures phantom conflicts that can silently drop XPRIZE changes.
