@@ -6,9 +6,9 @@ WildBridge is an open-source Android ground-station app (Kotlin + DJI Mobile SDK
 
 - **Android app** (Kotlin, DJI MSDK V5.18): `WildBridgeApp/android-sdk-v5-as/` — the `:sample` module is the app; `:uxsdk` is stock DJI UXSDK with a few intentional modifications.
 - **Python GroundStation**: `GroundStation/Python/wildbridge_groundstation/` — `dji_client.py` (`DJIInterface`), `dji_helpers.py`, `mavlink_helpers.py`; `wildbridge_dji_helpers.py` is a compatibility shim.
-- **ROS 2 Humble**: `GroundStation/ROS/` — `wildbridge_controller`, `wildbridge_videofeed`, `wildbridge_bringup` (launch files).
+- **ROS 2 Humble**: `GroundStation/ROS/` — `dji_controller`, `drone_videofeed`, `wildview_bringup` (launch files).
 - **Video test stack**: `compose.video-test.yaml` — MediaMTX + a browser dashboard in `GroundStation/video_test/webapp/`.
-- **Safety model**: two-computer authority. A Safety Computer can seize command authority via the `X-Safety-Token` header; takeover is persistent and only the Safety Computer returns control. Safety-adjacent logic lives in `GroundStation/Python/wildbridge_groundstation/safety.py` (legacy import path: `djiInterfaceSafety.py`) and on-device.
+- **Safety model**: two-computer authority. A Safety Computer can seize command authority via the `X-Safety-Token` header; takeover is persistent and only the Safety Computer returns control. Safety-adjacent logic lives in `GroundStation/Python/djiInterfaceSafety.py` and on-device.
 - **Key ports on each drone**: HTTP commands `8080`, TCP telemetry `8081`, UDP discovery `30000` (+ mDNS, subnet scan), WHIP/WHEP video via MediaMTX.
 - **Supported public video path**: WHIP publish → MediaMTX → WHEP playback. The older direct WebSocket-signaling viewer/server path has been removed from the public app and tooling; do not reintroduce it.
 
@@ -35,7 +35,7 @@ WildBridge is an open-source Android ground-station app (Kotlin + DJI Mobile SDK
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e GroundStation/Python                # shared client; pulls in requests
 pip install -r GroundStation/ROS/requirements.txt   # only if working on ROS bits
-pip install pymavlink                               # only for wildbridge-mavlink-listen
+pip install pymavlink                               # only for mavlink_listen.py
 pytest GroundStation/tests -q
 python3 -m compileall -q GroundStation/Python GroundStation/ROS GroundStation/video_test/webapp
 ```
@@ -70,10 +70,10 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | `WildBridgeApp/android-sdk-v5-sample/` | App source (`dji.sampleV5.aircraft`), navigation graph, WildBridgeDefaultLayoutActivity |
 | `GroundStation/Python/wildbridge_groundstation/` | Shared Python helper package (dji_client, dji_helpers, mavlink_helpers, transport) |
 | `GroundStation/mavlink/wildbridge.xml` | The WildBridge MAVLink dialect. Source of truth for `WILDBRIDGE_STATUS`; regenerate with mavgen and update the struct, size and CRC_EXTRA in `transport.py` together |
-| `GroundStation/Python/wildbridge_groundstation/safety.py` | Safety-authority handling for the two-computer model (legacy shim: `djiInterfaceSafety.py`) |
-| `GroundStation/ROS/wildbridge_controller/` | ROS package wrapping DJI control |
-| `GroundStation/ROS/wildbridge_videofeed/` | ROS package for video feed |
-| `GroundStation/ROS/wildbridge_bringup/` | Launch/config for the ROS stack |
+| `GroundStation/Python/djiInterfaceSafety.py` | Safety-authority handling for the two-computer model |
+| `GroundStation/ROS/dji_controller/` | ROS package wrapping DJI control |
+| `GroundStation/ROS/drone_videofeed/` | ROS package for video feed |
+| `GroundStation/ROS/wildview_bringup/` | Launch/config for the ROS stack |
 | `GroundStation/tests/` | Pytest suite (`test_dji_client.py`, `test_dji_helpers.py`, `test_mavlink_helpers.py`, `test_video_events.py`) |
 | `GroundStation/video_test/` | MediaMTX config + webapp for the video dashboard |
 | `scripts/check_radon_complexity.py` | Complexity gate used by pre-commit/CI |
