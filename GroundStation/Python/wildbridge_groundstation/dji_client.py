@@ -15,9 +15,11 @@ from typing import Any
 
 import requests
 
+from wildbridge_groundstation.discovery import (
+    discover_drone as _discover_drone,
+)
 from wildbridge_groundstation.dji_helpers import (
     build_command_url,
-    parse_discovery_response,
     parse_telemetry_chunk,
 )
 from wildbridge_groundstation.transport import (
@@ -29,8 +31,6 @@ from wildbridge_groundstation.transport import (
     signing_key_from_env,
 )
 
-DISCOVERY_PORT = 30000
-DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
 DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
 LENS_KEYS = ("thermal", "wide", "zoom")
 SAVE_SUCCESS = "T_IMG_SAVE_SUCCESS"
@@ -135,32 +135,10 @@ def get_settings(ip_address: str) -> dict[str, Any] | None:
     return None
 
 
-def discover_drone(timeout=5.0) -> str | None:
+def discover_drone(timeout: float = 5.0) -> str | None:
     """Discover the first WildBridge drone on the local network using UDP broadcast."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.settimeout(timeout)
-
-    try:
-        sock.sendto(DISCOVERY_MSG, ("<broadcast>", DISCOVERY_PORT))
-        print(f"Broadcasting discovery message on port {DISCOVERY_PORT}...")
-
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                data, addr = sock.recvfrom(1024)
-            except TimeoutError:
-                break
-            discovery_response = parse_discovery_response(data, fallback_ip=addr[0])
-            if discovery_response:
-                print(f"Found WildBridge drone at {discovery_response.ip_address}")
-                return discovery_response.ip_address
-    except Exception as exc:
-        print(f"Discovery error: {exc}")
-    finally:
-        sock.close()
-
-    return None
+    found = _discover_drone(timeout, verbose=True)
+    return found.ip_address if found else None
 
 
 def _normalize_discovery_result(result: DiscoveryResult) -> tuple[str, str]:

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
-import re
 import socket
-import subprocess
 import threading
 import time
 import urllib.error
@@ -17,7 +15,6 @@ from urllib.parse import unquote, urlparse
 from video_events import (
     build_event_entry,
     format_sse_message,
-    parse_discovery_response,
     serialize_ndjson_entry,
 )
 
@@ -96,10 +93,6 @@ def _open_url(target, timeout):
 
 
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/logs"))
-DISCOVERY_MSG = b"DISCOVER_WILDBRIDGE"
-DISCOVERY_PORT = 30000
-MULTICAST_GROUP = "239.255.42.99"
-MULTICAST_PORT = 30001
 TELEMETRY_IDLE_TIMEOUT_S = float(os.environ.get("TELEMETRY_IDLE_TIMEOUT_S", "5"))
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
@@ -333,55 +326,6 @@ def upsert_discovered(found):
     emit_state()
 
 
-def run_discovery_socket(sock, target):
-    """Broadcast a discovery probe on one address and collect the replies.
-
-    A send that fails is not fatal. The broadcast list is built from every interface the host
-    has, and a machine on several networks routinely has one that cannot be reached -- a docker
-    bridge with nothing on it, a VPN that is down. Letting that raise took the whole sweep with
-    it, so a drone sitting on a perfectly good interface went undiscovered because a different
-    interface was unusable.
-    """
-    sock.settimeout(1.5)
-    try:
-        try:
-            sock.sendto(DISCOVERY_MSG, target)
-        except OSError as error:
-            log_event("discovery_broadcast_failed", target=target[0], error=str(error))
-            return
-        deadline = time.time() + 1.5
-        while time.time() < deadline:
-            try:
-                data, address = sock.recvfrom(2048)
-            except TimeoutError:
-                break
-            found = parse_discovery_response(
-                data.decode("utf-8", errors="ignore").strip(), address[0]
-            )
-            if found:
-                upsert_discovered(found)
-    finally:
-        sock.close()
-
-
-def get_subnet_broadcast_addresses():
-    broadcasts = ["255.255.255.255"]
-    try:
-        # Run ip addr show
-        output = subprocess.check_output(["ip", "addr", "show"], text=True)
-        # Find all lines containing "inet ... brd ..."
-        for line in output.split("\n"):
-            if "inet " in line and " brd " in line:
-                match = re.search(r"brd\s+(\d+\.\d+\.\d+\.\d+)", line)
-                if match:
-                    addr = match.group(1)
-                    if addr not in broadcasts:
-                        broadcasts.append(addr)
-    except Exception:
-        pass
-    return broadcasts
-
-
 def _known_drone_addresses():
     """Addresses worth probing directly: configured fallbacks and anything seen before."""
     addresses = set(FALLBACK_IPS.values())
@@ -395,49 +339,27 @@ def _known_drone_addresses():
 def discover_now():
     log_event("discovery_started", drones=DRONE_NAMES or "any")
 
-    # Broadcast to all resolved interface broadcast addresses (forces physical Wi-Fi routing alongside defaults)
-    for broadcast_ip in get_subnet_broadcast_addresses():
-        try:
-            broadcast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            threading.Thread(
-                target=run_discovery_socket,
-                args=(broadcast_sock, (broadcast_ip, DISCOVERY_PORT)),
-                daemon=True,
-            ).start()
-        except Exception as exc:
-            log_event("discovery_error", transport=f"broadcast-{broadcast_ip}", error=str(exc))
-
-    # Probe every address already known, one datagram each.
-    #
-    # Broadcast is not reliable on a real network: access points drop it, and a phone's Wi-Fi
-    # power-save can too. A drone that answers a direct probe perfectly well then never appears,
-    # which is exactly what happened on a live aircraft that was serving HTTP the whole time.
-    # Anything previously seen, or configured as a fallback, is worth asking directly.
-    for known_ip in sorted(_known_drone_addresses()):
-        try:
-            unicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            threading.Thread(
-                target=run_discovery_socket,
-                args=(unicast_sock, (known_ip, DISCOVERY_PORT)),
-                daemon=True,
-            ).start()
-        except OSError as exc:
-            log_event("discovery_error", transport=f"unicast-{known_ip}", error=str(exc))
-
+    # One shared sweep (wildbridge_groundstation.discovery): broadcast to every interface,
+    # direct probes of known addresses, and the multicast group. Broadcast is not reliable on a
+    # real network -- access points drop it, and a phone's Wi-Fi power-save can too -- which is
+    # why anything previously seen or configured is probed directly as well. Imported lazily so
+    # a webapp image built without the shared package still serves the rest of the dashboard.
     try:
-        multicast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        multicast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        multicast_sock.bind(("", MULTICAST_PORT))
-        membership = socket.inet_aton(MULTICAST_GROUP) + socket.inet_aton("0.0.0.0")  # nosec B104
-        multicast_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership)
-        threading.Thread(
-            target=run_discovery_socket,
-            args=(multicast_sock, (MULTICAST_GROUP, MULTICAST_PORT)),
-            daemon=True,
-        ).start()
+        from wildbridge_groundstation.discovery import discover_all
+
+        found = discover_all(
+            timeout=1.5,
+            verbose=False,
+            probe_known=_known_drone_addresses(),
+            per_interface_broadcast=True,
+            multicast=True,
+        )
     except Exception as exc:
-        log_event("discovery_error", transport="multicast", error=str(exc))
+        log_event("discovery_error", transport="all", error=str(exc))
+        found = []
+
+    for drone in found:
+        upsert_discovered({"name": drone.name, "ip": drone.ip_address})
 
     for name in list(drones.keys()):
         connect_telemetry(name)

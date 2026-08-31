@@ -6,7 +6,9 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-DISCOVERY_RESPONSE_PREFIX = "WILDBRIDGE_HERE:"
+from wildbridge_groundstation.dji_helpers import (
+    parse_discovery_response as _parse_discovery_response,
+)
 
 
 def build_event_entry(
@@ -29,11 +31,14 @@ def format_sse_message(message_type: str, payload: Any) -> bytes:
 
 
 def parse_discovery_response(message: str, remote_ip: str) -> dict[str, str] | None:
-    """Parse a WildBridge discovery response for the video grid."""
-    if not message.startswith(DISCOVERY_RESPONSE_PREFIX):
+    """Parse a WildBridge discovery response for the video grid.
+
+    The aircraft always replies ``WILDBRIDGE_HERE:<ip>:<name>`` (see
+    ``WildBridgeDiscoveryManager.kt``), so the parsing lives in the shared
+    ``wildbridge_groundstation.dji_helpers``; this only reshapes the result
+    into the dict form the webapp consumes.
+    """
+    parsed = _parse_discovery_response(message, fallback_ip=remote_ip)
+    if parsed is None:
         return None
-    payload = message[len(DISCOVERY_RESPONSE_PREFIX) :]
-    if ":" not in payload:
-        return {"ip": remote_ip, "name": payload or remote_ip}
-    ip_address, name = payload.split(":", 1)
-    return {"ip": ip_address or remote_ip, "name": name.strip() or remote_ip}
+    return {"ip": parsed.ip_address, "name": parsed.name}
