@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    package="dji.sampleV5.aircraft">
+    package="com.wildbridge.rc">
 
     <!-- Sample permission requirement -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -37,7 +37,7 @@
         android:required="true"/>
 
     <application
-        android:name="dji.sampleV5.aircraft.DJIAircraftApplication"
+        android:name="com.wildbridge.rc.DJIAircraftApplication"
         android:allowBackup="true"
         android:icon="${APP_ICON}"
         android:label="@string/app_name_aircraft"
@@ -67,7 +67,7 @@
         </provider>
 
         <activity
-            android:name="dji.sampleV5.aircraft.DJIAircraftMainActivity"
+            android:name="com.wildbridge.rc.DJIAircraftMainActivity"
             android:theme="@style/full_screen_theme"
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|keyboardHidden"
@@ -109,7 +109,7 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false"/>
 
-        <activity android:name="dji.sampleV5.aircraft.AircraftTestingToolsActivity"
+        <activity android:name="com.wildbridge.rc.AircraftTestingToolsActivity"
             android:theme="@style/full_screen_theme"
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|keyboardHidden"

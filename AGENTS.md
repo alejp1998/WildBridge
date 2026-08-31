@@ -45,9 +45,9 @@ python3 -m compileall -q GroundStation/Python GroundStation/ROS GroundStation/vi
 ```bash
 cd WildBridgeApp/android-sdk-v5-as
 cp local.properties.example local.properties   # set sdk.dir and AIRCRAFT_API_KEY
-./gradlew :sample:compileDebugKotlin            # fast validation of Kotlin changes
-./gradlew :sample:assembleCurrentDebug          # current variant
-./gradlew :sample:assembleDemoBiomassDebug      # demo/biomass variant
+./gradlew :app:compileDebugKotlin            # fast validation of Kotlin changes
+./gradlew :app:assembleCurrentDebug          # current variant
+./gradlew :app:assembleDemoBiomassDebug      # demo/biomass variant
 ./auto_install_on_connect.sh current --build    # build+install to a connected device
 ```
 
@@ -67,7 +67,7 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | Path | Purpose |
 |------|---------|
 | `WildBridgeApp/android-sdk-v5-as/` | Android build root (`:sample`, `:uxsdk`); WildBridge additions in `webrtc/`, `formation/`, `controller/`, `server/`, `logger/` packages |
-| `WildBridgeApp/android-sdk-v5-sample/` | App source (`dji.sampleV5.aircraft`), navigation graph, WildBridgeDefaultLayoutActivity |
+| `WildBridgeApp/android-sdk-v5-sample/` | App source (`com.wildbridge.rc`), navigation graph, WildBridgeDefaultLayoutActivity |
 | `GroundStation/Python/wildbridge_groundstation/` | Shared Python helper package (dji_client, dji_helpers, mavlink_helpers, transport) |
 | `GroundStation/mavlink/wildbridge.xml` | The WildBridge MAVLink dialect. Source of truth for `WILDBRIDGE_STATUS`; regenerate with mavgen and update the struct, size and CRC_EXTRA in `transport.py` together |
 | `GroundStation/Python/djiInterfaceSafety.py` | Safety-authority handling for the two-computer model |
@@ -108,7 +108,7 @@ Run the manual test hook with:
 pre-commit run groundstation-tests --hook-stage manual
 ```
 
-Android/Kotlin quality is owned by the Gradle build (`./gradlew :sample:compileDebugKotlin` + variant builds), not by the Python hooks.
+Android/Kotlin quality is owned by the Gradle build (`./gradlew :app:compileDebugKotlin` + variant builds), not by the Python hooks.
 
 ## Code Conventions
 

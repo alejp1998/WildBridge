@@ -8,7 +8,7 @@
 
     <androidx.fragment.app.FragmentContainerView
         android:id="@+id/primary_video_channel_fragment"
-        android:name="dji.sampleV5.aircraft.pages.VideoChannelFragment"
+        android:name="com.wildbridge.rc.pages.VideoChannelFragment"
         android:layout_width="0dp"
         android:layout_height="match_parent"
         android:layout_marginTop="5dp"
@@ -22,7 +22,7 @@
 
     <androidx.fragment.app.FragmentContainerView
         android:id="@+id/secondary_video_channel_fragment"
-        android:name="dji.sampleV5.aircraft.pages.VideoChannelFragment"
+        android:name="com.wildbridge.rc.pages.VideoChannelFragment"
         android:layout_width="0dp"
         android:layout_height="match_parent"
         android:layout_marginStart="10dp"

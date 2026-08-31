@@ -71,7 +71,7 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintVertical_bias="0.0" />
 
-    <dji.sampleV5.aircraft.views.OverLayerTopView
+    <com.wildbridge.rc.views.OverLayerTopView
         android:id="@+id/over_layer_view"
         android:layout_width="0dp"
         android:layout_height="match_parent"

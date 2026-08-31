@@ -40,7 +40,7 @@ import time
 import urllib.request
 from typing import Any
 
-PACKAGE = "com.dji.sampleV5.aircraft"
+PACKAGE = "com.wildbridge.rc"
 HTTP_PORT = 8080
 TELEMETRY_PORT = 8081
 PUBLISH_STARTED_MARKER = "WHIP publishing started"

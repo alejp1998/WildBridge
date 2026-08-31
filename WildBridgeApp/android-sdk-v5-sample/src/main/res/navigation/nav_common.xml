@@ -7,55 +7,55 @@
 
     <fragment
         android:id="@+id/key_value_page"
-        android:name="dji.sampleV5.aircraft.pages.KeyValueFragment"
+        android:name="com.wildbridge.rc.pages.KeyValueFragment"
         android:label="key_value_page"
         tools:layout="@layout/frag_key_value_page"/>
 
     <fragment
         android:id="@+id/key_multi_camera_stream_page"
-        android:name="dji.sampleV5.aircraft.pages.CameraStreamListFragment"
+        android:name="com.wildbridge.rc.pages.CameraStreamListFragment"
         android:label="multi_video_decoding_page"
         tools:layout="@layout/frag_camera_stream_list"/>
 
     <fragment
         android:id="@+id/key_multi_video_decoding_page"
-        android:name="dji.sampleV5.aircraft.pages.MultiVideoChannelFragment"
+        android:name="com.wildbridge.rc.pages.MultiVideoChannelFragment"
         android:label="multi_video_decoding_page"
         tools:layout="@layout/frag_multi_video_channel_page"/>
 
     <fragment
         android:id="@+id/key_data_protection_page"
-        android:name="dji.sampleV5.aircraft.pages.DataProtectionFragment"
+        android:name="com.wildbridge.rc.pages.DataProtectionFragment"
         android:label="data_protection"
         tools:layout="@layout/frag_data_protection_page"/>
 
     <fragment
         android:id="@+id/key_diagnostic_page"
-        android:name="dji.sampleV5.aircraft.pages.DiagnosticFragment"
+        android:name="com.wildbridge.rc.pages.DiagnosticFragment"
         android:label="diagnostic_page"
         tools:layout="@layout/frag_diagnostic_page"/>
 
     <fragment
         android:id="@+id/key_live_stream_page"
-        android:name="dji.sampleV5.aircraft.pages.LiveFragment"
+        android:name="com.wildbridge.rc.pages.LiveFragment"
         android:label="live_stream_page"
         tools:layout="@layout/frag_live"/>
 
     <fragment
         android:id="@+id/key_login_account_page"
-        android:name="dji.sampleV5.aircraft.pages.LoginFragment"
+        android:name="com.wildbridge.rc.pages.LoginFragment"
         android:label="login_account_page"
         tools:layout="@layout/frag_login_account_page"/>
 
     <fragment
         android:id="@+id/key_log_info_page"
-        android:name="dji.sampleV5.aircraft.pages.CrashLogInfoFragment"
+        android:name="com.wildbridge.rc.pages.CrashLogInfoFragment"
         android:label="log_info_page"
         tools:layout="@layout/frag_log_info_page"/>
 
     <fragment
         android:id="@+id/media_page"
-        android:name="dji.sampleV5.aircraft.pages.MediaFragment"
+        android:name="com.wildbridge.rc.pages.MediaFragment"
         android:label="media_page"
         android:layout="@layout/frag_media_page">
         <action
@@ -65,7 +65,7 @@
 
     <fragment
         android:id="@+id/media_details_page"
-        android:name="dji.sampleV5.aircraft.pages.MediaFileDetailsFragment"
+        android:name="com.wildbridge.rc.pages.MediaFileDetailsFragment"
         android:label="media_details"
         android:layout="@layout/frag_mediafile_details">
         <action
@@ -75,14 +75,14 @@
 
     <fragment
         android:id="@+id/video_play_page"
-        android:name="dji.sampleV5.aircraft.pages.VideoPlayFragment"
+        android:name="com.wildbridge.rc.pages.VideoPlayFragment"
         android:label="media_play"
         android:layout="@layout/video_play_page">
     </fragment>
 
     <fragment
         android:id="@+id/key_media_playback_page"
-        android:name="dji.sampleV5.aircraft.pages.MediaFragment"
+        android:name="com.wildbridge.rc.pages.MediaFragment"
         android:label="media_playback"
         tools:layout="@layout/frag_media_page">
         <action
@@ -92,7 +92,7 @@
 
     <fragment
         android:id="@+id/key_app_silently_upgrade_page"
-        android:name="dji.sampleV5.aircraft.pages.APPSilentlyUpgradeFragment"
+        android:name="com.wildbridge.rc.pages.APPSilentlyUpgradeFragment"
         android:label="log_info_page"
         tools:layout="@layout/frag_app_silently_upgrade_page"/>
 

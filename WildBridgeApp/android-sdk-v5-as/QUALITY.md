@@ -5,7 +5,7 @@ Run these commands from `WildBridgeApp/android-sdk-v5-as`.
 ## WildBridge-owned code
 
 ```sh
-./gradlew :sample:spotlessKotlinCheck detektWildBridge :sample:lintDebug
+./gradlew :app:spotlessKotlinCheck detektWildBridge :app:lintDebug
 ```
 
 This checks formatting with Spotless/ktlint, Kotlin quality and complexity with Detekt, and Android platform issues with Android Lint. Spotless is intentionally scoped to WildBridge-owned Kotlin files so vendor code is not reformatted.

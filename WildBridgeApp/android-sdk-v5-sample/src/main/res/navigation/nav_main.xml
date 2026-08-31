@@ -7,7 +7,7 @@
 
     <fragment
         android:id="@+id/main_host_page"
-        android:name="dji.sampleV5.aircraft.pages.MainFragment"
+        android:name="com.wildbridge.rc.pages.MainFragment"
         android:label="main_page"
         tools:layout="@layout/frag_main_page"/>
 

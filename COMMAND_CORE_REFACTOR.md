@@ -53,7 +53,7 @@ internal data class CommandResult(
 
 ## 3. What is already done (uncommitted, compiles green)
 
-All changes compile cleanly (`:sample:compileCurrentDebugKotlin` → BUILD SUCCESSFUL).
+All changes compile cleanly (`:app:compileCurrentDebugKotlin` → BUILD SUCCESSFUL).
 
 **Stage 1 — foundation (zero behaviour change):**
 
@@ -63,7 +63,7 @@ All changes compile cleanly (`:sample:compileCurrentDebugKotlin` → BUILD SUCCE
   `result.mavResult`.
 - `WildBridgeDefaultLayoutActivity.kt` — the 5 `MavlinkCommandSink` implementations and the
   `awaitAction` helper return `CommandResult`; added `import ...mavlink.CommandResult`.
-- New test `src/test/java/dji/sampleV5/aircraft/mavlink/CommandResultTest.kt` (JUnit 4).
+- New test `src/test/java/com/wildbridge/rc/mavlink/CommandResultTest.kt` (JUnit 4).
 
 **Stage 2 — first slice: HTTP payload commands now go through the shared sink:**
 
@@ -137,7 +137,7 @@ Implemented (uncommitted, same branch):
 - `WildBridgeDefaultLayoutActivity.readMavlinkConfig()` — resolves the id via `MavlinkSystemId`,
   keyed off the drone name once renamed (`sysIdKey()`), else the aircraft serial number. The name
   defaults to `"drone_1"` on every device, so name-only would collapse un-renamed drones.
-- Test: `src/test/java/dji/sampleV5/aircraft/mavlink/MavlinkSystemIdTest.kt`.
+- Test: `src/test/java/com/wildbridge/rc/mavlink/MavlinkSystemIdTest.kt`.
 
 QGC is running on the GCS (`192.168.50.127`, UDP 14550). Test phones:
 `192.168.50.224` (name `mini3` → sysid 129) and `192.168.50.136` (name `mini7` → sysid 133).

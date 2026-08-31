@@ -5,7 +5,7 @@
     android:layout_height="50dp"
     android:background="@color/light_gray2">
 
-    <dji.sampleV5.aircraft.views.RoundImageView
+    <com.wildbridge.rc.views.RoundImageView
         android:id="@+id/item_image"
         android:layout_width="0dp"
         android:layout_height="match_parent"

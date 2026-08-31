@@ -77,7 +77,7 @@
             </LinearLayout>
         </HorizontalScrollView>
 
-        <dji.sampleV5.aircraft.views.RoundImageView
+        <com.wildbridge.rc.views.RoundImageView
             android:id="@+id/title_image"
             android:layout_width="40dp"
             android:layout_height="40dp"

@@ -49,11 +49,11 @@ android {
     def gmapApiKey = resolveSecret("GMAP_API_KEY")
     def maplibreToken = resolveSecret("MAPLIBRE_TOKEN")
 
-    namespace = 'dji.sampleV5.aircraft'
+    namespace = 'com.wildbridge.rc'
     compileSdk = Integer.parseInt(project.ANDROID_COMPILE_SDK_VERSION)
 
     defaultConfig {
-        applicationId = "com.dji.sampleV5.aircraft"
+        applicationId = "com.wildbridge.rc"
         minSdk = Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
         targetSdk = Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
         versionCode = 1
@@ -112,7 +112,7 @@ android {
     androidComponents {
         onVariants(selector().all()) { variant ->
             variant.outputs.forEach { output ->
-                output.outputFileName.set("sample-${variant.name}.apk")
+                output.outputFileName.set("app-${variant.name}.apk")
             }
         }
     }

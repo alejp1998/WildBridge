@@ -55,13 +55,13 @@ if [[ "$ALL_DEVICES" == true && -n "$SERIAL" ]]; then
 fi
 
 if [[ "$VARIANT" == "demoBiomass" ]]; then
-  PACKAGE_NAME="com.dji.sampleV5.aircraft.demo_biomass"
+  PACKAGE_NAME="com.wildbridge.rc.demo_biomass"
 else
-  PACKAGE_NAME="com.dji.sampleV5.aircraft"
+  PACKAGE_NAME="com.wildbridge.rc"
 fi
 TASK_NAME="assemble${VARIANT^}Debug"
-APK_PATH="$ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT/debug/sample-${VARIANT}Debug.apk"
-LAUNCH_ACTIVITY="dji.sampleV5.aircraft.DJIAircraftMainActivity"
+APK_PATH="$ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT/debug/app-${VARIANT}Debug.apk"
+LAUNCH_ACTIVITY="com.wildbridge.rc.DJIAircraftMainActivity"
 
 use_android_sdk() {
   export ANDROID_HOME="$1"
@@ -121,7 +121,7 @@ ensure_java_compiler_configured() {
 build_selected_variant() {
   ensure_android_sdk_configured
   ensure_java_compiler_configured
-  "$ROOT_DIR/gradlew" -p "$ROOT_DIR" ":sample:$TASK_NAME" --warning-mode summary
+  "$ROOT_DIR/gradlew" -p "$ROOT_DIR" ":app:$TASK_NAME" --warning-mode summary
 }
 
 if [[ "$CHECK_ONLY" == true ]]; then
@@ -146,7 +146,7 @@ if [[ ! -f "$APK_PATH" ]]; then
 fi
 
 if [[ ! -f "$APK_PATH" ]]; then
-  APK_PATH="$(find "$ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT" -type f -name "sample-${VARIANT}Debug.apk" -print -quit 2>/dev/null || true)"
+  APK_PATH="$(find "$ROOT_DIR/../android-sdk-v5-sample/build/outputs/apk/$VARIANT" -type f -name "app-${VARIANT}Debug.apk" -print -quit 2>/dev/null || true)"
 fi
 
 if [[ -z "$APK_PATH" || ! -f "$APK_PATH" ]]; then

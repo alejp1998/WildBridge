@@ -27,7 +27,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/black"
-    tools:context="dji.sampleV5.aircraft.DJIMainActivity">
+    tools:context="com.wildbridge.rc.DJIMainActivity">
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/view_info_panel"
@@ -221,7 +221,7 @@
         app:layout_constraintStart_toStartOf="@+id/msg_panel"
         app:layout_constraintTop_toBottomOf="@+id/text_view_wildbridge_build_info" />
 
-    <dji.sampleV5.aircraft.views.VersionInfoView
+    <com.wildbridge.rc.views.VersionInfoView
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"

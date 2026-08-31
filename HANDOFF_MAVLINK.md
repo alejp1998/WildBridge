@@ -168,8 +168,8 @@ disposing the video track/source.
 - StrictMode (debug-only, `penaltyLog`) installed in `DJIAircraftApplication.onCreate()` — thread
   (disk/network) + VM (leaked Closables/Activities) policies. Confirmed on-device
   ("StrictMode enabled (debug build)").
-- Android Lint: `:sample:lintReportCurrentDebug` — **0 StaticFieldLeak** findings in WildBridge
+- Android Lint: `:app:lintReportCurrentDebug` — **0 StaticFieldLeak** findings in WildBridge
   code. Notable Error-severity items: `NewApi` `ContextWrapper#getDisplay` (API 30 vs min 24,
   `WildBridgeDefaultLayoutActivity.kt:1564`) and malformed `frag_upgrade_page.xml` (`ExtraText`).
-  Also fixed `qualityWildBridge` which referenced the ambiguous `:sample:lintDebug` → now
-  `:sample:lintCurrentDebug`.
+  Also fixed `qualityWildBridge` which referenced the ambiguous `:app:lintDebug` → now
+  `:app:lintCurrentDebug`.

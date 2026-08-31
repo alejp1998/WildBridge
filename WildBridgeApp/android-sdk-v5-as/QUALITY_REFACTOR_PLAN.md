@@ -8,7 +8,7 @@ Run commands from `WildBridgeApp/android-sdk-v5-as`.
 
 We should treat these as two separate streams:
 
-- WildBridge-owned code: `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/` custom packages such as `webrtc`, `edge`, `controller`, `formation`, `logger`, `server`, and `WildBridgeDefaultLayoutActivity.kt`.
+- WildBridge-owned code: `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/` custom packages such as `webrtc`, `edge`, `controller`, `formation`, `logger`, `server`, and `WildBridgeDefaultLayoutActivity.kt`.
 - DJI/vendor code: `../android-sdk-v5-uxsdk/` and DJI sample areas that we mostly inherit. We still report on them, but we do not spend refactor effort there unless we intentionally maintain a local patch.
 
 The important tasks are:
@@ -16,8 +16,8 @@ The important tasks are:
 ```sh
 ./gradlew qualityWildBridge
 ./gradlew qualityDji
-./gradlew :sample:testDebugUnitTest
-./gradlew :sample:compileDebugKotlin
+./gradlew :app:testDebugUnitTest
+./gradlew :app:compileDebugKotlin
 ```
 
 ## Current Baseline
@@ -25,7 +25,7 @@ The important tasks are:
 The first stable WildBridge loop now works:
 
 ```sh
-./gradlew --continue :sample:spotlessKotlinCheck :sample:compileDebugKotlin qualityWildBridge
+./gradlew --continue :app:spotlessKotlinCheck :app:compileDebugKotlin qualityWildBridge
 ```
 
 Focused refactors completed so far:
@@ -86,7 +86,7 @@ Reports to inspect:
 
 Primary file:
 
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/WildBridgeDefaultLayoutActivity.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/WildBridgeDefaultLayoutActivity.kt`
 
 Main symptoms:
 
@@ -132,10 +132,10 @@ Done already:
 
 Primary files:
 
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/webrtc/WebRTCStreamer.kt`
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/webrtc/WhipPublisher.kt`
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/webrtc/SharedDJIFrameSource.kt`
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/webrtc/SharedPhoneCameraFrameSource.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/WebRTCStreamer.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/WhipPublisher.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/SharedDJIFrameSource.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/webrtc/SharedPhoneCameraFrameSource.kt`
 
 Main symptoms:
 
@@ -179,8 +179,8 @@ Done already:
 
 Primary files:
 
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/edge/EdgeDetectionController.kt`
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/edge/YoloTfliteDetector.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/edge/EdgeDetectionController.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/edge/YoloTfliteDetector.kt`
 
 Main symptoms:
 
@@ -211,9 +211,9 @@ Done already:
 
 Primary files:
 
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/controller/DroneController.kt`
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/controller/FormationController.kt`
-- `../android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/controller/PID.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/controller/DroneController.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/controller/FormationController.kt`
+- `../android-sdk-v5-sample/src/main/java/com/wildbridge/rc/controller/PID.kt`
 
 Main symptoms:
 
@@ -292,7 +292,7 @@ Android Lint catches platform-specific issues that Detekt does not: deprecated A
 What we should do:
 
 - Keep `:uxsdk:lintDebug` report-only for vendor awareness.
-- Use `:sample:lintDebug` as the actionable report.
+- Use `:app:lintDebug` as the actionable report.
 - Fix WildBridge-owned lint issues when they touch runtime correctness, permissions, lifecycle, or compatibility.
 - Avoid spending time on cosmetic vendor lint unless we maintain that patch.
 
@@ -303,15 +303,15 @@ What we should do:
 Before and after each refactor:
 
 ```sh
-./gradlew :sample:compileDebugKotlin
-./gradlew :sample:testDebugUnitTest
+./gradlew :app:compileDebugKotlin
+./gradlew :app:testDebugUnitTest
 ./gradlew detektWildBridge
 ```
 
 If changing Android resources or UI behavior:
 
 ```sh
-./gradlew :sample:lintDebug
+./gradlew :app:lintDebug
 ```
 
 ### Phase 2: Fix Small Pure Utilities First
@@ -348,8 +348,8 @@ This should be done in multiple small PRs. A giant Activity split without tests 
 
 Code quality is improving when:
 
-- `:sample:compileDebugKotlin` stays green.
-- `:sample:testDebugUnitTest` stays green and grows around refactored logic.
+- `:app:compileDebugKotlin` stays green.
+- `:app:testDebugUnitTest` stays green and grows around refactored logic.
 - WildBridge Detekt findings decrease for the file being touched.
 - New code does not add untested pure logic inside Android Activities.
 - DJI/vendor findings remain separated from WildBridge-owned findings.

@@ -9,7 +9,7 @@
         android:layout_height="match_parent"
         android:background="@drawable/picker_black_bg" >
            
-        <dji.sampleV5.aircraft.util.wheel.WheelView
+        <com.wildbridge.rc.util.wheel.WheelView
             android:id="@+id/id_numberPicker1"
             android:layout_width="110dp"
             android:layout_height="wrap_content"
@@ -19,7 +19,7 @@
             android:clickable="false"
             android:dividerPadding="2dp" />
 
-      <dji.sampleV5.aircraft.util.wheel.WheelView
+      <com.wildbridge.rc.util.wheel.WheelView
           android:id="@+id/id_numberPicker2"
           android:layout_width="110dp"
           android:layout_height="wrap_content"

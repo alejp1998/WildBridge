@@ -42,7 +42,7 @@
     </RelativeLayout>
 
         
-   <dji.sampleV5.aircraft.util.wheel.WheelView
+   <com.wildbridge.rc.util.wheel.WheelView
        android:id="@+id/id_numberPicker1"
        android:layout_width="fill_parent"
        android:layout_height="wrap_content"

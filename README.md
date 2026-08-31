@@ -144,15 +144,15 @@ Command-line build:
 
 ```bash
 cd WildBridge/WildBridgeApp/android-sdk-v5-as
-./gradlew :sample:assembleCurrentDebug
-./gradlew :sample:assembleDemoBiomassDebug
+./gradlew :app:assembleCurrentDebug
+./gradlew :app:assembleDemoBiomassDebug
 ```
 
 The debug APKs are written to:
 
 ```text
-WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/current/debug/sample-currentDebug.apk
-WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/demoBiomass/debug/sample-demoBiomassDebug.apk
+WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/current/debug/app-currentDebug.apk
+WildBridgeApp/android-sdk-v5-sample/build/outputs/apk/demoBiomass/debug/app-demoBiomassDebug.apk
 ```
 
 To build/install a selected variant when an Android device is connected over ADB:
@@ -774,7 +774,7 @@ WildBridge/
 │   │   └── local.properties             # Place AIRCRAFT_API_KEY here
 │   ├── android-sdk-v5-sample/           # Full sample app with WildBridge additions
 │   │   └── src/main/
-│   │       └── java/dji/sampleV5/aircraft/
+│   │       └── java/com/wildbridge/rc/
 │   │           ├── WildBridgeDefaultLayoutActivity.kt
 │   │           ├── controller/          # DroneController, PID, autonomy helpers
 │   │           ├── logger/              # Flight and DJI record logging
@@ -832,9 +832,9 @@ DJI SDK TXT flight records are copied to `WildBridge/DJI_FlightRecords/` on app 
 **Android build:**
 ```bash
 cd WildBridgeApp/android-sdk-v5-as
-./gradlew :sample:compileCurrentDebugKotlin
-./gradlew :sample:assembleCurrentDebug
-./gradlew :sample:assembleDemoBiomassDebug
+./gradlew :app:compileCurrentDebugKotlin
+./gradlew :app:assembleCurrentDebug
+./gradlew :app:assembleDemoBiomassDebug
 ```
 
 ---
