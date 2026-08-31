@@ -1,3 +1,4 @@
-# Runtime deps for the wildbridge_controller node + monitor (ROS packages come from the base image).
-requests>=2.28
+# Runtime deps for the wildbridge_controller node + monitor (ROS packages come
+# from the base image). requests comes from the shared wildbridge-groundstation
+# package, which this image also installs.
 numpy>=1.21

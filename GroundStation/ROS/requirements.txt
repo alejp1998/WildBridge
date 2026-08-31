@@ -1,3 +1,4 @@
-requests
+# requests comes from the shared wildbridge-groundstation package
+# (pip install -e GroundStation/Python); only ROS-specific deps live here.
 numpy
 opencv-python
