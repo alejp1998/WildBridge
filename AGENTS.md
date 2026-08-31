@@ -76,6 +76,7 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | `GroundStation/ROS/wildview_bringup/` | Launch/config for the ROS stack |
 | `GroundStation/tests/` | Pytest suite (`test_dji_client.py`, `test_dji_helpers.py`, `test_mavlink_helpers.py`, `test_video_events.py`) |
 | `GroundStation/video_test/` | MediaMTX config + webapp for the video dashboard |
+| `GroundStation/qgc/` | QGroundControl MAVLink Actions config — Takeoff/Land/RTL Fly View buttons (`wildbridge-actions.json`) |
 | `scripts/check_radon_complexity.py` | Complexity gate used by pre-commit/CI |
 | `compose.video-test.yaml` | MediaMTX + dashboard compose file |
 | `verify-integration.sh` | Merge-integrity check for the integration branch (see below) |

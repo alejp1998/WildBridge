@@ -196,7 +196,7 @@ payload sink's "nothing here can move the aircraft" contract stays true.
 TAKEOFF/LAND/RTL use only gate layers 1+2 (they are the pilot's own abort path). Reposition/yaw
 additionally pass layer 3.
 
-**QGC buttons:** `qgc/wildbridge-actions.json` — Takeoff (22, param7=5 m), Land (21), RTL (20).
+**QGC buttons:** `GroundStation/qgc/wildbridge-actions.json` — Takeoff (22, param7=5 m), Land (21), RTL (20).
 Load via Application Settings → MAVLink Actions → Fly View Actions. Reposition/yaw are dynamic
 (lat/lon/heading), so they're sent from a GCS script or the MAVLink console, not static buttons.
 
