@@ -23,7 +23,7 @@ GroundStation/ROS/wildbridge_bringup
 # ...except the launch file the ros-monitor image reuses for auto-discovery.
 !GroundStation/ROS/wildbridge_bringup/launch/auto_discovery_native.launch.py
 GroundStation/ROS/requirements.txt
-compose.video-test.yaml
+GroundStation/video_test/compose.yaml
 verify-integration.sh
 README.md
 LICENSE

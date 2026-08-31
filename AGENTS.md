@@ -7,7 +7,7 @@ WildBridge is an open-source Android ground-station app (Kotlin + DJI Mobile SDK
 - **Android app** (Kotlin, DJI MSDK V5.18): `WildBridgeApp/android-sdk-v5-as/` — the `:sample` module is the app; `:uxsdk` is stock DJI UXSDK with a few intentional modifications.
 - **Python GroundStation**: `GroundStation/Python/wildbridge_groundstation/` — `dji_client.py` (`DJIInterface`), `dji_helpers.py`, `mavlink_helpers.py`; `wildbridge_dji_helpers.py` is a compatibility shim.
 - **ROS 2 Humble**: `GroundStation/ROS/` — `dji_controller`, `drone_videofeed`, `wildview_bringup` (launch files).
-- **Video test stack**: `compose.video-test.yaml` — MediaMTX + a browser dashboard in `GroundStation/video_test/webapp/`.
+- **Video test stack**: `GroundStation/video_test/compose.yaml` — MediaMTX + a browser dashboard in `GroundStation/video_test/webapp/`.
 - **Safety model**: two-computer authority. A Safety Computer can seize command authority via the `X-Safety-Token` header; takeover is persistent and only the Safety Computer returns control. Safety-adjacent logic lives in `GroundStation/Python/djiInterfaceSafety.py` and on-device.
 - **Key ports on each drone**: HTTP commands `8080`, TCP telemetry `8081`, UDP discovery `30000` (+ mDNS, subnet scan), WHIP/WHEP video via MediaMTX.
 - **Supported public video path**: WHIP publish → MediaMTX → WHEP playback. The older direct WebSocket-signaling viewer/server path has been removed from the public app and tooling; do not reintroduce it.
@@ -54,10 +54,10 @@ cp local.properties.example local.properties   # set sdk.dir and AIRCRAFT_API_KE
 ### Video test stack
 
 ```bash
-docker compose -f compose.video-test.yaml up -d --build
+docker compose -f GroundStation/video_test/compose.yaml up -d --build
 # dashboard: http://localhost:8090   MediaMTX WHIP/WHEP: http://localhost:8889
 # RTSP: rtsp://localhost:8554  MediaMTX API: http://localhost:9997  ICE UDP: :8189
-docker compose -f compose.video-test.yaml down
+docker compose -f GroundStation/video_test/compose.yaml down
 ```
 
 Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
@@ -78,7 +78,7 @@ Runtime diagnostics land in `GroundStation/video_test/logs/` (git-ignored).
 | `GroundStation/video_test/` | MediaMTX config + webapp for the video dashboard |
 | `GroundStation/qgc/` | QGroundControl MAVLink Actions config — Takeoff/Land/RTL Fly View buttons (`wildbridge-actions.json`) |
 | `scripts/check_radon_complexity.py` | Complexity gate used by pre-commit/CI |
-| `compose.video-test.yaml` | MediaMTX + dashboard compose file |
+| `GroundStation/video_test/compose.yaml` | MediaMTX + dashboard compose file |
 | `verify-integration.sh` | Merge-integrity check for the integration branch (see below) |
 
 ## Configuration Notes

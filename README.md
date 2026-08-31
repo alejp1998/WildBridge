@@ -215,7 +215,7 @@ requests.post(f"http://{rc}:8080/send/RTH")
 
 **Video (WHIP/WHEP through MediaMTX):**
 ```bash
-docker compose -f compose.video-test.yaml up -d --build
+docker compose -f GroundStation/video_test/compose.yaml up -d --build
 ```
 
 Open the dashboard at <http://localhost:8090>. When the dashboard connects to a phone telemetry stream, the app builds a WHIP publish URL such as:
@@ -230,7 +230,7 @@ MediaMTX exposes the matching browser playback endpoint:
 http://<ground-station-ip>:8889/<drone_name>/whep
 ```
 
-The supported public video example is defined by [compose.video-test.yaml](compose.video-test.yaml), [GroundStation/video_test/mediamtx.yml](GroundStation/video_test/mediamtx.yml), and the webapp in [GroundStation/video_test/webapp](GroundStation/video_test/webapp). The older direct WebSocket-signaling viewer/server path has been removed from the public app and ground-station tooling.
+The supported public video example is defined by [compose.yaml](GroundStation/video_test/compose.yaml), [GroundStation/video_test/mediamtx.yml](GroundStation/video_test/mediamtx.yml), and the webapp in [GroundStation/video_test/webapp](GroundStation/video_test/webapp). The older direct WebSocket-signaling viewer/server path has been removed from the public app and ground-station tooling.
 
 ---
 
@@ -251,9 +251,9 @@ Default services:
 Useful restart command:
 
 ```bash
-docker compose -f compose.video-test.yaml down
-docker compose -f compose.video-test.yaml up -d
-docker compose -f compose.video-test.yaml ps
+docker compose -f GroundStation/video_test/compose.yaml down
+docker compose -f GroundStation/video_test/compose.yaml up -d
+docker compose -f GroundStation/video_test/compose.yaml ps
 ```
 
 Runtime diagnostics are written under `GroundStation/video_test/logs/`. Those logs are intentionally ignored by git.
@@ -768,7 +768,6 @@ ros2 topic pub /mini1/command/goto_waypoint_nose_forward std_msgs/msg/Float64Mul
 
 ```text
 WildBridge/
-├── compose.video-test.yaml              # MediaMTX + browser video diagnostics stack
 ├── WildBridgeApp/
 │   ├── android-sdk-v5-as/               # Main Android project (open this in Android Studio)
 │   │   └── local.properties             # Place AIRCRAFT_API_KEY here
@@ -790,6 +789,7 @@ WildBridge/
     ├── entrypoint.sh                    # Container entry point
     ├── run_docker.sh                    # Docker run helper
     ├── video_test/                      # MediaMTX + multi-drone video dashboard
+    │   └── compose.yaml                 # MediaMTX + dashboard compose stack
     └── ROS/
         ├── wildbridge_controller/       # ROS 2 control + telemetry node
         ├── wildbridge_videofeed/        # Video feed node
@@ -824,7 +824,7 @@ DJI SDK TXT flight records are copied to `WildBridge/DJI_FlightRecords/` on app 
 - Check `isManualOverrideActive` in telemetry; call `/send/deactivateManualOverride` if needed.
 
 **Video not connecting:**
-- Start the video-test stack with `docker compose -f compose.video-test.yaml up -d --build`.
+- Start the video-test stack with `docker compose -f GroundStation/video_test/compose.yaml up -d --build`.
 - Open <http://localhost:8090> and verify the phone telemetry connection is active.
 - Check MediaMTX paths with `curl http://localhost:9997/v3/paths/list`.
 - Prefer clean 5 GHz Wi-Fi channels for multiple simultaneous video publishers.

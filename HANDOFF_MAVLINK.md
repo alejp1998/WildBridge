@@ -43,9 +43,9 @@ WB_MAVLINK_PORT=14551       # where the ROS nodes listen
 WB_MAVLINK_PEER_PORT=14550  # where the aircraft listens
 
 # The debug webapp, from the WildBridge repo
-docker compose -f compose.video-test.yaml build video-grid
+docker compose -f GroundStation/video_test/compose.yaml build video-grid
 DRONE_FALLBACKS=mini1=<drone-ip> \
-  docker compose -f compose.video-test.yaml up -d --no-deps video-grid
+  docker compose -f GroundStation/video_test/compose.yaml up -d --no-deps video-grid
 # → http://localhost:8090, MAVLink tab
 ```
 

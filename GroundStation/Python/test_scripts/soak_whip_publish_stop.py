@@ -23,7 +23,7 @@ Usage::
 
 Requirements: adb on PATH, the app running and reachable at DRONE_IP:8080 (HTTP) and
 DRONE_IP:8081 (telemetry). Run MediaMTX on this machine
-(``docker compose -f compose.video-test.yaml up -d``) and pass --mediamtx for a true
+(``docker compose -f GroundStation/video_test/compose.yaml up -d``) and pass --mediamtx for a true
 end-to-end check (path goes live while publishing); without it the publish attempts
 fail to reach a WHIP server but still exercise the same teardown/re-init path.
 """
